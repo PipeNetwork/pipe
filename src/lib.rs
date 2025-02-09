@@ -31,7 +31,8 @@ pub struct VersionCheckRequest {
 #[derive(Deserialize, Debug)]
 pub struct VersionCheckResponse {
     pub is_latest: bool,
-    pub download_link: String,
+    #[serde(default)]
+    pub download_link: Option<String>,
     #[serde(default)]
     pub latest_version: Option<String>,
     #[serde(default)]
@@ -82,9 +83,18 @@ pub enum Commands {
 
     /// Download a single file
     DownloadFile {
+        /// Optional user ID override; if omitted, read from .pipe-cli.json
+        #[arg(long)]
         user_id: Option<String>,
+
+        /// Optional user app key override; if omitted, read from .pipe-cli.json
+        #[arg(long)]
         user_app_key: Option<String>,
+
+        /// Required remote file name on the server
         file_name: String,
+
+        /// Required local file path to store the downloaded file
         output_path: String,
     },
 
@@ -499,7 +509,13 @@ async fn check_version(client: &Client, base_url: &str) -> Result<()> {
         if let Some(version) = &response.latest_version {
             println!("Latest version: {}", version);
         }
-        println!("Download the latest version here: {}", response.download_link);
+
+        // Only print download link if present
+        if let Some(link) = &response.download_link {
+            println!("Download the latest version here: {}", link);
+        } else {
+            println!("(No download link provided by the server.)");
+        }
 
         if let Some(notes) = response.release_notes {
             println!("\nRelease notes:\n{}", notes);
