@@ -631,6 +631,7 @@ async fn upload_file(
     let resp = client
         .post(full_url)
         .header("Content-Length", file_size)
+        .header("Content-Type", "application/octet-stream")
         .body(body)
         .send()
         .await?;
@@ -714,6 +715,7 @@ async fn upload_file_priority(
     let resp = client
         .post(full_url)
         .header("Content-Length", file_size)
+        .header("Content-Type", "application/octet-stream")
         .body(body)
         .send()
         .await?;
