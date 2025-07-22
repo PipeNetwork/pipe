@@ -2678,10 +2678,9 @@ pub async fn run_cli() -> Result<()> {
                 }
             };
             
-            let mut balance_req = client.post(&balance_url).json(&balance_body);
-            if let Some(ref auth_tokens) = creds.auth_tokens {
-                balance_req = balance_req.header("Authorization", format!("Bearer {}", auth_tokens.access_token));
-            }
+            let mut balance_req = client.post(&balance_url);
+            balance_req = add_auth_headers(balance_req, &creds, false); // false = not state-changing
+            balance_req = balance_req.json(&balance_body);
             
             match balance_req.send().await {
                 Ok(resp) => {
@@ -2943,10 +2942,9 @@ pub async fn run_cli() -> Result<()> {
                 }
             };
             
-            let mut balance_req = client.post(&balance_url).json(&balance_body);
-            if let Some(ref auth_tokens) = creds.auth_tokens {
-                balance_req = balance_req.header("Authorization", format!("Bearer {}", auth_tokens.access_token));
-            }
+            let mut balance_req = client.post(&balance_url);
+            balance_req = add_auth_headers(balance_req, &creds, false); // false = not state-changing
+            balance_req = balance_req.json(&balance_body);
             
             match balance_req.send().await {
                 Ok(resp) => {
