@@ -212,8 +212,8 @@ pub enum Commands {
         user_id: Option<String>,
         #[arg(long)]
         user_app_key: Option<String>,
-        to_pubkey: String,
         amount_sol: f64,
+        to_pubkey: String,
     },
 
     /// Withdraw custom tokens to an external address
@@ -222,8 +222,9 @@ pub enum Commands {
         user_id: Option<String>,
         #[arg(long)]
         user_app_key: Option<String>,
-        to_pubkey: String,
+        token_mint: String,
         amount: u64,
+        to_pubkey: String,
     },
 
     CreatePublicLink {
@@ -2002,14 +2003,15 @@ pub async fn run_cli() -> Result<()> {
 
             let mut request = client.post(format!("{}/rotateAppKey", base_url));
             
-            // Use JWT auth if available, otherwise fall back to legacy
-            if let Some(ref auth_tokens) = creds.auth_tokens {
-                request = request.header("Authorization", format!("Bearer {}", auth_tokens.access_token));
-                // With JWT, send empty body - server will get user info from token
+            // Use add_auth_headers for consistent authentication
+            request = add_auth_headers(request, &creds, true);
+            
+            // For JWT auth, send empty body. For legacy auth, credentials are already in headers
+            if creds.auth_tokens.is_some() {
                 let req_body = serde_json::json!({});
                 request = request.json(&req_body);
             } else {
-                // Legacy auth via request body
+                // For legacy auth, we still need to send credentials in body for this endpoint
                 let req_body = RotateAppKeyRequest {
                     user_id: creds.user_id.clone(),
                     user_app_key: creds.user_app_key.clone(),
@@ -2211,23 +2213,15 @@ pub async fn run_cli() -> Result<()> {
 
             let mut request = client.post(format!("{}/checkWallet", base_url));
             
-            // Use JWT auth if available, otherwise fall back to legacy
-            if let Some(ref auth_tokens) = creds.auth_tokens {
-                request = request.header("Authorization", format!("Bearer {}", auth_tokens.access_token));
-                // With JWT, send empty body - server will get user info from token
-                let req_body = CheckWalletRequest {
-                    user_id: None,
-                    user_app_key: None,
-                };
-                request = request.json(&req_body);
-            } else {
-                // Legacy auth via request body
-                let req_body = CheckWalletRequest {
-                    user_id: Some(creds.user_id.clone()),
-                    user_app_key: Some(creds.user_app_key.clone()),
-                };
-                request = request.json(&req_body);
-            }
+            // Use add_auth_headers for consistent authentication
+            request = add_auth_headers(request, &creds, false);
+            
+            // Always send empty body - auth is in headers
+            let req_body = CheckWalletRequest {
+                user_id: None,
+                user_app_key: None,
+            };
+            request = request.json(&req_body);
 
             let resp = request.send().await?;
             let status = resp.status();
@@ -2270,23 +2264,15 @@ pub async fn run_cli() -> Result<()> {
 
             let mut request = client.post(format!("{}/checkCustomToken", base_url));
             
-            // Use JWT auth if available, otherwise fall back to legacy
-            if let Some(ref auth_tokens) = creds.auth_tokens {
-                request = request.header("Authorization", format!("Bearer {}", auth_tokens.access_token));
-                // With JWT, send empty body - server will get user info from token
-                let req_body = CheckCustomTokenRequest {
-                    user_id: None,
-                    user_app_key: None,
-                };
-                request = request.json(&req_body);
-            } else {
-                // Legacy auth via request body
-                let req_body = CheckCustomTokenRequest {
-                    user_id: Some(creds.user_id.clone()),
-                    user_app_key: Some(creds.user_app_key.clone()),
-                };
-                request = request.json(&req_body);
-            }
+            // Use add_auth_headers for consistent authentication
+            request = add_auth_headers(request, &creds, false);
+            
+            // Always send empty body - auth is in headers
+            let req_body = CheckCustomTokenRequest {
+                user_id: None,
+                user_app_key: None,
+            };
+            request = request.json(&req_body);
 
             let resp = request.send().await?;
             let status = resp.status();
@@ -2330,25 +2316,16 @@ pub async fn run_cli() -> Result<()> {
 
             let mut request = client.post(format!("{}/exchangeSolForTokens", base_url));
             
-            // Use JWT auth if available, otherwise fall back to legacy
-            if let Some(ref auth_tokens) = creds.auth_tokens {
-                request = request.header("Authorization", format!("Bearer {}", auth_tokens.access_token));
-                // With JWT, send only amount - server will get user info from token
-                let req_body = SwapSolForPipeRequest {
-                    user_id: None,
-                    user_app_key: None,
-                    amount_sol,
-                };
-                request = request.json(&req_body);
-            } else {
-                // Legacy auth via request body
-                let req_body = SwapSolForPipeRequest {
-                    user_id: Some(creds.user_id.clone()),
-                    user_app_key: Some(creds.user_app_key.clone()),
-                    amount_sol,
-                };
-                request = request.json(&req_body);
-            }
+            // Use add_auth_headers for consistent authentication
+            request = add_auth_headers(request, &creds, true);
+            
+            // Always send only amount - auth is in headers
+            let req_body = SwapSolForPipeRequest {
+                user_id: None,
+                user_app_key: None,
+                amount_sol,
+            };
+            request = request.json(&req_body);
 
             let resp = request.send().await?;
             let status = resp.status();
@@ -2372,8 +2349,8 @@ pub async fn run_cli() -> Result<()> {
         Commands::WithdrawSol {
             user_id,
             user_app_key,
-            to_pubkey,
             amount_sol,
+            to_pubkey,
         } => {
             // Load credentials and check for JWT
             let mut creds = load_credentials_from_file()?.ok_or_else(|| {
@@ -2393,27 +2370,17 @@ pub async fn run_cli() -> Result<()> {
 
             let mut request = client.post(format!("{}/withdrawSol", base_url));
             
-            // Use JWT auth if available, otherwise fall back to legacy
-            if let Some(ref auth_tokens) = creds.auth_tokens {
-                request = request.header("Authorization", format!("Bearer {}", auth_tokens.access_token));
-                // With JWT, send only withdrawal details - server will get user info from token
-                let req_body = WithdrawSolRequest {
-                    user_id: None,
-                    user_app_key: None,
-                    to_pubkey,
-                    amount_sol,
-                };
-                request = request.json(&req_body);
-            } else {
-                // Legacy auth via request body
-                let req_body = WithdrawSolRequest {
-                    user_id: Some(creds.user_id.clone()),
-                    user_app_key: Some(creds.user_app_key.clone()),
-                    to_pubkey,
-                    amount_sol,
-                };
-                request = request.json(&req_body);
-            }
+            // Use add_auth_headers for consistent authentication
+            request = add_auth_headers(request, &creds, true);
+            
+            // Always send withdrawal details only - auth is in headers
+            let req_body = WithdrawSolRequest {
+                user_id: None,
+                user_app_key: None,
+                amount_sol,
+                to_pubkey,
+            };
+            request = request.json(&req_body);
 
             let resp = request.send().await?;
             let status = resp.status();
@@ -2437,8 +2404,9 @@ pub async fn run_cli() -> Result<()> {
         Commands::WithdrawCustomToken {
             user_id,
             user_app_key,
-            to_pubkey,
+            token_mint,
             amount,
+            to_pubkey,
         } => {
             // Load credentials and check for JWT
             let mut creds = load_credentials_from_file()?.ok_or_else(|| {
@@ -2458,27 +2426,17 @@ pub async fn run_cli() -> Result<()> {
 
             let mut request = client.post(format!("{}/withdrawToken", base_url));
             
-            // Use JWT auth if available, otherwise fall back to legacy
-            if let Some(ref auth_tokens) = creds.auth_tokens {
-                request = request.header("Authorization", format!("Bearer {}", auth_tokens.access_token));
-                // With JWT, send only withdrawal details - server will get user info from token
-                let req_body = WithdrawTokenRequest {
-                    user_id: None,
-                    user_app_key: None,
-                    to_pubkey,
-                    amount,
-                };
-                request = request.json(&req_body);
-            } else {
-                // Legacy auth via request body
-                let req_body = WithdrawTokenRequest {
-                    user_id: Some(creds.user_id.clone()),
-                    user_app_key: Some(creds.user_app_key.clone()),
-                    to_pubkey,
-                    amount,
-                };
-                request = request.json(&req_body);
-            }
+            // Use add_auth_headers for consistent authentication
+            request = add_auth_headers(request, &creds, true);
+            
+            // Always send withdrawal details only - auth is in headers
+            let req_body = WithdrawTokenRequest {
+                user_id: None,
+                user_app_key: None,
+                to_pubkey,
+                amount,
+            };
+            request = request.json(&req_body);
 
             let resp = request.send().await?;
             let status = resp.status();
@@ -2490,6 +2448,7 @@ pub async fn run_cli() -> Result<()> {
                     "Token Withdrawal complete!\nUser: {}\nTo: {}\nAmount: {}\nSignature: {}",
                     json.user_id, json.to_pubkey, json.amount, json.signature
                 );
+                println!("Token mint used: {}", token_mint);
             } else {
                 return Err(anyhow!(
                     "Withdraw custom token failed. Status = {}, Body = {}",
@@ -3308,17 +3267,18 @@ pub async fn run_cli() -> Result<()> {
             let url = format!("{}/extendStorage", base_url);
             let mut request = client.post(url);
             
-            // Use JWT auth if available, otherwise fall back to legacy
-            if let Some(ref auth_tokens) = creds.auth_tokens {
-                request = request.header("Authorization", format!("Bearer {}", auth_tokens.access_token));
-                // With JWT, send only file name and months - server will get user info from token
+            // Use add_auth_headers for consistent authentication
+            request = add_auth_headers(request, &creds, true);
+            
+            // For JWT auth, send only file name and months. For legacy auth, also need credentials in body
+            if creds.auth_tokens.is_some() {
                 let req_body = serde_json::json!({
                     "file_name": file_name,
                     "additional_months": additional_months
                 });
                 request = request.json(&req_body);
             } else {
-                // Legacy auth via request body
+                // Legacy auth still needs credentials in body for this endpoint
                 let req_body = ExtendStorageRequest {
                     user_id: creds.user_id.clone(),
                     user_app_key: creds.user_app_key.clone(),
