@@ -21,9 +21,12 @@ use walkdir::WalkDir;
 use chrono::{DateTime, Utc};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub const MAX_RETRIES: u32 = 3;
+
+pub const MAX_RETRIES: u32 = 5;
 pub const INITIAL_RETRY_DELAY_MS: u64 = 1000;
 pub const MAX_RETRY_DELAY_MS: u64 = 10000;
+
+
 
 // JWT Authentication structures
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -153,6 +156,8 @@ pub enum Commands {
         file_name: String,
         #[arg(long)]
         epochs: Option<u64>,
+        #[arg(long, help = "Upload tier: normal, priority, premium, ultra, enterprise")]
+        tier: Option<String>,
     },
 
     /// Download a single file
@@ -254,6 +259,8 @@ pub enum Commands {
         #[arg(long)]
         user_app_key: Option<String>,
         directory_path: String,
+        #[arg(long, help = "Upload tier: normal, priority, premium, ultra, enterprise")]
+        tier: Option<String>,
     },
 
     PriorityUploadDirectory {
@@ -269,6 +276,9 @@ pub enum Commands {
     },
 
     GetPriorityFee,
+    
+    /// Get pricing for all upload tiers
+    GetTierPricing,
 
     PriorityUpload {
         #[arg(long)]
@@ -847,6 +857,59 @@ async fn download_with_progress(
 
     writer.flush().await?;
     Ok(())
+}
+
+/// Wrapper function that adds retry logic with exponential backoff for uploads
+async fn upload_with_retry<F, Fut>(
+    operation_name: &str,
+    mut operation: F,
+) -> Result<(String, f64)>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<(String, f64)>>,
+{
+    let mut retry_count = 0;
+    let mut backoff_secs = INITIAL_RETRY_DELAY_MS / 1000; // Convert to seconds
+    
+    loop {
+        match operation().await {
+            Ok(result) => return Ok(result),
+            Err(e) => {
+                let error_str = e.to_string();
+                
+                // Check if it's a 429 error
+                if error_str.contains("429") || error_str.contains("Too Many Requests") {
+                    if retry_count >= MAX_RETRIES {
+                        eprintln!("❌ {} failed after {} retries: {}", operation_name, MAX_RETRIES, e);
+                        return Err(e);
+                    }
+                    
+                    // Try to extract Retry-After value from error message
+                    let wait_time = if error_str.contains("Status=429") {
+                        // The error message might contain retry-after info
+                        // For now, use exponential backoff
+                        backoff_secs
+                    } else {
+                        backoff_secs
+                    };
+                    
+                    retry_count += 1;
+                    eprintln!(
+                        "⏳ Rate limited on {}. Retry {}/{} in {} seconds...", 
+                        operation_name, retry_count, MAX_RETRIES, wait_time
+                    );
+                    
+                    tokio::time::sleep(tokio::time::Duration::from_secs(wait_time)).await;
+                    
+                    // Exponential backoff with cap
+                    backoff_secs = (backoff_secs * 2).min(MAX_RETRY_DELAY_MS / 1000).min(60);
+                } else {
+                    // Not a rate limit error, don't retry
+                    return Err(e);
+                }
+            }
+        }
+    }
 }
 
 async fn upload_file_with_auth(
@@ -1593,7 +1656,14 @@ async fn upload_file_priority_with_shared_progress(
 
 pub async fn run_cli() -> Result<()> {
     let cli = Cli::parse();
-    let client = Client::new();
+    
+    // Create optimized HTTP client for high concurrency
+    let client = Client::builder()
+        .pool_max_idle_per_host(100)  // Keep more connections alive
+        .pool_idle_timeout(std::time::Duration::from_secs(90))  // Keep connections alive longer
+        .timeout(std::time::Duration::from_secs(1800))  // 30 minute timeout for large files
+        .build()?;
+    
     let base_url = cli.api.trim_end_matches('/');
 
     // Only check version for certain commands
@@ -1615,6 +1685,7 @@ pub async fn run_cli() -> Result<()> {
             | Commands::UploadDirectory { .. }
             | Commands::PriorityUploadDirectory { .. }
             | Commands::GetPriorityFee
+            | Commands::GetTierPricing
             | Commands::PriorityUpload { .. }
             | Commands::PriorityDownload { .. }
             | Commands::ListUploads
@@ -2046,6 +2117,7 @@ pub async fn run_cli() -> Result<()> {
             file_path,
             file_name,
             epochs,
+            tier,
         } => {
             // Load credentials and check for JWT
             let mut creds = load_credentials_from_file()?.ok_or_else(|| {
@@ -2072,9 +2144,28 @@ pub async fn run_cli() -> Result<()> {
             
             // Build URL - with JWT we don't need query params for auth
             // Build URL without credentials (security fix)
-            let url = format!("{}/upload?file_name={}&epochs={}", base_url, file_name, epochs_final);
+            // Use priority endpoint for tiers above normal to avoid rate limiting
+            let endpoint = if let Some(ref t) = tier {
+                match t.as_str() {
+                    "normal" => "upload",
+                    _ => "priorityUpload", // All other tiers use priority endpoint
+                }
+            } else {
+                "upload" // Default to normal upload if no tier specified
+            };
+            
+            let mut url = format!("{}/{}?file_name={}&epochs={}", base_url, endpoint, file_name, epochs_final);
+            if let Some(tier_name) = tier {
+                url = format!("{}&tier={}", url, tier_name);
+            }
 
-            match upload_file_with_shared_progress(&client, local_path, &url, &file_name, &creds, None).await {
+            // Use retry wrapper for single file upload
+            let upload_result = upload_with_retry(
+                &format!("upload of {}", file_path),
+                || upload_file_with_shared_progress(&client, local_path, &url, &file_name, &creds, None)
+            ).await;
+            
+            match upload_result {
                 Ok((uploaded_filename, token_cost)) => {
                     println!("File uploaded successfully: {}", uploaded_filename);
                     if token_cost > 0.0 {
@@ -2609,6 +2700,7 @@ pub async fn run_cli() -> Result<()> {
             user_id,
             user_app_key,
             directory_path,
+            tier,
         } => {
             // Load credentials and check for JWT
             let mut creds = load_credentials_from_file()?.ok_or_else(|| {
@@ -2659,7 +2751,45 @@ pub async fn run_cli() -> Result<()> {
             );
             
             // Check if user has enough tokens for the entire upload
-            let total_cost_estimate = total_size as f64 / 1_000_000_000.0; // 1 PIPE per GB for normal uploads
+            // Get tier pricing and concurrency
+            let (fee_per_gb, tier_concurrency) = if tier.as_deref() == Some("normal") || tier.is_none() {
+                (1.0, 2) // Normal tier: 1 PIPE per GB, 2 concurrent
+            } else {
+                // For priority tiers, we need to fetch the actual pricing
+                let fee_url = format!("{}/getTierPricing", base_url);
+                let fee_req = if let Some(ref auth_tokens) = creds.auth_tokens {
+                    client.get(&fee_url)
+                        .header("Authorization", format!("Bearer {}", auth_tokens.access_token))
+                } else {
+                    client.get(&fee_url)
+                        .header("X-User-Id", &creds.user_id)
+                        .header("X-User-App-Key", &creds.user_app_key)
+                };
+                
+                match fee_req.send().await {
+                    Ok(resp) if resp.status().is_success() => {
+                        #[derive(Deserialize)]
+                        struct TierInfo {
+                            name: String,
+                            current_price: f64,
+                            concurrency: usize,
+                        }
+                        
+                        if let Ok(pricing_list) = resp.json::<Vec<TierInfo>>().await {
+                            // Find the tier we're using
+                            pricing_list.iter()
+                                .find(|t| Some(&t.name) == tier.as_ref())
+                                .map(|t| (t.current_price, t.concurrency))
+                                .unwrap_or((25.0, 50)) // Default to enterprise pricing/concurrency if not found
+                        } else {
+                            (25.0, 50) // Default to enterprise pricing on parse error
+                        }
+                    }
+                    _ => (25.0, 50) // Default to enterprise pricing on request error
+                }
+            };
+            
+            let total_cost_estimate = (total_size as f64 / 1_000_000_000.0) * fee_per_gb;
             
             // Get current token balance
             let balance_url = format!("{}/checkCustomToken", base_url);
@@ -2690,38 +2820,38 @@ pub async fn run_cli() -> Result<()> {
                             Ok(balance_resp) => {
                                 let current_balance = balance_resp.ui_amount;
                                 if current_balance < total_cost_estimate {
-                                    eprintln!("\n❌ Insufficient tokens for directory upload");
-                                    eprintln!("Total cost: {:.4} PIPE tokens", total_cost_estimate);
-                                    eprintln!("Your balance: {:.4} PIPE tokens", current_balance);
-                                    eprintln!("Needed: {:.4} PIPE tokens", total_cost_estimate - current_balance);
-                                    eprintln!("\nPlease use 'pipe swap-sol-for-pipe {:.1}' to get enough tokens.", 
-                                        (total_cost_estimate - current_balance) / 10.0 + 0.1);
-                                    return Ok(());
-                                }
-                                println!("💰 Estimated cost: {:.4} PIPE tokens (current balance: {:.4} PIPE)", 
-                                    total_cost_estimate, current_balance);
+                                                                    eprintln!("\n❌ Insufficient tokens for directory upload");
+                                eprintln!("Total cost: {:.4} PIPE tokens (at {} tokens/GB)", total_cost_estimate, fee_per_gb);
+                                eprintln!("Your balance: {:.4} PIPE tokens", current_balance);
+                                eprintln!("Needed: {:.4} PIPE tokens", total_cost_estimate - current_balance);
+                                eprintln!("\nPlease use 'pipe swap-sol-for-pipe {:.1}' to get enough tokens.", 
+                                    (total_cost_estimate - current_balance) / 10.0 + 0.1);
+                                return Ok(());
+                            }
+                            println!("💰 Estimated cost: {:.4} PIPE tokens at {} tokens/GB (current balance: {:.4} PIPE)", 
+                                total_cost_estimate, fee_per_gb, current_balance);
                             }
                             Err(e) => {
-                                eprintln!("⚠️  Failed to parse balance response: {}", e);
-                                eprintln!("Estimated cost: {:.4} PIPE tokens", total_cost_estimate);
+                                                        eprintln!("⚠️  Failed to parse balance response: {}", e);
+                        eprintln!("Estimated cost: {:.4} PIPE tokens at {} tokens/GB", total_cost_estimate, fee_per_gb);
                                 eprintln!("\nProceed with caution - could not verify if you have enough tokens.");
                                 eprintln!("Consider checking your balance with 'pipe check-token' first.");
                             }
                         }
                     } else {
-                        let error_text = resp.text().await.unwrap_or_else(|_| "Unknown error".to_string());
-                        eprintln!("⚠️  Failed to check token balance: {} - {}", status, error_text);
-                        eprintln!("Estimated cost: {:.4} PIPE tokens", total_cost_estimate);
-                        eprintln!("\nProceed with caution - could not verify if you have enough tokens.");
-                        eprintln!("Consider checking your balance with 'pipe check-token' first.");
-                    }
-                }
-                Err(e) => {
-                    eprintln!("⚠️  Could not connect to check token balance: {}", e);
-                    eprintln!("Estimated cost: {:.4} PIPE tokens", total_cost_estimate);
+                                            let error_text = resp.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+                    eprintln!("⚠️  Failed to check token balance: {} - {}", status, error_text);
+                    eprintln!("Estimated cost: {:.4} PIPE tokens at {} tokens/GB", total_cost_estimate, fee_per_gb);
                     eprintln!("\nProceed with caution - could not verify if you have enough tokens.");
                     eprintln!("Consider checking your balance with 'pipe check-token' first.");
+                    }
                 }
+                            Err(e) => {
+                eprintln!("⚠️  Could not connect to check token balance: {}", e);
+                eprintln!("Estimated cost: {:.4} PIPE tokens at {} tokens/GB", total_cost_estimate, fee_per_gb);
+                eprintln!("\nProceed with caution - could not verify if you have enough tokens.");
+                eprintln!("Consider checking your balance with 'pipe check-token' first.");
+            }
             }
 
             // Create shared progress bar
@@ -2739,7 +2869,9 @@ pub async fn run_cli() -> Result<()> {
                 progress_bar: progress.clone(),
             };
 
-            let concurrency_limit = 10;  // Match server's limit of 10 concurrent uploads per user
+            // Limit concurrency to avoid overwhelming local uploads
+            let concurrency_limit = tier_concurrency.min(10); // Cap at 10 for better performance
+            println!("🚀 Using {} concurrent upload slots for {} tier", concurrency_limit, tier.as_deref().unwrap_or("normal"));
             let sem = Arc::new(Semaphore::new(concurrency_limit));
             let mut handles = Vec::new();
 
@@ -2766,15 +2898,35 @@ pub async fn run_cli() -> Result<()> {
                         .map(|os| os.to_string_lossy().to_string())
                         .unwrap_or_else(|| "untitled".to_string()),
                 };
+                let tier_clone = tier.clone();
 
                 let handle = tokio::spawn(async move {
                     let _permit = sem_clone.acquire_owned().await.unwrap();
                     
                     // Build URL based on auth type
                     // Build URL without credentials (security fix)
-                    let url = format!("{}/upload?file_name={}", base_url_clone, rel_path);
+                    // Use priority endpoint for tiers above normal to avoid rate limiting
+                    let endpoint = if let Some(ref t) = tier_clone {
+                        match t.as_str() {
+                            "normal" => "upload",
+                            _ => "priorityUpload", // All other tiers use priority endpoint
+                        }
+                    } else {
+                        "upload" // Default to normal upload if no tier specified
+                    };
+                    
+                    let mut url = format!("{}/{}?file_name={}", base_url_clone, endpoint, rel_path);
+                    if let Some(tier_name) = &tier_clone {
+                        url = format!("{}&tier={}", url, tier_name);
+                    }
 
-                    match upload_file_with_shared_progress(&client_clone, &path, &url, &rel_path, &creds_clone, Some(shared_progress_clone)).await {
+                    // Use retry wrapper for directory uploads
+                    let upload_result = upload_with_retry(
+                        &format!("upload of {}", rel_path),
+                        || upload_file_with_shared_progress(&client_clone, &path, &url, &rel_path, &creds_clone, Some(shared_progress_clone.clone()))
+                    ).await;
+                    
+                    match upload_result {
                         Ok((uploaded_file, cost)) => {
                             let mut completed = completed_clone.lock().await;
                             *completed += 1;
@@ -2828,6 +2980,9 @@ pub async fn run_cli() -> Result<()> {
                 println!("  ❌ Failed: {} files", failed);
             }
             println!("  📁 Total size: {:.2} MB", total_size as f64 / 1_048_576.0);
+            if let Some(t) = &tier {
+                println!("  📈 Upload tier: {}", t);
+            }
             if final_cost > 0.0 {
                 println!("  💰 Total cost: {:.4} PIPE tokens", final_cost);
             }
@@ -3040,7 +3195,13 @@ pub async fn run_cli() -> Result<()> {
                     // Build URL without credentials (security fix)
                     let url = format!("{}/priorityUpload?file_name={}", base_url_clone, rel_path);
 
-                    match upload_file_priority_with_shared_progress(&client_clone, &path, &url, &rel_path, &creds_clone, Some(shared_progress_clone)).await {
+                    // Use retry wrapper for priority directory uploads
+                    let upload_result = upload_with_retry(
+                        &format!("priority upload of {}", rel_path),
+                        || upload_file_priority_with_shared_progress(&client_clone, &path, &url, &rel_path, &creds_clone, Some(shared_progress_clone.clone()))
+                    ).await;
+                    
+                    match upload_result {
                         Ok((uploaded_file, cost)) => {
                             let mut completed = completed_clone.lock().await;
                             *completed += 1;
@@ -3124,6 +3285,51 @@ pub async fn run_cli() -> Result<()> {
                 ));
             }
         }
+        
+        Commands::GetTierPricing => {
+            let url = format!("{}/getTierPricing", base_url);
+            let resp = client.get(&url).send().await?;
+            let status = resp.status();
+            let text_body = resp.text().await?;
+            
+            if status.is_success() {
+                #[derive(Deserialize)]
+                struct TierPricing {
+                    name: String,
+                    base_price: f64,
+                    current_price: f64,
+                    concurrency: usize,
+                    active_users: usize,
+                    multipart_concurrency: usize,
+                    chunk_size_mb: u64,
+                }
+                let pricing: Vec<TierPricing> = serde_json::from_str(&text_body)?;
+                
+                println!("\n📊 Upload Tier Pricing:");
+                println!("╔═══════════════╦═══════╦═══════════╦═════════════╦══════════╦═══════════════╦═══════════╗");
+                println!("║ Tier          ║ $/GB  ║ Current   ║ Concurrency ║ Active   ║ MP Concurrent ║ Chunk MB  ║");
+                println!("╠═══════════════╬═══════╬═══════════╬═════════════╬══════════╬═══════════════╬═══════════╣");
+                for tier in pricing {
+                    println!("║ {:13} ║ {:5.1} ║ {:9.2} ║ {:11} ║ {:8} ║ {:13} ║ {:9} ║",
+                        tier.name, 
+                        tier.base_price, 
+                        tier.current_price, 
+                        tier.concurrency, 
+                        tier.active_users,
+                        tier.multipart_concurrency,
+                        tier.chunk_size_mb
+                    );
+                }
+                println!("╚═══════════════╩═══════╩═══════════╩═════════════╩══════════╩═══════════════╩═══════════╝");
+                println!("\nNote: Current price adjusts based on demand for Priority and Premium tiers.");
+            } else {
+                return Err(anyhow!(
+                    "Failed to get tier pricing. Status={}, Body={}",
+                    status,
+                    text_body
+                ));
+            }
+        }
 
         Commands::PriorityUpload {
             user_id,
@@ -3158,7 +3364,13 @@ pub async fn run_cli() -> Result<()> {
             // Build URL without credentials (security fix)
             let url = format!("{}/priorityUpload?file_name={}&epochs={}", base_url, file_name, epochs_final);
 
-            match upload_file_priority_with_shared_progress(&client, local_path, &url, &file_name, &creds, None).await {
+            // Use retry wrapper for priority single file upload
+            let upload_result = upload_with_retry(
+                &format!("priority upload of {}", file_path),
+                || upload_file_priority_with_shared_progress(&client, local_path, &url, &file_name, &creds, None)
+            ).await;
+            
+            match upload_result {
                 Ok((uploaded_filename, token_cost)) => {
                     println!("Priority file uploaded (or backgrounded): {}", uploaded_filename);
                     if token_cost > 0.0 {
