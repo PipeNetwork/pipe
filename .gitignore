@@ -1,0 +1,49 @@
+# Rust build artifacts
+/target/
+**/*.rs.bk
+*.pdb
+
+# Cargo lock file (uncomment if you want to ignore it for libraries)
+# Cargo.lock
+
+# IDE and editor files
+.idea/
+*.swp
+*.swo
+*~
+.vscode/
+*.iml
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test and temporary files
+*.log
+*.tmp
+test_*
+*_test.*
+*.test
+
+# Environment and secrets
+.env
+.env.*
+*.key
+*.pem
+credentials.json
+.pipe-cli.json
+.pipe-cli-uploads.json
+
+# Documentation build
+/docs/_build/
+/docs/_site/
+
+# Backup files
+*.backup
+*.bak
+*.orig
+
+# Local notes and scripts
+*.local.md
+local_*
+*.sh 
