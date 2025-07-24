@@ -3,25 +3,82 @@
 use anyhow::{anyhow, Result};
 use base64::{engine::general_purpose, Engine as _};
 use bytes::Bytes;
+use chrono::{DateTime, Utc};
 use clap::{Parser, Subcommand};
 use futures_util::StreamExt;
 use indicatif::{ProgressBar, ProgressStyle};
-use reqwest::{Body, Client};
+use reqwest::{Body, Client, StatusCode};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs::{self, OpenOptions};
-use std::io::{Write as IoWrite}; // For writeln!
+use std::io::Write as IoWrite; // For writeln!
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::RwLock;
+use std::time::{Duration, Instant};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::fs::File as TokioFile;
 use tokio::io::{AsyncWriteExt, BufWriter};
+use tokio::sync::Mutex as TokioMutex;
 use tokio::sync::Semaphore;
-use tokio_util::io::ReaderStream;
 use walkdir::WalkDir;
 
-pub const MAX_RETRIES: u32 = 3;
+mod encryption;
+mod keyring;
+mod quantum;
+
+pub const MAX_RETRIES: u32 = 5;
 pub const INITIAL_RETRY_DELAY_MS: u64 = 1000;
 pub const MAX_RETRY_DELAY_MS: u64 = 10000;
+
+// JWT Authentication structures
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct AuthTokens {
+    pub access_token: String,
+    pub refresh_token: String,
+    pub token_type: String,
+    pub expires_in: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub csrf_token: Option<String>,
+}
+
+#[derive(Serialize, Debug)]
+pub struct LoginRequest {
+    pub username: String,
+    pub password: String,
+}
+
+#[derive(Serialize, Debug)]
+pub struct SetPasswordRequest {
+    pub user_id: String,
+    pub user_app_key: String,
+    pub new_password: String,
+}
+
+#[derive(Serialize, Debug)]
+pub struct RefreshTokenRequest {
+    pub refresh_token: String,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct RefreshTokenResponse {
+    pub access_token: String,
+    pub token_type: String,
+    pub expires_in: i64,
+}
+
+// Combined credentials structure that supports both legacy and JWT auth
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct SavedCredentials {
+    pub user_id: String,
+    pub user_app_key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth_tokens: Option<AuthTokens>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+}
 
 #[derive(Serialize, Debug)]
 pub struct VersionCheckRequest {
@@ -46,7 +103,7 @@ pub struct VersionCheckResponse {
 pub struct Cli {
     #[arg(
         long,
-        default_value = "https://api.pipenetwork.com",
+        default_value = "https://us-west-00-firestarter.pipenetwork.com",
         global = true,
         help = "Base URL for the Pipe Network client API"
     )]
@@ -62,6 +119,29 @@ pub enum Commands {
     NewUser {
         username: String,
     },
+
+    /// Login with username and password (JWT authentication)
+    Login {
+        username: String,
+        #[arg(short, long)]
+        password: Option<String>,
+    },
+
+    /// Logout and revoke current session
+    Logout,
+
+    /// Set password for existing user (for migration to JWT auth)
+    SetPassword {
+        #[arg(short, long)]
+        password: Option<String>,
+        #[arg(long)]
+        user_id: Option<String>,
+        #[arg(long)]
+        user_app_key: Option<String>,
+    },
+
+    /// Refresh access token
+    RefreshToken,
 
     RotateAppKey {
         #[arg(long)]
@@ -79,6 +159,19 @@ pub enum Commands {
         file_name: String,
         #[arg(long)]
         epochs: Option<u64>,
+        #[arg(
+            long,
+            help = "Upload tier: normal, priority, premium, ultra, enterprise"
+        )]
+        tier: Option<String>,
+        #[arg(long, help = "Encrypt file with password before upload")]
+        encrypt: bool,
+        #[arg(long, help = "Password for encryption (will prompt if not provided)")]
+        password: Option<String>,
+        #[arg(long, help = "Use key from keyring or key file")]
+        key: Option<String>,
+        #[arg(long, help = "Use post-quantum encryption (kyber)")]
+        quantum: bool,
     },
 
     /// Download a single file
@@ -96,6 +189,13 @@ pub enum Commands {
 
         /// Required local file path to store the downloaded file
         output_path: String,
+
+        #[arg(long, help = "Decrypt file with password after download")]
+        decrypt: bool,
+        #[arg(long, help = "Password for decryption (will prompt if not provided)")]
+        password: Option<String>,
+        #[arg(long, help = "Use key from keyring or key file")]
+        key: Option<String>,
     },
 
     /// Delete a file
@@ -105,6 +205,80 @@ pub enum Commands {
         #[arg(long)]
         user_app_key: Option<String>,
         file_name: String,
+    },
+
+    /// Get information about a file (size, encryption status, etc.)
+    FileInfo {
+        #[arg(long)]
+        user_id: Option<String>,
+        #[arg(long)]
+        user_app_key: Option<String>,
+        file_name: String,
+    },
+
+    /// Encrypt a local file (without uploading)
+    EncryptLocal {
+        input_file: String,
+        output_file: String,
+        #[arg(long, help = "Password for encryption (will prompt if not provided)")]
+        password: Option<String>,
+    },
+
+    /// Decrypt a local file (without downloading)
+    DecryptLocal {
+        input_file: String,
+        output_file: String,
+        #[arg(long, help = "Password for decryption (will prompt if not provided)")]
+        password: Option<String>,
+    },
+
+    /// Generate a new encryption key
+    KeyGen {
+        #[arg(long, help = "Name for the key")]
+        name: Option<String>,
+        #[arg(long, help = "Algorithm: aes256, kyber1024, dilithium5")]
+        algorithm: Option<String>,
+        #[arg(long, help = "Description of the key")]
+        description: Option<String>,
+        #[arg(long, help = "Export to file instead of storing in keyring")]
+        output: Option<String>,
+    },
+
+    /// List all keys in the keyring
+    KeyList,
+
+    /// Delete a key from the keyring
+    KeyDelete {
+        /// Name or ID of the key to delete
+        key_name: String,
+    },
+
+    /// Export a key from the keyring
+    KeyExport {
+        /// Name or ID of the key to export
+        key_name: String,
+        /// Output file path
+        output: String,
+    },
+
+    /// Sign a file with Dilithium
+    SignFile {
+        /// File to sign
+        input_file: String,
+        /// Signature output file
+        signature_file: String,
+        #[arg(long, help = "Signing key name or path")]
+        key: String,
+    },
+
+    /// Verify a file signature
+    VerifySignature {
+        /// File to verify
+        input_file: String,
+        /// Signature file
+        signature_file: String,
+        #[arg(long, help = "Public key file or name")]
+        public_key: String,
     },
 
     /// Check SOL balance
@@ -132,23 +306,14 @@ pub enum Commands {
         amount_sol: f64,
     },
 
-    /// Swap PIPE tokens for DC
-    SwapPipeForDc {
-        #[arg(long)]
-        user_id: Option<String>,
-        #[arg(long)]
-        user_app_key: Option<String>,
-        pipe_amount: f64,
-    },
-
     /// Withdraw SOL to an external Solana address
     WithdrawSol {
         #[arg(long)]
         user_id: Option<String>,
         #[arg(long)]
         user_app_key: Option<String>,
-        to_pubkey: String,
         amount_sol: f64,
+        to_pubkey: String,
     },
 
     /// Withdraw custom tokens to an external address
@@ -157,8 +322,9 @@ pub enum Commands {
         user_id: Option<String>,
         #[arg(long)]
         user_app_key: Option<String>,
-        to_pubkey: String,
+        token_mint: String,
         amount: u64,
+        to_pubkey: String,
     },
 
     CreatePublicLink {
@@ -167,6 +333,14 @@ pub enum Commands {
         #[arg(long)]
         user_app_key: Option<String>,
         file_name: String,
+    },
+
+    DeletePublicLink {
+        #[arg(long)]
+        user_id: Option<String>,
+        #[arg(long)]
+        user_app_key: Option<String>,
+        link_hash: String,
     },
 
     PublicDownload {
@@ -180,6 +354,17 @@ pub enum Commands {
         #[arg(long)]
         user_app_key: Option<String>,
         directory_path: String,
+        #[arg(
+            long,
+            help = "Upload tier: normal, priority, premium, ultra, enterprise"
+        )]
+        tier: Option<String>,
+        #[arg(long, help = "Skip files that were already uploaded successfully")]
+        skip_uploaded: bool,
+        #[arg(long, help = "Encrypt all files with password before upload")]
+        encrypt: bool,
+        #[arg(long, help = "Password for encryption (will prompt if not provided)")]
+        password: Option<String>,
     },
 
     PriorityUploadDirectory {
@@ -190,11 +375,14 @@ pub enum Commands {
         directory_path: String,
         #[arg(long)]
         skip_uploaded: bool,
-        #[arg(long, default_value_t = 100)]
+        #[arg(long, default_value_t = 10)]
         concurrency: usize,
     },
 
     GetPriorityFee,
+
+    /// Get pricing for all upload tiers
+    GetTierPricing,
 
     PriorityUpload {
         #[arg(long)]
@@ -271,10 +459,12 @@ pub struct DeleteFileResponse {
     pub message: String,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct CheckWalletRequest {
-    pub user_id: String,
-    pub user_app_key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_app_key: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -287,8 +477,10 @@ pub struct CheckWalletResponse {
 
 #[derive(Serialize, Deserialize)]
 pub struct CheckCustomTokenRequest {
-    pub user_id: String,
-    pub user_app_key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_app_key: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -302,8 +494,10 @@ pub struct CheckCustomTokenResponse {
 
 #[derive(Serialize, Deserialize)]
 pub struct SwapSolForPipeRequest {
-    pub user_id: String,
-    pub user_app_key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_app_key: Option<String>,
     pub amount_sol: f64,
 }
 
@@ -315,23 +509,11 @@ pub struct SwapSolForPipeResponse {
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct SwapPipeForDcRequest {
-    pub user_id: String,
-    pub user_app_key: String,
-    pub amount_pipe: f64,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-pub struct SwapPipeForDcResponse {
-    pub user_id: String,
-    pub pipe_spent: f64,
-    pub dc_minted: f64,
-}
-
-#[derive(Serialize, Deserialize)]
 pub struct WithdrawSolRequest {
-    pub user_id: String,
-    pub user_app_key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_app_key: Option<String>,
     pub to_pubkey: String,
     pub amount_sol: f64,
 }
@@ -346,8 +528,10 @@ pub struct WithdrawSolResponse {
 
 #[derive(Serialize, Deserialize)]
 pub struct WithdrawTokenRequest {
-    pub user_id: String,
-    pub user_app_key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_app_key: Option<String>,
     pub to_pubkey: String,
     pub amount: u64,
 }
@@ -378,6 +562,21 @@ pub struct CreatePublicLinkResponse {
 }
 
 #[derive(Serialize, Deserialize)]
+pub struct DeletePublicLinkRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_app_key: Option<String>,
+    pub link_hash: String,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct DeletePublicLinkResponse {
+    pub message: String,
+    pub link_hash: String,
+}
+
+#[derive(Serialize, Deserialize)]
 pub struct ExtendStorageRequest {
     pub user_id: String,
     pub user_app_key: String,
@@ -391,10 +590,166 @@ pub struct ExtendStorageResponse {
     pub new_expires_at: String,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ServiceInstance {
+    pub endpoint_url: String,
+    pub load_score: f64,
+    pub status: String,
+    pub active_connections: i32,
+    pub bandwidth_available_mbps: f64,
+    pub region: Option<String>,
+}
+
 #[derive(Serialize, Deserialize, Debug)]
-pub struct SavedCredentials {
-    pub user_id: String,
-    pub user_app_key: String,
+pub struct ServiceDiscoveryResponse {
+    pub instances: Vec<ServiceInstance>,
+    pub routing_strategy: String,
+    pub refresh_interval_seconds: u32,
+}
+
+// Service discovery cache
+pub struct ServiceDiscoveryCache {
+    instances: RwLock<Vec<ServiceInstance>>,
+    last_refresh: RwLock<Instant>,
+    refresh_interval: Duration,
+    fallback_endpoint: String,
+}
+
+impl ServiceDiscoveryCache {
+    pub fn new(fallback_endpoint: String) -> Self {
+        Self {
+            instances: RwLock::new(Vec::new()),
+            last_refresh: RwLock::new(Instant::now() - Duration::from_secs(3600)), // Force refresh on first use
+            refresh_interval: Duration::from_secs(60),
+            fallback_endpoint,
+        }
+    }
+
+    pub async fn get_best_endpoint(&self, client: &Client, discovery_url: &str) -> String {
+        // Check if refresh needed
+        let needs_refresh = {
+            let last = self.last_refresh.read().unwrap();
+            last.elapsed() > self.refresh_interval
+        };
+
+        if needs_refresh {
+            if let Err(e) = self.refresh_instances(client, discovery_url).await {
+                eprintln!("Failed to refresh service instances: {}", e);
+            }
+        }
+
+        // Get best instance
+        let instances = self.instances.read().unwrap();
+        if let Some(best) = instances.first() {
+            best.endpoint_url.clone()
+        } else {
+            self.fallback_endpoint.clone()
+        }
+    }
+
+    async fn refresh_instances(&self, client: &Client, discovery_url: &str) -> Result<()> {
+        let resp = client
+            .get(format!("{}/getServiceInstances", discovery_url))
+            .timeout(Duration::from_secs(5))
+            .send()
+            .await?;
+
+        if resp.status().is_success() {
+            let mut discovery: ServiceDiscoveryResponse = resp.json().await?;
+
+            // Filter out localhost instances if we're not connecting to localhost
+            if !discovery_url.contains("localhost") && !discovery_url.contains("127.0.0.1") {
+                discovery.instances.retain(|instance| {
+                    !instance.endpoint_url.contains("localhost") && 
+                    !instance.endpoint_url.contains("127.0.0.1")
+                });
+            }
+
+            let mut instances = self.instances.write().unwrap();
+            *instances = discovery.instances;
+
+            let mut last_refresh = self.last_refresh.write().unwrap();
+            *last_refresh = Instant::now();
+
+            eprintln!(
+                "Service discovery updated: {} healthy instances",
+                instances.len()
+            );
+        }
+
+        Ok(())
+    }
+
+    pub fn select_endpoint_for_operation(
+        &self,
+        operation: &str,
+        user_id: &str,
+        file_name: &str,
+    ) -> String {
+        let instances = self.instances.read().unwrap();
+
+        if instances.is_empty() {
+            return self.fallback_endpoint.clone();
+        }
+
+        match operation {
+            "upload" | "download" | "delete" => {
+                // Use consistent hashing for file operations
+                let key = format!("{}/{}", user_id, file_name);
+                let hash = self.hash_key(&key);
+                let idx = hash % instances.len();
+                instances
+                    .get(idx)
+                    .map(|i| i.endpoint_url.clone())
+                    .unwrap_or_else(|| self.fallback_endpoint.clone())
+            }
+            _ => {
+                // Use least loaded for other operations
+                instances
+                    .first()
+                    .map(|i| i.endpoint_url.clone())
+                    .unwrap_or_else(|| self.fallback_endpoint.clone())
+            }
+        }
+    }
+
+    fn hash_key(&self, key: &str) -> usize {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        let mut hasher = DefaultHasher::new();
+        key.hash(&mut hasher);
+        hasher.finish() as usize
+    }
+}
+
+// Helper function to get endpoint for a specific operation
+async fn get_endpoint_for_operation(
+    service_cache: &ServiceDiscoveryCache,
+    client: &Client,
+    base_url: &str,
+    operation: &str,
+    user_id: &str,
+    file_name: Option<&str>,
+) -> String {
+    // First try to refresh if needed
+    let _ = service_cache.get_best_endpoint(client, base_url).await;
+
+    // Then select based on operation
+    match operation {
+        "upload" | "download" | "delete" if file_name.is_some() => {
+            service_cache.select_endpoint_for_operation(operation, user_id, file_name.unwrap())
+        }
+        _ => {
+            // For non-file operations, just get the best endpoint
+            let instances = service_cache.instances.read().unwrap();
+            if let Some(best) = instances.first() {
+                best.endpoint_url.clone()
+            } else {
+                base_url.to_string()
+            }
+        }
+    }
 }
 
 pub fn get_credentials_file_path() -> PathBuf {
@@ -416,14 +771,146 @@ pub fn load_credentials_from_file() -> Result<Option<SavedCredentials>> {
 }
 
 pub fn save_credentials_to_file(user_id: &str, user_app_key: &str) -> Result<()> {
-    let creds = SavedCredentials {
-        user_id: user_id.to_owned(),
-        user_app_key: user_app_key.to_owned(),
+    // Try to preserve existing auth tokens if they exist
+    let creds = if let Ok(Some(existing)) = load_credentials_from_file() {
+        SavedCredentials {
+            user_id: user_id.to_owned(),
+            user_app_key: user_app_key.to_owned(),
+            auth_tokens: existing.auth_tokens,
+            username: existing.username,
+        }
+    } else {
+        SavedCredentials {
+            user_id: user_id.to_owned(),
+            user_app_key: user_app_key.to_owned(),
+            auth_tokens: None,
+            username: None,
+        }
     };
+
+    save_full_credentials(&creds)
+}
+
+// Save full credentials including JWT tokens
+pub fn save_full_credentials(creds: &SavedCredentials) -> Result<()> {
     let path = get_credentials_file_path();
-    let data = serde_json::to_string_pretty(&creds)?;
-    fs::write(&path, data)?;
+    let json = serde_json::to_string_pretty(&creds)?;
+    fs::write(&path, json)?;
+    println!("Credentials saved to {:?}", path);
     Ok(())
+}
+
+// Check if JWT token is expired or about to expire (within 60 seconds)
+fn is_token_expired(auth_tokens: &AuthTokens) -> bool {
+    if let Some(expires_at) = auth_tokens.expires_at {
+        let now = Utc::now();
+        let buffer = chrono::Duration::seconds(60);
+        now + buffer >= expires_at
+    } else {
+        true // If no expiration time, assume expired
+    }
+}
+
+// Refresh JWT token if needed
+async fn ensure_valid_token(
+    client: &Client,
+    base_url: &str,
+    creds: &mut SavedCredentials,
+) -> Result<()> {
+    if let Some(ref auth_tokens) = creds.auth_tokens {
+        if is_token_expired(auth_tokens) {
+            println!("Token expired or expiring soon, refreshing...");
+
+            let req_body = RefreshTokenRequest {
+                refresh_token: auth_tokens.refresh_token.clone(),
+            };
+
+            let resp = client
+                .post(format!("{}/auth/refresh", base_url))
+                .json(&req_body)
+                .send()
+                .await?;
+
+            if resp.status().is_success() {
+                let refresh_response: RefreshTokenResponse = resp.json().await?;
+
+                // Calculate new expires_at timestamp
+                let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
+                let expires_at =
+                    DateTime::<Utc>::from_timestamp(now + refresh_response.expires_in, 0)
+                        .ok_or_else(|| anyhow!("Invalid expiration timestamp"))?;
+
+                // Update auth tokens
+                if let Some(ref mut auth_tokens) = creds.auth_tokens {
+                    auth_tokens.access_token = refresh_response.access_token;
+                    auth_tokens.expires_in = refresh_response.expires_in;
+                    auth_tokens.expires_at = Some(expires_at);
+                }
+
+                // Save updated credentials
+                save_full_credentials(creds)?;
+                println!("Token refreshed successfully!");
+            } else {
+                // Token refresh failed, clear auth tokens
+                creds.auth_tokens = None;
+                save_full_credentials(creds)?;
+                return Err(anyhow!("Token refresh failed, please login again"));
+            }
+        }
+    }
+    Ok(())
+}
+
+// Build a request with JWT auth header if available, otherwise use query params
+fn build_authenticated_request(
+    method: reqwest::Method,
+    url: String,
+    creds: &SavedCredentials,
+    include_legacy: bool,
+) -> reqwest::RequestBuilder {
+    let client = Client::new();
+    let mut request = client.request(method, &url);
+
+    // First try JWT authentication
+    if let Some(ref auth_tokens) = creds.auth_tokens {
+        request = request.header(
+            "Authorization",
+            format!("Bearer {}", auth_tokens.access_token),
+        );
+    } else if include_legacy {
+        // Fall back to legacy auth via query params (already in URL)
+    }
+
+    request
+}
+
+/// Add authentication headers including CSRF token for state-changing requests
+fn add_auth_headers(
+    mut request: reqwest::RequestBuilder,
+    creds: &SavedCredentials,
+    is_state_changing: bool,
+) -> reqwest::RequestBuilder {
+    // Add JWT auth if available
+    if let Some(ref auth_tokens) = creds.auth_tokens {
+        request = request.header(
+            "Authorization",
+            format!("Bearer {}", auth_tokens.access_token),
+        );
+
+        // Add CSRF token for state-changing requests
+        if is_state_changing {
+            if let Some(ref csrf_token) = auth_tokens.csrf_token {
+                request = request.header("X-CSRF-Token", csrf_token);
+            }
+        }
+    } else {
+        // Legacy auth via headers
+        request = request
+            .header("X-User-Id", &creds.user_id)
+            .header("X-User-App-Key", &creds.user_app_key);
+    }
+
+    request
 }
 
 pub fn get_final_user_id_and_app_key(
@@ -463,7 +950,12 @@ pub fn get_upload_log_path() -> PathBuf {
     }
 }
 
-pub fn append_to_upload_log(local_path: &str, remote_path: &str, status: &str, message: &str) -> Result<()> {
+pub fn append_to_upload_log(
+    local_path: &str,
+    remote_path: &str,
+    status: &str,
+    message: &str,
+) -> Result<()> {
     let log_path = get_upload_log_path();
     let mut file = OpenOptions::new()
         .create(true)
@@ -535,46 +1027,84 @@ async fn improved_download_file(
     file_name: &str,
     output_path: &str,
 ) -> Result<()> {
-    let url = format!(
-        "{}/download?user_id={}&user_app_key={}&file_name={}",
-        base_url, user_id, user_app_key, file_name
-    );
+    // Create a credentials object for backward compatibility
+    let creds = SavedCredentials {
+        user_id: user_id.to_owned(),
+        user_app_key: user_app_key.to_owned(),
+        auth_tokens: None,
+        username: None,
+    };
+    improved_download_file_with_auth(client, base_url, &creds, file_name, output_path).await
+}
 
+async fn improved_download_file_with_auth(
+    client: &Client,
+    base_url: &str,
+    creds: &SavedCredentials,
+    file_name: &str,
+    output_path: &str,
+) -> Result<()> {
+    println!("Downloading '{}' to '{}'...", file_name, output_path);
+
+    // Build the URL - NO CREDENTIALS IN URL (security fix)
+    let url = format!("{}/download?file_name={}", base_url, file_name);
+
+    // Create progress bar
     let progress = ProgressBar::new(0);
     progress.set_style(
         ProgressStyle::default_bar()
             .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta})")
-            .expect("Progress bar template is valid")
+            .unwrap()
             .progress_chars("#>-"),
     );
 
-    let mut retry_count = 0;
-    let mut delay = INITIAL_RETRY_DELAY_MS;
-
-    loop {
-        match download_with_progress(client, &url, output_path, &progress).await {
-            Ok(_) => {
-                progress.finish_with_message("Download completed successfully");
-                return Ok(());
-            }
-            Err(e) => {
-                if retry_count >= MAX_RETRIES {
-                    progress.finish_with_message("Download failed");
-                    return Err(anyhow!(
-                        "Download failed after {} retries: {}",
-                        MAX_RETRIES,
-                        e
-                    ));
-                }
-
-                eprintln!("Download attempt {} failed: {}", retry_count + 1, e);
-                retry_count += 1;
-                tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
-                delay = std::cmp::min(delay * 2, MAX_RETRY_DELAY_MS);
-                progress.set_message(format!("Retrying... Attempt {}/{}", retry_count + 1, MAX_RETRIES));
-            }
-        }
+    // Build request with appropriate auth headers
+    let mut request = client.get(&url);
+    if let Some(ref auth_tokens) = creds.auth_tokens {
+        // JWT authentication
+        request = request.header(
+            "Authorization",
+            format!("Bearer {}", auth_tokens.access_token),
+        );
+    } else {
+        // Legacy authentication via headers (NOT URL params for security)
+        request = request
+            .header("X-User-Id", &creds.user_id)
+            .header("X-User-App-Key", &creds.user_app_key);
     }
+
+    let resp = request.send().await?;
+    let status = resp.status();
+
+    if !status.is_success() {
+        let error_text = resp.text().await?;
+        return Err(anyhow!(
+            "Download failed with status {}: {}",
+            status,
+            error_text
+        ));
+    }
+
+    let total_size = resp.content_length().unwrap_or(0);
+    progress.set_length(total_size);
+
+    let file = tokio::fs::File::create(output_path).await?;
+    let mut writer = BufWriter::new(file);
+    let mut stream = resp.bytes_stream();
+    let mut downloaded: u64 = 0;
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk?;
+        writer.write_all(&chunk).await?;
+        downloaded += chunk.len() as u64;
+        progress.set_position(downloaded);
+    }
+
+    writer.flush().await?;
+    progress.finish_with_message("Download completed");
+
+    println!("File downloaded successfully to: {}", output_path);
+    Ok(())
 }
 
 async fn download_with_progress(
@@ -614,34 +1144,145 @@ async fn download_with_progress(
     Ok(())
 }
 
-async fn upload_file(
+/// Wrapper function that adds retry logic with exponential backoff for uploads
+async fn upload_with_retry<F, Fut>(operation_name: &str, mut operation: F) -> Result<(String, f64)>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<(String, f64)>>,
+{
+    let mut retry_count = 0;
+    let mut backoff_secs = INITIAL_RETRY_DELAY_MS / 1000; // Convert to seconds
+
+    loop {
+        match operation().await {
+            Ok(result) => return Ok(result),
+            Err(e) => {
+                let error_str = e.to_string();
+
+                // Check if it's a 429 error
+                if error_str.contains("429") || error_str.contains("Too Many Requests") {
+                    if retry_count >= MAX_RETRIES {
+                        eprintln!(
+                            "❌ {} failed after {} retries: {}",
+                            operation_name, MAX_RETRIES, e
+                        );
+                        return Err(e);
+                    }
+
+                    // Try to extract Retry-After value from error message
+                    let wait_time = if error_str.contains("Status=429") {
+                        // The error message might contain retry-after info
+                        // For now, use exponential backoff
+                        backoff_secs
+                    } else {
+                        backoff_secs
+                    };
+
+                    retry_count += 1;
+                    eprintln!(
+                        "⏳ Rate limited on {}. Retry {}/{} in {} seconds...",
+                        operation_name, retry_count, MAX_RETRIES, wait_time
+                    );
+
+                    tokio::time::sleep(tokio::time::Duration::from_secs(wait_time)).await;
+
+                    // Exponential backoff with cap
+                    backoff_secs = (backoff_secs * 2).min(MAX_RETRY_DELAY_MS / 1000).min(60);
+                } else {
+                    // Not a rate limit error, don't retry
+                    return Err(e);
+                }
+            }
+        }
+    }
+}
+
+async fn upload_file_with_auth(
     client: &Client,
     file_path: &Path,
     full_url: &str,
     file_name_in_bucket: &str,
+    creds: &SavedCredentials,
 ) -> Result<String> {
-    let f = TokioFile::open(file_path).await
+    let f = TokioFile::open(file_path)
+        .await
         .map_err(|e| anyhow!("Failed to open local file: {}", e))?;
     let meta = f.metadata().await?;
     let file_size = meta.len();
 
-    let stream_reader = ReaderStream::with_capacity(f, 64 * 1024);
-    let body = Body::wrap_stream(stream_reader);
+    // Add progress bar
+    let progress = ProgressBar::new(file_size);
+    progress.set_style(
+        ProgressStyle::default_bar()
+            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta})")
+            .unwrap()
+            .progress_chars("#>-"),
+    );
 
-    let resp = client
+    // Progress tracking stream
+    use futures_util::Stream;
+    use std::{
+        pin::Pin,
+        task::{Context, Poll},
+    };
+    use tokio_util::io::ReaderStream as InnerReaderStream;
+
+    struct ProgressStream<S> {
+        inner: S,
+        progress: ProgressBar,
+        bytes_uploaded: u64,
+    }
+
+    impl<S> Stream for ProgressStream<S>
+    where
+        S: Stream<Item = Result<Bytes, std::io::Error>> + Unpin,
+    {
+        type Item = Result<Bytes, std::io::Error>;
+
+        fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+            match Pin::new(&mut self.inner).poll_next(cx) {
+                Poll::Ready(Some(Ok(chunk))) => {
+                    self.bytes_uploaded += chunk.len() as u64;
+                    self.progress.set_position(self.bytes_uploaded);
+                    Poll::Ready(Some(Ok(chunk)))
+                }
+                other => other,
+            }
+        }
+    }
+
+    let wrapped_stream = ProgressStream {
+        inner: InnerReaderStream::with_capacity(f, 64 * 1024),
+        progress: progress.clone(),
+        bytes_uploaded: 0,
+    };
+
+    let body = Body::wrap_stream(wrapped_stream);
+
+    progress.set_message("Uploading...");
+    let mut request = client
         .post(full_url)
         .header("Content-Length", file_size)
-        .header("Content-Type", "application/octet-stream")
-        .body(body)
-        .send()
-        .await?;
+        .header("Content-Type", "application/octet-stream");
+
+    // Add JWT auth header if available
+    if let Some(ref auth_tokens) = creds.auth_tokens {
+        request = request.header(
+            "Authorization",
+            format!("Bearer {}", auth_tokens.access_token),
+        );
+    }
+
+    let resp = request.body(body).send().await?;
 
     let status = resp.status();
     let text_body = resp.text().await?;
     if status.is_success() {
-        println!("Upload success => server says: {}", text_body);
+        progress.finish_with_message("Upload completed successfully");
+        println!("Server response: {}", text_body);
         Ok(file_name_in_bucket.to_string())
     } else {
+        progress.finish_and_clear();
         Err(anyhow!(
             "Upload of '{}' failed. Status={}, Body={}",
             file_path.display(),
@@ -651,6 +1292,25 @@ async fn upload_file(
     }
 }
 
+// Wrapper for backward compatibility
+#[allow(dead_code)]
+async fn upload_file(
+    client: &Client,
+    file_path: &Path,
+    full_url: &str,
+    file_name_in_bucket: &str,
+) -> Result<String> {
+    // Create a dummy credentials with no JWT tokens for backward compatibility
+    let creds = SavedCredentials {
+        user_id: String::new(),
+        user_app_key: String::new(),
+        auth_tokens: None,
+        username: None,
+    };
+    upload_file_with_auth(client, file_path, full_url, file_name_in_bucket, &creds).await
+}
+
+#[allow(dead_code)]
 async fn upload_file_priority(
     client: &Client,
     file_path: &Path,
@@ -669,11 +1329,11 @@ async fn upload_file_priority(
             .progress_chars("#>-"),
     );
 
+    use futures_util::Stream;
     use std::{
         pin::Pin,
         task::{Context, Poll},
     };
-    use futures_util::Stream;
     use tokio_util::io::ReaderStream as InnerReaderStream;
 
     struct ProgressStream<S> {
@@ -688,10 +1348,7 @@ async fn upload_file_priority(
     {
         type Item = Result<Bytes, std::io::Error>;
 
-        fn poll_next(
-            mut self: Pin<&mut Self>,
-            cx: &mut Context<'_>,
-        ) -> Poll<Option<Self::Item>> {
+        fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
             match Pin::new(&mut self.inner).poll_next(cx) {
                 Poll::Ready(Some(Ok(chunk))) => {
                     self.bytes_uploaded += chunk.len() as u64;
@@ -747,7 +1404,112 @@ async fn upload_file_priority(
     }
 }
 
+#[allow(dead_code)]
+async fn upload_file_priority_with_auth(
+    client: &Client,
+    file_path: &Path,
+    full_url: &str,
+    file_name_in_bucket: &str,
+    creds: &SavedCredentials,
+) -> Result<String> {
+    let f = TokioFile::open(file_path)
+        .await
+        .map_err(|e| anyhow!("Failed to open local file: {}", e))?;
+    let meta = f.metadata().await?;
+    let file_size = meta.len();
+
+    let progress = ProgressBar::new(file_size);
+    progress.set_style(
+        ProgressStyle::default_bar()
+            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta})")
+            .unwrap()
+            .progress_chars("#>-"),
+    );
+
+    use futures_util::Stream;
+    use std::{
+        pin::Pin,
+        task::{Context, Poll},
+    };
+    use tokio_util::io::ReaderStream as InnerReaderStream;
+
+    struct ProgressStream<S> {
+        inner: S,
+        progress: ProgressBar,
+        bytes_uploaded: u64,
+    }
+
+    impl<S> Stream for ProgressStream<S>
+    where
+        S: Stream<Item = Result<Bytes, std::io::Error>> + Unpin,
+    {
+        type Item = Result<Bytes, std::io::Error>;
+
+        fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+            match Pin::new(&mut self.inner).poll_next(cx) {
+                Poll::Ready(Some(Ok(chunk))) => {
+                    self.bytes_uploaded += chunk.len() as u64;
+                    self.progress.set_position(self.bytes_uploaded);
+                    Poll::Ready(Some(Ok(chunk)))
+                }
+                other => other,
+            }
+        }
+    }
+
+    let wrapped_stream = ProgressStream {
+        inner: InnerReaderStream::with_capacity(f, 64 * 1024),
+        progress: progress.clone(),
+        bytes_uploaded: 0,
+    };
+
+    let body = Body::wrap_stream(wrapped_stream);
+
+    progress.set_message("Uploading (priority)...");
+    let mut request = client
+        .post(full_url)
+        .header("Content-Length", file_size)
+        .header("Content-Type", "application/octet-stream");
+
+    // Add JWT auth header if available
+    if let Some(ref auth_tokens) = creds.auth_tokens {
+        request = request.header(
+            "Authorization",
+            format!("Bearer {}", auth_tokens.access_token),
+        );
+    }
+
+    let resp = request.body(body).send().await?;
+
+    let status = resp.status();
+    let text_body = resp.text().await?;
+    if status.is_success() {
+        if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(&text_body) {
+            if let Some(st) = json_val.get("status") {
+                if st == "uploading" {
+                    // Means the server accepted the file for a background upload
+                    progress.finish_with_message("Background upload started by server");
+                    println!("Server response: {}", text_body);
+                    return Ok(file_name_in_bucket.to_string());
+                }
+            }
+        }
+        progress.finish_with_message("Priority upload finished successfully");
+        println!("Server says: {}", text_body);
+        Ok(file_name_in_bucket.to_string())
+    } else {
+        progress.finish_and_clear();
+        Err(anyhow!(
+            "Priority upload of '{}' failed. Status={}, Body={}",
+            file_path.display(),
+            status,
+            text_body
+        ))
+    }
+}
+
 /// Priority-download a file as a base64 string, then decode it.
+#[allow(dead_code)]
 async fn priority_download_single_file(
     client: &Client,
     base_url: &str,
@@ -755,12 +1517,19 @@ async fn priority_download_single_file(
     user_app_key: &str,
     file_name_in_bucket: &str,
 ) -> Result<Vec<u8>> {
+    // Build URL without credentials (security fix)
     let url = format!(
-        "{}/priorityDownload?user_id={}&user_app_key={}&file_name={}",
-        base_url, user_id, user_app_key, file_name_in_bucket
+        "{}/priorityDownload?file_name={}",
+        base_url, file_name_in_bucket
     );
 
-    let resp = client.get(&url).send().await?;
+    // Add legacy auth headers
+    let resp = client
+        .get(&url)
+        .header("X-User-Id", user_id)
+        .header("X-User-App-Key", user_app_key)
+        .send()
+        .await?;
     let status = resp.status();
     let text_body = resp.text().await?;
     if status.is_success() {
@@ -778,10 +1547,563 @@ async fn priority_download_single_file(
     }
 }
 
+/// Priority-download a file with JWT authentication support
+async fn priority_download_single_file_with_auth(
+    client: &Client,
+    base_url: &str,
+    creds: &SavedCredentials,
+    file_name_in_bucket: &str,
+) -> Result<Vec<u8>> {
+    // Build URL without credentials (security fix)
+    let url = format!(
+        "{}/priorityDownload?file_name={}",
+        base_url, file_name_in_bucket
+    );
+
+    let mut request = client.get(&url);
+
+    // Add appropriate auth headers
+    if let Some(ref auth_tokens) = creds.auth_tokens {
+        // JWT authentication
+        request = request.header(
+            "Authorization",
+            format!("Bearer {}", auth_tokens.access_token),
+        );
+    } else {
+        // Legacy authentication via headers (NOT URL params for security)
+        request = request
+            .header("X-User-Id", &creds.user_id)
+            .header("X-User-App-Key", &creds.user_app_key);
+    }
+
+    let resp = request.send().await?;
+    let status = resp.status();
+    let text_body = resp.text().await?;
+    if status.is_success() {
+        let decoded = general_purpose::STANDARD
+            .decode(&text_body)
+            .map_err(|e| anyhow!("Base64 decode error: {}", e))?;
+        Ok(decoded)
+    } else {
+        Err(anyhow!(
+            "Priority download of '{}' failed. Status={}, Body={}",
+            file_name_in_bucket,
+            status,
+            text_body
+        ))
+    }
+}
+
+// New struct to track directory upload progress
+#[derive(Clone)]
+struct DirectoryUploadProgress {
+    uploaded_bytes: Arc<TokioMutex<u64>>,
+    progress_bar: Arc<ProgressBar>,
+}
+
+// Helper function to handle file download with optional decryption
+async fn download_file_with_decryption(
+    client: &Client,
+    base_url: &str,
+    creds: &SavedCredentials,
+    file_name: &str,
+    output_path: &str,
+    decrypt: bool,
+    password: Option<String>,
+) -> Result<()> {
+    let actual_file_name = if decrypt && !file_name.ends_with(".enc") {
+        format!("{}.enc", file_name)
+    } else {
+        file_name.to_string()
+    };
+
+    if decrypt {
+        // Download to temporary file first
+        let temp_path = format!("{}.tmp", output_path);
+        improved_download_file_with_auth(client, base_url, creds, &actual_file_name, &temp_path)
+            .await?;
+
+        // Get password if not provided
+        let password = match password {
+            Some(p) => p,
+            None => rpassword::prompt_password("Enter decryption password: ")?,
+        };
+
+        // Decrypt the file
+        let input_file = std::fs::File::open(&temp_path)?;
+        let output_file = std::fs::File::create(output_path)?;
+
+        println!("Decrypting to {}...", output_path);
+
+        match crate::encryption::decrypt_file_with_password(
+            input_file,
+            output_file,
+            &password,
+            None,
+        )
+        .await
+        {
+            Ok(_) => {
+                // Clean up temporary file
+                let _ = std::fs::remove_file(&temp_path);
+                Ok(())
+            }
+            Err(e) => {
+                // Clean up temporary file
+                let _ = std::fs::remove_file(&temp_path);
+                Err(anyhow!("Decryption failed: {}. Wrong password?", e))
+            }
+        }
+    } else {
+        // Regular download without decryption
+        improved_download_file_with_auth(client, base_url, creds, &actual_file_name, output_path)
+            .await
+    }
+}
+
+// Helper function to handle encrypted file upload
+async fn upload_file_with_encryption(
+    client: &Client,
+    file_path: &Path,
+    full_url: &str,
+    file_name_in_bucket: &str,
+    creds: &SavedCredentials,
+    encrypt: bool,
+    password: Option<String>,
+    shared_progress: Option<DirectoryUploadProgress>,
+) -> Result<(String, f64)> {
+    if encrypt {
+        // Get password if not provided
+        let password = match password {
+            Some(p) => p,
+            None => {
+                let password = rpassword::prompt_password("Enter encryption password: ")?;
+                let confirm = rpassword::prompt_password("Confirm encryption password: ")?;
+                if password != confirm {
+                    return Err(anyhow!("Passwords do not match"));
+                }
+                password
+            }
+        };
+
+        // Create a temporary encrypted file
+        let temp_path = file_path.with_extension("enc.tmp");
+
+        // Encrypt the file
+        let input_file = std::fs::File::open(file_path)?;
+        let output_file = std::fs::File::create(&temp_path)?;
+
+        println!("Encrypting {}...", file_path.display());
+
+        crate::encryption::encrypt_file_with_password(input_file, output_file, &password, None)
+            .await?;
+
+        // Upload the encrypted file
+        let remote_name = format!("{}.enc", file_name_in_bucket);
+        let result = upload_file_with_shared_progress(
+            client,
+            &temp_path,
+            &full_url.replace(file_name_in_bucket, &remote_name),
+            &remote_name,
+            creds,
+            shared_progress,
+        )
+        .await;
+
+        // Clean up temporary file
+        let _ = std::fs::remove_file(&temp_path);
+
+        result
+    } else {
+        // Regular upload without encryption
+        upload_file_with_shared_progress(
+            client,
+            file_path,
+            full_url,
+            file_name_in_bucket,
+            creds,
+            shared_progress,
+        )
+        .await
+    }
+}
+
+// Upload file with shared progress bar for directory uploads
+async fn upload_file_with_shared_progress(
+    client: &Client,
+    file_path: &Path,
+    full_url: &str,
+    file_name_in_bucket: &str,
+    creds: &SavedCredentials,
+    shared_progress: Option<DirectoryUploadProgress>,
+) -> Result<(String, f64)> {
+    let f = TokioFile::open(file_path)
+        .await
+        .map_err(|e| anyhow!("Failed to open local file: {}", e))?;
+    let meta = f.metadata().await?;
+    let file_size = meta.len();
+
+    // Use individual progress bar if no shared progress provided
+    let (progress, is_shared) = match shared_progress {
+        Some(ref sp) => (sp.progress_bar.clone(), true),
+        None => {
+            let pb = ProgressBar::new(file_size);
+            pb.set_style(
+                ProgressStyle::default_bar()
+                    .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta})")
+                    .unwrap()
+                    .progress_chars("#>-"),
+            );
+            (Arc::new(pb), false)
+        }
+    };
+
+    // Progress tracking stream
+    use futures_util::Stream;
+    use std::{
+        pin::Pin,
+        task::{Context, Poll},
+    };
+    use tokio_util::io::ReaderStream as InnerReaderStream;
+
+    struct ProgressStream<S> {
+        inner: S,
+        progress: Arc<ProgressBar>,
+        bytes_uploaded: u64,
+        shared_progress: Option<DirectoryUploadProgress>,
+    }
+
+    impl<S> Stream for ProgressStream<S>
+    where
+        S: Stream<Item = Result<Bytes, std::io::Error>> + Unpin,
+    {
+        type Item = Result<Bytes, std::io::Error>;
+
+        fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+            match Pin::new(&mut self.inner).poll_next(cx) {
+                Poll::Ready(Some(Ok(chunk))) => {
+                    let chunk_size = chunk.len() as u64;
+                    self.bytes_uploaded += chunk_size;
+
+                    if let Some(ref sp) = self.shared_progress {
+                        // Update shared progress using try_lock to avoid blocking
+                        if let Ok(mut uploaded) = sp.uploaded_bytes.try_lock() {
+                            *uploaded += chunk_size;
+                            self.progress.set_position(*uploaded);
+                        }
+                    } else {
+                        // Update individual progress
+                        self.progress.set_position(self.bytes_uploaded);
+                    }
+
+                    Poll::Ready(Some(Ok(chunk)))
+                }
+                other => other,
+            }
+        }
+    }
+
+    let wrapped_stream = ProgressStream {
+        inner: InnerReaderStream::with_capacity(f, 64 * 1024),
+        progress: progress.clone(),
+        bytes_uploaded: 0,
+        shared_progress: shared_progress.clone(),
+    };
+
+    let body = Body::wrap_stream(wrapped_stream);
+
+    if !is_shared {
+        progress.set_message("Uploading...");
+    }
+
+    let mut request = client
+        .post(full_url)
+        .header("Content-Length", file_size)
+        .header("Content-Type", "application/octet-stream");
+
+    // Add appropriate auth headers
+    if let Some(ref auth_tokens) = creds.auth_tokens {
+        // JWT authentication
+        request = request.header(
+            "Authorization",
+            format!("Bearer {}", auth_tokens.access_token),
+        );
+    } else {
+        // Legacy authentication via headers (NOT URL params for security)
+        request = request
+            .header("X-User-Id", &creds.user_id)
+            .header("X-User-App-Key", &creds.user_app_key);
+    }
+
+    let resp = request.body(body).send().await?;
+
+    let status = resp.status();
+
+    // Extract token cost from headers
+    let tokens_charged = resp
+        .headers()
+        .get("X-Tokens-Charged")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|s| s.parse::<f64>().ok())
+        .unwrap_or(0.0);
+
+    let text_body = resp.text().await?;
+    if status.is_success() {
+        if !is_shared {
+            progress.finish_with_message("Upload completed successfully");
+            println!("Server response: {}", text_body);
+            if tokens_charged > 0.0 {
+                println!("💰 Cost: {} PIPE tokens", tokens_charged);
+            }
+        }
+        Ok((file_name_in_bucket.to_string(), tokens_charged))
+    } else {
+        if !is_shared {
+            progress.finish_and_clear();
+        }
+
+        // Check for insufficient tokens error
+        if status == 402 {
+            // Try to parse JSON response for detailed error
+            if let Ok(error_data) = serde_json::from_str::<serde_json::Value>(&text_body) {
+                if let Some(message) = error_data.get("message").and_then(|m| m.as_str()) {
+                    eprintln!("\n❌ Upload failed: Insufficient tokens");
+                    eprintln!("{}", message);
+                    if let Some(required) = error_data.get("required").and_then(|r| r.as_f64()) {
+                        if let Some(current) = error_data.get("current").and_then(|c| c.as_f64()) {
+                            eprintln!("\n💰 Token balance:");
+                            eprintln!("   Required: {} PIPE tokens", required);
+                            eprintln!("   Current:  {} PIPE tokens", current);
+                            eprintln!("   Needed:   {} PIPE tokens", required - current);
+                        }
+                    }
+                    return Err(anyhow!("Upload failed: {}", message));
+                }
+            }
+            return Err(anyhow!("Upload failed: Insufficient tokens. Please use 'pipe swap-sol-for-pipe' to get more tokens."));
+        }
+
+        Err(anyhow!(
+            "Upload of '{}' failed. Status={}, Body={}",
+            file_path.display(),
+            status,
+            text_body
+        ))
+    }
+}
+
+// Priority upload file with shared progress bar for directory uploads
+async fn upload_file_priority_with_shared_progress(
+    client: &Client,
+    file_path: &Path,
+    full_url: &str,
+    file_name_in_bucket: &str,
+    creds: &SavedCredentials,
+    shared_progress: Option<DirectoryUploadProgress>,
+) -> Result<(String, f64)> {
+    let f = TokioFile::open(file_path)
+        .await
+        .map_err(|e| anyhow!("Failed to open local file: {}", e))?;
+    let meta = f.metadata().await?;
+    let file_size = meta.len();
+
+    // Use individual progress bar if no shared progress provided
+    let (progress, is_shared) = match shared_progress {
+        Some(ref sp) => (sp.progress_bar.clone(), true),
+        None => {
+            let pb = ProgressBar::new(file_size);
+            pb.set_style(
+                ProgressStyle::default_bar()
+                    .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta})")
+                    .unwrap()
+                    .progress_chars("#>-"),
+            );
+            (Arc::new(pb), false)
+        }
+    };
+
+    // Progress tracking stream
+    use futures_util::Stream;
+    use std::{
+        pin::Pin,
+        task::{Context, Poll},
+    };
+    use tokio_util::io::ReaderStream as InnerReaderStream;
+
+    struct ProgressStream<S> {
+        inner: S,
+        progress: Arc<ProgressBar>,
+        bytes_uploaded: u64,
+        shared_progress: Option<DirectoryUploadProgress>,
+    }
+
+    impl<S> Stream for ProgressStream<S>
+    where
+        S: Stream<Item = Result<Bytes, std::io::Error>> + Unpin,
+    {
+        type Item = Result<Bytes, std::io::Error>;
+
+        fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+            match Pin::new(&mut self.inner).poll_next(cx) {
+                Poll::Ready(Some(Ok(chunk))) => {
+                    let chunk_size = chunk.len() as u64;
+                    self.bytes_uploaded += chunk_size;
+
+                    if let Some(ref sp) = self.shared_progress {
+                        // Update shared progress using try_lock to avoid blocking
+                        if let Ok(mut uploaded) = sp.uploaded_bytes.try_lock() {
+                            *uploaded += chunk_size;
+                            self.progress.set_position(*uploaded);
+                        }
+                    } else {
+                        // Update individual progress
+                        self.progress.set_position(self.bytes_uploaded);
+                    }
+
+                    Poll::Ready(Some(Ok(chunk)))
+                }
+                other => other,
+            }
+        }
+    }
+
+    let wrapped_stream = ProgressStream {
+        inner: InnerReaderStream::with_capacity(f, 64 * 1024),
+        progress: progress.clone(),
+        bytes_uploaded: 0,
+        shared_progress: shared_progress.clone(),
+    };
+
+    let body = Body::wrap_stream(wrapped_stream);
+
+    if !is_shared {
+        progress.set_message("Uploading (priority)...");
+    }
+
+    let mut request = client
+        .post(full_url)
+        .header("Content-Length", file_size)
+        .header("Content-Type", "application/octet-stream");
+
+    // Add appropriate auth headers
+    if let Some(ref auth_tokens) = creds.auth_tokens {
+        // JWT authentication
+        request = request.header(
+            "Authorization",
+            format!("Bearer {}", auth_tokens.access_token),
+        );
+    } else {
+        // Legacy authentication via headers (NOT URL params for security)
+        request = request
+            .header("X-User-Id", &creds.user_id)
+            .header("X-User-App-Key", &creds.user_app_key);
+    }
+
+    let resp = request.body(body).send().await?;
+
+    let status = resp.status();
+
+    // Extract token cost from headers
+    let tokens_charged = resp
+        .headers()
+        .get("X-Tokens-Charged")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|s| s.parse::<f64>().ok())
+        .unwrap_or(0.0);
+
+    let priority_fee = resp
+        .headers()
+        .get("X-Priority-Fee-Per-GB")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|s| s.parse::<f64>().ok())
+        .unwrap_or(0.0);
+
+    let text_body = resp.text().await?;
+    if status.is_success() {
+        if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(&text_body) {
+            if let Some(st) = json_val.get("status") {
+                if st == "uploading" {
+                    // Means the server accepted the file for a background upload
+                    if !is_shared {
+                        progress.finish_with_message("Background upload started by server");
+                        println!("Server response: {}", text_body);
+                        if tokens_charged > 0.0 {
+                            println!(
+                                "💰 Cost: {} PIPE tokens (priority rate: {} tokens/GB)",
+                                tokens_charged, priority_fee
+                            );
+                        }
+                    }
+                    return Ok((file_name_in_bucket.to_string(), tokens_charged));
+                }
+            }
+        }
+        if !is_shared {
+            progress.finish_with_message("Priority upload finished successfully");
+            println!("Server says: {}", text_body);
+            if tokens_charged > 0.0 {
+                println!(
+                    "💰 Cost: {} PIPE tokens (priority rate: {} tokens/GB)",
+                    tokens_charged, priority_fee
+                );
+            }
+        }
+        Ok((file_name_in_bucket.to_string(), tokens_charged))
+    } else {
+        if !is_shared {
+            progress.finish_and_clear();
+        }
+
+        // Check for insufficient tokens error
+        if status == 402 {
+            // Try to parse JSON response for detailed error
+            if let Ok(error_data) = serde_json::from_str::<serde_json::Value>(&text_body) {
+                if let Some(message) = error_data.get("message").and_then(|m| m.as_str()) {
+                    eprintln!("\n❌ Priority upload failed: Insufficient tokens");
+                    eprintln!("{}", message);
+                    if let Some(required) = error_data.get("required").and_then(|r| r.as_f64()) {
+                        if let Some(current) = error_data.get("current").and_then(|c| c.as_f64()) {
+                            eprintln!("\n💰 Token balance:");
+                            eprintln!("   Required: {} PIPE tokens", required);
+                            eprintln!("   Current:  {} PIPE tokens", current);
+                            eprintln!("   Needed:   {} PIPE tokens", required - current);
+                        }
+                    }
+                    if let Some(priority_fee) = error_data
+                        .get("priority_fee_per_gb")
+                        .and_then(|p| p.as_f64())
+                    {
+                        eprintln!("\n📈 Priority upload rate: {} tokens/GB", priority_fee);
+                    }
+                    return Err(anyhow!("Priority upload failed: {}", message));
+                }
+            }
+            return Err(anyhow!("Priority upload failed: Insufficient tokens. Please use 'pipe swap-sol-for-pipe' to get more tokens."));
+        }
+
+        Err(anyhow!(
+            "Priority upload of '{}' failed. Status={}, Body={}",
+            file_path.display(),
+            status,
+            text_body
+        ))
+    }
+}
+
 pub async fn run_cli() -> Result<()> {
     let cli = Cli::parse();
-    let client = Client::new();
+
+    // Create optimized HTTP client for high concurrency
+    let client = Client::builder()
+        .pool_max_idle_per_host(100) // Keep more connections alive
+        .pool_idle_timeout(std::time::Duration::from_secs(90)) // Keep connections alive longer
+        .timeout(std::time::Duration::from_secs(1800)) // 30 minute timeout for large files
+        .build()?;
+
     let base_url = cli.api.trim_end_matches('/');
+
+    // Initialize service discovery cache
+    let service_cache = Arc::new(ServiceDiscoveryCache::new(base_url.to_string()));
 
     // Only check version for certain commands
     let should_check_version = matches!(
@@ -791,17 +2113,19 @@ pub async fn run_cli() -> Result<()> {
             | Commands::UploadFile { .. }
             | Commands::DownloadFile { .. }
             | Commands::DeleteFile { .. }
+            | Commands::FileInfo { .. }
             | Commands::CheckSol { .. }
             | Commands::CheckToken { .. }
             | Commands::SwapSolForPipe { .. }
-            | Commands::SwapPipeForDc { .. }
             | Commands::WithdrawSol { .. }
             | Commands::WithdrawCustomToken { .. }
             | Commands::CreatePublicLink { .. }
+            | Commands::DeletePublicLink { .. }
             | Commands::PublicDownload { .. }
             | Commands::UploadDirectory { .. }
             | Commands::PriorityUploadDirectory { .. }
             | Commands::GetPriorityFee
+            | Commands::GetTierPricing
             | Commands::PriorityUpload { .. }
             | Commands::PriorityDownload { .. }
             | Commands::ListUploads
@@ -819,7 +2143,9 @@ pub async fn run_cli() -> Result<()> {
 
     match cli.command {
         Commands::NewUser { username } => {
-            let req_body = CreateUserRequest { username };
+            let req_body = CreateUserRequest {
+                username: username.clone(),
+            };
             let resp = client
                 .post(format!("{}/users", base_url))
                 .json(&req_body)
@@ -831,15 +2157,371 @@ pub async fn run_cli() -> Result<()> {
 
             if status.is_success() {
                 let json = serde_json::from_str::<CreateUserResponse>(&text_body)?;
+                println!("Creating new user...");
                 println!(
                     "User created!\nUser ID: {}\nApp Key: {}\nSolana Pubkey: {}",
                     json.user_id, json.user_app_key, json.solana_pubkey
                 );
 
+                // Save basic credentials first
                 save_credentials_to_file(&json.user_id, &json.user_app_key)?;
+
+                // Prompt for optional password
+                println!("\nSet a password for secure access (or press Enter to skip):");
+                println!("Note: Password is optional. You can use pipe without it.");
+
+                let password = rpassword::prompt_password("Password: ").unwrap_or_default();
+
+                if !password.is_empty() {
+                    // User wants to set a password
+                    println!("Setting password...");
+
+                    let set_password_req = SetPasswordRequest {
+                        user_id: json.user_id.clone(),
+                        user_app_key: json.user_app_key.clone(),
+                        new_password: password,
+                    };
+
+                    let resp = client
+                        .post(format!("{}/auth/set-password", base_url))
+                        .json(&set_password_req)
+                        .send()
+                        .await?;
+
+                    let status = resp.status();
+                    let text_body = resp.text().await?;
+
+                    if status.is_success() {
+                        // The set-password endpoint returns JWT tokens
+                        if let Ok(response_data) =
+                            serde_json::from_str::<serde_json::Value>(&text_body)
+                        {
+                            // Create AuthTokens from the response
+                            let auth_tokens = AuthTokens {
+                                access_token: response_data
+                                    .get("access_token")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                                refresh_token: response_data
+                                    .get("refresh_token")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                                token_type: response_data
+                                    .get("token_type")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("Bearer")
+                                    .to_string(),
+                                expires_in: response_data
+                                    .get("expires_in")
+                                    .and_then(|v| v.as_i64())
+                                    .unwrap_or(900),
+                                expires_at: None, // Will be set below
+                                csrf_token: None, // Will be populated on first state-changing request
+                            };
+
+                            // Calculate expires_at timestamp
+                            let now =
+                                SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
+                            let expires_at =
+                                DateTime::<Utc>::from_timestamp(now + auth_tokens.expires_in, 0)
+                                    .ok_or_else(|| anyhow!("Invalid expiration timestamp"))?;
+
+                            let mut auth_tokens = auth_tokens;
+                            auth_tokens.expires_at = Some(expires_at);
+
+                            // Save full credentials with JWT tokens
+                            let creds = SavedCredentials {
+                                user_id: json.user_id.clone(),
+                                user_app_key: json.user_app_key.clone(),
+                                auth_tokens: Some(auth_tokens),
+                                username: Some(username.clone()),
+                            };
+                            save_full_credentials(&creds)?;
+
+                            println!("\n✓ Password set successfully!");
+                            println!("✓ You are now logged in with secure JWT authentication!");
+                            println!("✓ Credentials saved to {:?}", get_credentials_file_path());
+                            println!("\nYou can now use all pipe commands securely!");
+                        } else {
+                            println!("\n✓ Password set successfully!");
+                            println!("✓ Account created!");
+                            println!("✓ Credentials saved to {:?}", get_credentials_file_path());
+                            println!("\nNote: You may need to login to get JWT tokens.");
+                        }
+                    } else {
+                        eprintln!(
+                            "\nWarning: Failed to set password. You can try again later with:"
+                        );
+                        eprintln!("  ./pipe set-password");
+                        eprintln!("\n✓ Account created successfully!");
+                        eprintln!("✓ Credentials saved to {:?}", get_credentials_file_path());
+                        eprintln!("\nYou can use all pipe commands with your app key.");
+                    }
+                } else {
+                    // User skipped password
+                    println!("\n✓ Account created successfully!");
+                    println!("✓ Credentials saved to {:?}", get_credentials_file_path());
+                    println!("\nYou can now use all pipe commands!");
+                    println!(
+                        "\nNote: Password-based login is optional. Set a password later with:"
+                    );
+                    println!("  ./pipe set-password");
+                }
             } else {
                 return Err(anyhow!(
                     "Failed to create user. Status = {}, Body = {}",
+                    status,
+                    text_body
+                ));
+            }
+        }
+
+        Commands::Login { username, password } => {
+            let password =
+                password.unwrap_or_else(|| rpassword::prompt_password("Enter password: ").unwrap());
+
+            let req_body = LoginRequest {
+                username: username.clone(),
+                password,
+            };
+
+            let resp = client
+                .post(format!("{}/auth/login", base_url))
+                .json(&req_body)
+                .send()
+                .await?;
+
+            let status = resp.status();
+            let headers = resp.headers().clone();
+            let text_body = resp.text().await?;
+
+            if status.is_success() {
+                let mut auth_tokens: AuthTokens = serde_json::from_str(&text_body)?;
+
+                // Calculate expires_at timestamp
+                let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
+                let expires_at = DateTime::<Utc>::from_timestamp(now + auth_tokens.expires_in, 0)
+                    .ok_or_else(|| anyhow!("Invalid expiration timestamp"))?;
+                auth_tokens.expires_at = Some(expires_at);
+
+                println!("Login successful!");
+                println!("Username: {}", username);
+                println!(
+                    "Token expires at: {}",
+                    expires_at.format("%Y-%m-%d %H:%M:%S UTC")
+                );
+
+                // Try to load existing credentials to get user_id/user_app_key
+                // If not found, we'll need to find another way to get these
+                if let Ok(Some(existing_creds)) = load_credentials_from_file() {
+                    let creds = SavedCredentials {
+                        user_id: existing_creds.user_id,
+                        user_app_key: existing_creds.user_app_key,
+                        auth_tokens: Some(auth_tokens),
+                        username: Some(username),
+                    };
+                    save_full_credentials(&creds)?;
+                } else {
+                    println!("Note: You'll need to have existing legacy credentials to use JWT auth with this user.");
+                    println!("Please make sure you have a valid ~/.pipe-cli.json file with user_id and user_app_key.");
+                }
+            } else if status == StatusCode::TOO_MANY_REQUESTS {
+                // Handle rate limiting
+                let retry_after = headers
+                    .get("Retry-After")
+                    .and_then(|h| h.to_str().ok())
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .unwrap_or(60);
+
+                return Err(anyhow!(
+                    "Too many login attempts. Please try again in {} seconds.",
+                    retry_after
+                ));
+            } else if status == StatusCode::FORBIDDEN && text_body.contains("locked") {
+                return Err(anyhow!(
+                    "Account is locked due to too many failed login attempts. Please contact support."
+                ));
+            } else {
+                return Err(anyhow!(
+                    "Login failed. Status = {}, Body = {}",
+                    status,
+                    text_body
+                ));
+            }
+        }
+
+        Commands::Logout => {
+            let creds = load_credentials_from_file()?
+                .ok_or_else(|| anyhow!("No credentials found. Please login first."))?;
+
+            let access_token = creds
+                .auth_tokens
+                .as_ref()
+                .ok_or_else(|| anyhow!("No authentication tokens found. Please login first."))?
+                .access_token
+                .clone();
+
+            let resp = client
+                .post(format!("{}/auth/logout", base_url))
+                .header("Authorization", format!("Bearer {}", access_token))
+                .send()
+                .await?;
+
+            let status = resp.status();
+            let text_body = resp.text().await?;
+
+            if status.is_success() {
+                println!("Logout successful!");
+                let mut updated_creds = creds.clone();
+                updated_creds.auth_tokens = None;
+                save_full_credentials(&updated_creds)?;
+            } else {
+                return Err(anyhow!(
+                    "Logout failed. Status = {}, Body = {}",
+                    status,
+                    text_body
+                ));
+            }
+        }
+
+        Commands::SetPassword {
+            password,
+            user_id,
+            user_app_key,
+        } => {
+            let (user_id_final, user_app_key_final) =
+                get_final_user_id_and_app_key(user_id, user_app_key)?;
+
+            let new_password = password.unwrap_or_else(|| {
+                println!("Password requirements:");
+                println!("  - Minimum 8 characters");
+                println!("  - Maximum 128 characters");
+                println!("  - Cannot be a common weak password (e.g., 'password', '12345678', 'password123', etc.)");
+                println!();
+                rpassword::prompt_password("Enter new password: ").unwrap()
+            });
+
+            let req_body = SetPasswordRequest {
+                user_id: user_id_final.clone(),
+                user_app_key: user_app_key_final.clone(),
+                new_password,
+            };
+
+            let resp = client
+                .post(format!("{}/auth/set-password", base_url))
+                .json(&req_body)
+                .send()
+                .await?;
+
+            let status = resp.status();
+            let text_body = resp.text().await?;
+
+            if status.is_success() {
+                let response_data: serde_json::Value = serde_json::from_str(&text_body)?;
+                println!("Password set successfully!");
+
+                // If we got tokens in the response, save them
+                if let Ok(auth_tokens) = serde_json::from_value::<AuthTokens>(response_data.clone())
+                {
+                    let mut auth_tokens = auth_tokens;
+                    // Calculate expires_at timestamp
+                    let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
+                    let expires_at =
+                        DateTime::<Utc>::from_timestamp(now + auth_tokens.expires_in, 0)
+                            .ok_or_else(|| anyhow!("Invalid expiration timestamp"))?;
+                    auth_tokens.expires_at = Some(expires_at);
+
+                    let creds = SavedCredentials {
+                        user_id: user_id_final,
+                        user_app_key: user_app_key_final,
+                        auth_tokens: Some(auth_tokens),
+                        username: None,
+                    };
+                    save_full_credentials(&creds)?;
+
+                    println!("You are now logged in with JWT authentication.");
+                    println!(
+                        "Token expires at: {}",
+                        expires_at.format("%Y-%m-%d %H:%M:%S UTC")
+                    );
+                } else {
+                    // Just update the existing credentials
+                    if let Ok(Some(mut creds)) = load_credentials_from_file() {
+                        creds.auth_tokens = None;
+                        save_full_credentials(&creds)?;
+                    }
+                }
+            } else {
+                // Try to provide more helpful error message
+                let error_message = if text_body.contains("too weak")
+                    || text_body.contains("Password")
+                {
+                    format!(
+                        "Set password failed: {}\n\nPassword requirements:\n  - Minimum 8 characters\n  - Maximum 128 characters\n  - Cannot be common weak passwords like:\n    'password', '12345678', 'qwerty', 'abc123', 'password123',\n    'admin', 'letmein', 'welcome', '123456789', 'password1'",
+                        text_body
+                    )
+                } else {
+                    format!(
+                        "Set password failed. Status = {}, Body = {}",
+                        status, text_body
+                    )
+                };
+                return Err(anyhow!(error_message));
+            }
+        }
+
+        Commands::RefreshToken => {
+            let creds = load_credentials_from_file()?
+                .ok_or_else(|| anyhow!("No credentials found. Please login first."))?;
+
+            let refresh_token = creds
+                .auth_tokens
+                .as_ref()
+                .ok_or_else(|| anyhow!("No refresh token found in credentials."))?
+                .refresh_token
+                .clone();
+
+            let req_body = RefreshTokenRequest {
+                refresh_token: refresh_token.clone(),
+            };
+
+            let resp = client
+                .post(format!("{}/auth/refresh", base_url))
+                .json(&req_body)
+                .send()
+                .await?;
+
+            let status = resp.status();
+            let text_body = resp.text().await?;
+
+            if status.is_success() {
+                let refresh_response: RefreshTokenResponse = serde_json::from_str(&text_body)?;
+
+                // Calculate new expires_at timestamp
+                let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
+                let expires_at =
+                    DateTime::<Utc>::from_timestamp(now + refresh_response.expires_in, 0)
+                        .ok_or_else(|| anyhow!("Invalid expiration timestamp"))?;
+
+                println!("Token refreshed successfully!");
+                println!(
+                    "Token expires at: {}",
+                    expires_at.format("%Y-%m-%d %H:%M:%S UTC")
+                );
+
+                // Update credentials with new access token
+                let mut updated_creds = creds.clone();
+                if let Some(ref mut auth_tokens) = updated_creds.auth_tokens {
+                    auth_tokens.access_token = refresh_response.access_token;
+                    auth_tokens.expires_in = refresh_response.expires_in;
+                    auth_tokens.expires_at = Some(expires_at);
+                }
+                save_full_credentials(&updated_creds)?;
+            } else {
+                return Err(anyhow!(
+                    "Refresh token failed. Status = {}, Body = {}",
                     status,
                     text_body
                 ));
@@ -850,33 +2532,55 @@ pub async fn run_cli() -> Result<()> {
             user_id,
             old_app_key,
         } => {
-            let (user_id_final, old_app_key_final) =
-                get_final_user_id_and_app_key(user_id, old_app_key)?;
+            // Load credentials and check for JWT
+            let mut creds = load_credentials_from_file()?.ok_or_else(|| {
+                anyhow!("No credentials found. Please create a user or login first.")
+            })?;
 
-            let req_body = RotateAppKeyRequest {
-                user_id: user_id_final.clone(),
-                user_app_key: old_app_key_final.clone(),
-            };
+            // Ensure we have valid JWT token if available
+            ensure_valid_token(&client, base_url, &mut creds).await?;
 
-            let resp = client
-                .post(format!("{}/rotateAppKey", base_url))
-                .json(&req_body)
-                .send()
-                .await?;
+            // Override with command-line args if provided (only for legacy auth)
+            if let Some(uid) = user_id {
+                creds.user_id = uid;
+            }
+            if let Some(key) = old_app_key {
+                creds.user_app_key = key;
+            }
 
+            let mut request = client.post(format!("{}/rotateAppKey", base_url));
+
+            // Use add_auth_headers for consistent authentication
+            request = add_auth_headers(request, &creds, true);
+
+            // For JWT auth, send empty body. For legacy auth, credentials are already in headers
+            if creds.auth_tokens.is_some() {
+                let req_body = serde_json::json!({});
+                request = request.json(&req_body);
+            } else {
+                // For legacy auth, we still need to send credentials in body for this endpoint
+                let req_body = RotateAppKeyRequest {
+                    user_id: creds.user_id.clone(),
+                    user_app_key: creds.user_app_key.clone(),
+                };
+                request = request.json(&req_body);
+            }
+
+            let resp = request.send().await?;
             let status = resp.status();
             let text_body = resp.text().await?;
+
             if status.is_success() {
                 let json = serde_json::from_str::<RotateAppKeyResponse>(&text_body)?;
                 println!(
-                    "App key rotated!\nUser ID: {}\nNEW APP KEY: {}",
+                    "App key rotated!\nUser ID: {}\nNew App Key: {}",
                     json.user_id, json.new_user_app_key
                 );
 
                 save_credentials_to_file(&json.user_id, &json.new_user_app_key)?;
             } else {
                 return Err(anyhow!(
-                    "Rotate app key failed. Status = {}, Body = {}",
+                    "Failed to rotate app key. Status = {}, Body = {}",
                     status,
                     text_body
                 ));
@@ -889,9 +2593,27 @@ pub async fn run_cli() -> Result<()> {
             file_path,
             file_name,
             epochs,
+            tier,
+            encrypt,
+            password,
+            key: _,
+            quantum: _,
         } => {
-            let (user_id_final, user_app_key_final) =
-                get_final_user_id_and_app_key(user_id, user_app_key)?;
+            // Load credentials and check for JWT
+            let mut creds = load_credentials_from_file()?.ok_or_else(|| {
+                anyhow!("No credentials found. Please create a user or login first.")
+            })?;
+
+            // Ensure we have valid JWT token if available
+            ensure_valid_token(&client, base_url, &mut creds).await?;
+
+            // Override with command-line args if provided
+            if let Some(uid) = user_id {
+                creds.user_id = uid;
+            }
+            if let Some(key) = user_app_key {
+                creds.user_app_key = key;
+            }
 
             let local_path = Path::new(&file_path);
             if !local_path.exists() {
@@ -899,19 +2621,64 @@ pub async fn run_cli() -> Result<()> {
             }
 
             let epochs_final = epochs.unwrap_or(1); // default 1 month
-            let url_with_epochs = format!(
-                "{}/upload?user_id={}&user_app_key={}&file_name={}&epochs={}",
-                base_url, user_id_final, user_app_key_final, file_name, epochs_final
-            );
 
-            match upload_file(&client, local_path, &url_with_epochs, &file_name).await {
-                Ok(uploaded_filename) => {
+            // Get the best endpoint for this upload
+            let selected_endpoint = get_endpoint_for_operation(
+                &service_cache,
+                &client,
+                base_url,
+                "upload",
+                &creds.user_id,
+                Some(&file_name),
+            )
+            .await;
+
+            // Build URL - with JWT we don't need query params for auth
+            // Build URL without credentials (security fix)
+            // Use priority endpoint for tiers above normal to avoid rate limiting
+            let endpoint = if let Some(ref t) = tier {
+                match t.as_str() {
+                    "normal" => "upload",
+                    _ => "priorityUpload", // All other tiers use priority endpoint
+                }
+            } else {
+                "upload" // Default to normal upload if no tier specified
+            };
+
+            let mut url = format!(
+                "{}/{}?file_name={}&epochs={}",
+                selected_endpoint, endpoint, file_name, epochs_final
+            );
+            if let Some(tier_name) = tier {
+                url = format!("{}&tier={}", url, tier_name);
+            }
+
+            // Use retry wrapper for single file upload
+            let upload_result = upload_with_retry(&format!("upload of {}", file_path), || {
+                upload_file_with_encryption(
+                    &client,
+                    local_path,
+                    &url,
+                    &file_name,
+                    &creds,
+                    encrypt,
+                    password.clone(),
+                    None,
+                )
+            })
+            .await;
+
+            match upload_result {
+                Ok((uploaded_filename, token_cost)) => {
                     println!("File uploaded successfully: {}", uploaded_filename);
+                    if token_cost > 0.0 {
+                        println!("💰 Cost: {} PIPE tokens", token_cost);
+                    }
                     append_to_upload_log(
                         &file_path,
                         &uploaded_filename,
                         "SUCCESS",
-                        &format!("Non-priority upload ({} epochs)", epochs_final)
+                        &format!("Non-priority upload ({} epochs)", epochs_final),
                     )?;
                 }
                 Err(e) => {
@@ -920,7 +2687,7 @@ pub async fn run_cli() -> Result<()> {
                         &file_path,
                         &file_name,
                         "FAIL",
-                        &format!("Non-priority upload error: {}", e)
+                        &format!("Non-priority upload error: {}", e),
                     )?;
                     return Err(e);
                 }
@@ -932,17 +2699,45 @@ pub async fn run_cli() -> Result<()> {
             user_app_key,
             file_name,
             output_path,
+            decrypt,
+            password,
+            key: _,
         } => {
-            let (user_id_final, user_app_key_final) =
-                get_final_user_id_and_app_key(user_id, user_app_key)?;
+            // Load credentials and check for JWT
+            let mut creds = load_credentials_from_file()?.ok_or_else(|| {
+                anyhow!("No credentials found. Please create a user or login first.")
+            })?;
 
-            improved_download_file(
+            // Ensure we have valid JWT token if available
+            ensure_valid_token(&client, base_url, &mut creds).await?;
+
+            // Override with command-line args if provided
+            if let Some(uid) = user_id {
+                creds.user_id = uid;
+            }
+            if let Some(key) = user_app_key {
+                creds.user_app_key = key;
+            }
+
+            // Get the best endpoint for this download
+            let selected_endpoint = get_endpoint_for_operation(
+                &service_cache,
                 &client,
                 base_url,
-                &user_id_final,
-                &user_app_key_final,
+                "download",
+                &creds.user_id,
+                Some(&file_name),
+            )
+            .await;
+
+            download_file_with_decryption(
+                &client,
+                &selected_endpoint,
+                &creds,
                 &file_name,
                 &output_path,
+                decrypt,
+                password,
             )
             .await?;
         }
@@ -952,21 +2747,56 @@ pub async fn run_cli() -> Result<()> {
             user_app_key,
             file_name,
         } => {
-            let (user_id_final, user_app_key_final) =
-                get_final_user_id_and_app_key(user_id, user_app_key)?;
+            // Load credentials and check for JWT
+            let mut creds = load_credentials_from_file()?.ok_or_else(|| {
+                anyhow!("No credentials found. Please create a user or login first.")
+            })?;
 
-            let req_body = DeleteFileRequest {
-                user_id: user_id_final,
-                user_app_key: user_app_key_final,
-                file_name: file_name.clone(),
-            };
+            // Ensure we have valid JWT token if available
+            ensure_valid_token(&client, base_url, &mut creds).await?;
 
-            let resp = client
-                .post(format!("{}/deleteFile", base_url))
-                .json(&req_body)
-                .send()
-                .await?;
+            // Override with command-line args if provided (only for legacy auth)
+            if let Some(uid) = user_id {
+                creds.user_id = uid;
+            }
+            if let Some(key) = user_app_key {
+                creds.user_app_key = key;
+            }
 
+            // Get endpoint for delete operation
+            let selected_endpoint = get_endpoint_for_operation(
+                &service_cache,
+                &client,
+                base_url,
+                "delete",
+                &creds.user_id,
+                Some(&file_name),
+            )
+            .await;
+
+            let mut request = client.post(format!("{}/deleteFile", selected_endpoint));
+
+            // Add auth headers including CSRF token for this state-changing operation
+            request = add_auth_headers(request, &creds, true);
+
+            // Use JWT auth if available, otherwise fall back to legacy
+            if let Some(ref _auth_tokens) = creds.auth_tokens {
+                // With JWT, send only file name - server will get user info from token
+                let req_body = serde_json::json!({
+                    "file_name": file_name
+                });
+                request = request.json(&req_body);
+            } else {
+                // Legacy auth via request body
+                let req_body = DeleteFileRequest {
+                    user_id: creds.user_id.clone(),
+                    user_app_key: creds.user_app_key.clone(),
+                    file_name: file_name.clone(),
+                };
+                request = request.json(&req_body);
+            }
+
+            let resp = request.send().await?;
             let status = resp.status();
             let text_body = resp.text().await?;
 
@@ -982,24 +2812,74 @@ pub async fn run_cli() -> Result<()> {
             }
         }
 
+        Commands::FileInfo {
+            user_id: _,
+            user_app_key: _,
+            file_name,
+        } => {
+            println!("📄 File Information for '{}':", file_name);
+
+            // Check if file is encrypted based on extension
+            let is_encrypted = file_name.ends_with(".enc");
+            println!(
+                "   Encrypted: {}",
+                if is_encrypted {
+                    "Yes (AES-256-GCM)"
+                } else {
+                    "No"
+                }
+            );
+
+            if is_encrypted {
+                println!("\n💡 To download and decrypt this file:");
+                println!(
+                    "   pipe download-file {} output.file --decrypt",
+                    file_name.trim_end_matches(".enc")
+                );
+            } else {
+                println!("\n💡 To check if an encrypted version exists:");
+                println!("   pipe file-info {}.enc", file_name);
+            }
+
+            println!(
+                "\nNote: For detailed file metadata (size, upload date, etc.), the file listing"
+            );
+            println!("feature is not yet implemented in pipe-cli.");
+        }
+
         Commands::CheckSol {
             user_id,
             user_app_key,
         } => {
-            let (uid, key) =
-                get_final_user_id_and_app_key(user_id, user_app_key)?;
+            // Load credentials and check for JWT
+            let mut creds = load_credentials_from_file()?.ok_or_else(|| {
+                anyhow!("No credentials found. Please create a user or login first.")
+            })?;
 
+            // Ensure we have valid JWT token if available
+            ensure_valid_token(&client, base_url, &mut creds).await?;
+
+            // Override with command-line args if provided (only for legacy auth)
+            if let Some(uid) = user_id {
+                creds.user_id = uid;
+            }
+            if let Some(key) = user_app_key {
+                creds.user_app_key = key;
+            }
+
+            let mut request = client.post(format!("{}/checkWallet", base_url));
+
+            // Use add_auth_headers for consistent authentication
+            request = add_auth_headers(request, &creds, false);
+
+            // Always send empty body - auth is in headers
             let req_body = CheckWalletRequest {
-                user_id: uid,
-                user_app_key: key,
+                user_id: None,
+                user_app_key: None,
             };
+            request = request.json(&req_body);
 
-            let resp = client
-                .post(format!("{}/checkWallet", base_url))
-                .json(&req_body)
-                .send()
-                .await?;
-
+            let resp = request.send().await?;
             let status = resp.status();
             let text_body = resp.text().await?;
 
@@ -1022,20 +2902,35 @@ pub async fn run_cli() -> Result<()> {
             user_id,
             user_app_key,
         } => {
-            let (uid, key) =
-                get_final_user_id_and_app_key(user_id, user_app_key)?;
+            // Load credentials and check for JWT
+            let mut creds = load_credentials_from_file()?.ok_or_else(|| {
+                anyhow!("No credentials found. Please create a user or login first.")
+            })?;
 
+            // Ensure we have valid JWT token if available
+            ensure_valid_token(&client, base_url, &mut creds).await?;
+
+            // Override with command-line args if provided (only for legacy auth)
+            if let Some(uid) = user_id {
+                creds.user_id = uid;
+            }
+            if let Some(key) = user_app_key {
+                creds.user_app_key = key;
+            }
+
+            let mut request = client.post(format!("{}/checkCustomToken", base_url));
+
+            // Use add_auth_headers for consistent authentication
+            request = add_auth_headers(request, &creds, false);
+
+            // Always send empty body - auth is in headers
             let req_body = CheckCustomTokenRequest {
-                user_id: uid,
-                user_app_key: key,
+                user_id: None,
+                user_app_key: None,
             };
+            request = request.json(&req_body);
 
-            let resp = client
-                .post(format!("{}/checkCustomToken", base_url))
-                .json(&req_body)
-                .send()
-                .await?;
-
+            let resp = request.send().await?;
             let status = resp.status();
             let text_body = resp.text().await?;
 
@@ -1059,20 +2954,36 @@ pub async fn run_cli() -> Result<()> {
             user_app_key,
             amount_sol,
         } => {
-            let (uid, key) =
-                get_final_user_id_and_app_key(user_id, user_app_key)?;
+            // Load credentials and check for JWT
+            let mut creds = load_credentials_from_file()?.ok_or_else(|| {
+                anyhow!("No credentials found. Please create a user or login first.")
+            })?;
 
+            // Ensure we have valid JWT token if available
+            ensure_valid_token(&client, base_url, &mut creds).await?;
+
+            // Override with command-line args if provided (only for legacy auth)
+            if let Some(uid) = user_id {
+                creds.user_id = uid;
+            }
+            if let Some(key) = user_app_key {
+                creds.user_app_key = key;
+            }
+
+            let mut request = client.post(format!("{}/exchangeSolForTokens", base_url));
+
+            // Use add_auth_headers for consistent authentication
+            request = add_auth_headers(request, &creds, true);
+
+            // Always send only amount - auth is in headers
             let req_body = SwapSolForPipeRequest {
-                user_id: uid,
-                user_app_key: key,
+                user_id: None,
+                user_app_key: None,
                 amount_sol,
             };
-            let resp = client
-                .post(format!("{}/exchangeSolForTokens", base_url))
-                .json(&req_body)
-                .send()
-                .await?;
+            request = request.json(&req_body);
 
+            let resp = request.send().await?;
             let status = resp.status();
             let text_body = resp.text().await?;
 
@@ -1091,64 +3002,43 @@ pub async fn run_cli() -> Result<()> {
             }
         }
 
-        Commands::SwapPipeForDc {
-            user_id,
-            user_app_key,
-            pipe_amount,
-        } => {
-            let (uid, key) = get_final_user_id_and_app_key(user_id, user_app_key)?;
-
-            let req_body = SwapPipeForDcRequest {
-                user_id: uid,
-                user_app_key: key,
-                amount_pipe: pipe_amount,
-            };
-
-            let resp = client
-                .post(format!("{}/exchangePipeForDc", base_url))
-                .json(&req_body)
-                .send()
-                .await?;
-
-            let status = resp.status();
-            let text_body = resp.text().await?;
-            if status.is_success() {
-                let data: SwapPipeForDcResponse = serde_json::from_str(&text_body)?;
-                println!(
-                    "Swap PIPE -> DC successful!\nUser: {}\nPIPE burned: {}\nDC minted: {}",
-                    data.user_id, data.pipe_spent, data.dc_minted
-                );
-            } else {
-                return Err(anyhow!(
-                    "SwapPipeForDc failed. status={}, body={}",
-                    status,
-                    text_body
-                ));
-            }
-        }
-
         Commands::WithdrawSol {
             user_id,
             user_app_key,
-            to_pubkey,
             amount_sol,
+            to_pubkey,
         } => {
-            let (uid, key) =
-                get_final_user_id_and_app_key(user_id, user_app_key)?;
+            // Load credentials and check for JWT
+            let mut creds = load_credentials_from_file()?.ok_or_else(|| {
+                anyhow!("No credentials found. Please create a user or login first.")
+            })?;
 
+            // Ensure we have valid JWT token if available
+            ensure_valid_token(&client, base_url, &mut creds).await?;
+
+            // Override with command-line args if provided (only for legacy auth)
+            if let Some(uid) = user_id {
+                creds.user_id = uid;
+            }
+            if let Some(key) = user_app_key {
+                creds.user_app_key = key;
+            }
+
+            let mut request = client.post(format!("{}/withdrawSol", base_url));
+
+            // Use add_auth_headers for consistent authentication
+            request = add_auth_headers(request, &creds, true);
+
+            // Always send withdrawal details only - auth is in headers
             let req_body = WithdrawSolRequest {
-                user_id: uid,
-                user_app_key: key,
-                to_pubkey,
+                user_id: None,
+                user_app_key: None,
                 amount_sol,
+                to_pubkey,
             };
+            request = request.json(&req_body);
 
-            let resp = client
-                .post(format!("{}/withdrawSol", base_url))
-                .json(&req_body)
-                .send()
-                .await?;
-
+            let resp = request.send().await?;
             let status = resp.status();
             let text_body = resp.text().await?;
 
@@ -1170,25 +3060,41 @@ pub async fn run_cli() -> Result<()> {
         Commands::WithdrawCustomToken {
             user_id,
             user_app_key,
-            to_pubkey,
+            token_mint,
             amount,
+            to_pubkey,
         } => {
-            let (uid, key) =
-                get_final_user_id_and_app_key(user_id, user_app_key)?;
+            // Load credentials and check for JWT
+            let mut creds = load_credentials_from_file()?.ok_or_else(|| {
+                anyhow!("No credentials found. Please create a user or login first.")
+            })?;
 
+            // Ensure we have valid JWT token if available
+            ensure_valid_token(&client, base_url, &mut creds).await?;
+
+            // Override with command-line args if provided (only for legacy auth)
+            if let Some(uid) = user_id {
+                creds.user_id = uid;
+            }
+            if let Some(key) = user_app_key {
+                creds.user_app_key = key;
+            }
+
+            let mut request = client.post(format!("{}/withdrawToken", base_url));
+
+            // Use add_auth_headers for consistent authentication
+            request = add_auth_headers(request, &creds, true);
+
+            // Always send withdrawal details only - auth is in headers
             let req_body = WithdrawTokenRequest {
-                user_id: uid,
-                user_app_key: key,
+                user_id: None,
+                user_app_key: None,
                 to_pubkey,
                 amount,
             };
+            request = request.json(&req_body);
 
-            let resp = client
-                .post(format!("{}/withdrawToken", base_url))
-                .json(&req_body)
-                .send()
-                .await?;
-
+            let resp = request.send().await?;
             let status = resp.status();
             let text_body = resp.text().await?;
 
@@ -1198,6 +3104,7 @@ pub async fn run_cli() -> Result<()> {
                     "Token Withdrawal complete!\nUser: {}\nTo: {}\nAmount: {}\nSignature: {}",
                     json.user_id, json.to_pubkey, json.amount, json.signature
                 );
+                println!("Token mint used: {}", token_mint);
             } else {
                 return Err(anyhow!(
                     "Withdraw custom token failed. Status = {}, Body = {}",
@@ -1212,20 +3119,45 @@ pub async fn run_cli() -> Result<()> {
             user_app_key,
             file_name,
         } => {
-            let (uid, key) = get_final_user_id_and_app_key(user_id, user_app_key)?;
+            // Load credentials and check for JWT
+            let mut creds = load_credentials_from_file()?.ok_or_else(|| {
+                anyhow!("No credentials found. Please create a user or login first.")
+            })?;
 
-            let req_body = CreatePublicLinkRequest {
-                user_id: uid,
-                user_app_key: key,
-                file_name,
-            };
+            // Ensure we have valid JWT token if available
+            ensure_valid_token(&client, base_url, &mut creds).await?;
 
-            let resp = client
-                .post(format!("{}/createPublicLink", base_url))
-                .json(&req_body)
-                .send()
-                .await?;
+            // Override with command-line args if provided (only for legacy auth)
+            if let Some(uid) = user_id {
+                creds.user_id = uid;
+            }
+            if let Some(key) = user_app_key {
+                creds.user_app_key = key;
+            }
 
+            let mut request = client.post(format!("{}/createPublicLink", base_url));
+
+            // Add auth headers including CSRF token for this state-changing operation
+            request = add_auth_headers(request, &creds, true);
+
+            // Use JWT auth if available, otherwise fall back to legacy
+            if let Some(ref _auth_tokens) = creds.auth_tokens {
+                // With JWT, send only file name - server will get user info from token
+                let req_body = serde_json::json!({
+                    "file_name": file_name
+                });
+                request = request.json(&req_body);
+            } else {
+                // Legacy auth via request body
+                let req_body = CreatePublicLinkRequest {
+                    user_id: creds.user_id.clone(),
+                    user_app_key: creds.user_app_key.clone(),
+                    file_name,
+                };
+                request = request.json(&req_body);
+            }
+
+            let resp = request.send().await?;
             let status = resp.status();
             let text_body = resp.text().await?;
             if status.is_success() {
@@ -1241,6 +3173,65 @@ pub async fn run_cli() -> Result<()> {
             } else {
                 return Err(anyhow!(
                     "Create public link failed. Status = {}, Body = {}",
+                    status,
+                    text_body
+                ));
+            }
+        }
+
+        Commands::DeletePublicLink {
+            user_id,
+            user_app_key,
+            link_hash,
+        } => {
+            // Load credentials and check for JWT
+            let mut creds = load_credentials_from_file()?.ok_or_else(|| {
+                anyhow!("No credentials found. Please create a user or login first.")
+            })?;
+
+            // Ensure we have valid JWT token if available
+            ensure_valid_token(&client, base_url, &mut creds).await?;
+
+            // Override with command-line args if provided (only for legacy auth)
+            if let Some(uid) = user_id {
+                creds.user_id = uid;
+            }
+            if let Some(key) = user_app_key {
+                creds.user_app_key = key;
+            }
+
+            let mut request = client.post(format!("{}/deletePublicLink", base_url));
+
+            // Add auth headers including CSRF token for this state-changing operation
+            request = add_auth_headers(request, &creds, true);
+
+            // Use JWT auth if available, otherwise fall back to legacy
+            if let Some(ref _auth_tokens) = creds.auth_tokens {
+                // With JWT, send only link hash - server will get user info from token
+                let req_body = serde_json::json!({
+                    "link_hash": link_hash
+                });
+                request = request.json(&req_body);
+            } else {
+                // Legacy auth via request body
+                let req_body = DeletePublicLinkRequest {
+                    user_id: Some(creds.user_id.clone()),
+                    user_app_key: Some(creds.user_app_key.clone()),
+                    link_hash,
+                };
+                request = request.json(&req_body);
+            }
+
+            let resp = request.send().await?;
+            let status = resp.status();
+            let text_body = resp.text().await?;
+            if status.is_success() {
+                let json: DeletePublicLinkResponse = serde_json::from_str(&text_body)?;
+                println!("✅ {}", json.message);
+                println!("Deleted link hash: {}", json.link_hash);
+            } else {
+                return Err(anyhow!(
+                    "Delete public link failed. Status = {}, Body = {}",
                     status,
                     text_body
                 ));
@@ -1274,35 +3265,301 @@ pub async fn run_cli() -> Result<()> {
             user_id,
             user_app_key,
             directory_path,
+            tier,
+            skip_uploaded,
+            encrypt,
+            password,
         } => {
-            let (uid, key) =
-                get_final_user_id_and_app_key(user_id, user_app_key)?;
+            // Load credentials and check for JWT
+            let mut creds = load_credentials_from_file()?.ok_or_else(|| {
+                anyhow!("No credentials found. Please create a user or login first.")
+            })?;
+
+            // Ensure we have valid JWT token if available
+            ensure_valid_token(&client, base_url, &mut creds).await?;
+
+            // Override with command-line args if provided (only for legacy auth)
+            if let Some(uid) = user_id {
+                creds.user_id = uid;
+            }
+            if let Some(key) = user_app_key {
+                creds.user_app_key = key;
+            }
 
             let dir = Path::new(&directory_path);
             if !dir.is_dir() {
-                return Err(anyhow!("Provided path is not a directory: {}", directory_path));
+                return Err(anyhow!(
+                    "Provided path is not a directory: {}",
+                    directory_path
+                ));
             }
 
-            let file_entries: Vec<_> = WalkDir::new(dir)
-                .into_iter()
-                .filter_map(|entry| {
-                    match entry {
-                        Ok(e) if e.path().is_file() => Some(e.path().to_owned()),
-                        _ => None,
+            // Get password once for all files if encryption is enabled
+            let encryption_password = if encrypt {
+                let pass = match password {
+                    Some(p) => p,
+                    None => {
+                        println!(
+                            "You will use the same password to encrypt all files in the directory."
+                        );
+                        let password = rpassword::prompt_password("Enter encryption password: ")?;
+                        let confirm = rpassword::prompt_password("Confirm encryption password: ")?;
+                        if password != confirm {
+                            return Err(anyhow!("Passwords do not match"));
+                        }
+                        password
                     }
-                })
-                .collect();
+                };
+                Some(pass)
+            } else {
+                None
+            };
 
-            let concurrency_limit = 100;
+            // Read upload log if skip_uploaded == true
+            let mut previously_uploaded: HashSet<String> = HashSet::new();
+            if skip_uploaded {
+                let log_path = get_upload_log_path();
+                if log_path.exists() {
+                    let contents = fs::read_to_string(&log_path)?;
+                    for line in contents.lines() {
+                        if let Ok(entry) = serde_json::from_str::<UploadLogEntry>(line) {
+                            if entry.status.contains("SUCCESS")
+                                || entry.status.contains("BACKGROUND")
+                            {
+                                previously_uploaded.insert(entry.local_path);
+                            }
+                        }
+                    }
+                }
+                println!(
+                    "Found {} previously uploaded files in log",
+                    previously_uploaded.len()
+                );
+            }
+
+            println!("Scanning directory for files...");
+
+            // Collect files and calculate total size
+            let mut file_entries = Vec::new();
+            let mut total_size = 0u64;
+            let mut file_count = 0;
+            let mut skipped_count = 0;
+
+            for entry in WalkDir::new(dir).into_iter().filter_map(|e| e.ok()) {
+                if entry.path().is_file() {
+                    if skip_uploaded
+                        && previously_uploaded.contains(&entry.path().display().to_string())
+                    {
+                        skipped_count += 1;
+                        continue;
+                    }
+                    if let Ok(meta) = entry.metadata() {
+                        total_size += meta.len();
+                        file_count += 1;
+                        file_entries.push(entry.path().to_owned());
+                    }
+                }
+            }
+
+            if skipped_count > 0 {
+                println!("Skipping {} previously uploaded files", skipped_count);
+            }
+
+            if file_entries.is_empty() {
+                if skipped_count > 0 {
+                    println!(
+                        "No new files to upload (all {} files were previously uploaded).",
+                        skipped_count
+                    );
+                } else {
+                    println!("No files found in directory.");
+                }
+                return Ok(());
+            }
+
+            println!(
+                "Found {} files, total size: {:.2} MB",
+                file_count,
+                total_size as f64 / 1_048_576.0
+            );
+
+            // Check if user has enough tokens for the entire upload
+            // Get tier pricing and concurrency
+            let (fee_per_gb, tier_concurrency) =
+                if tier.as_deref() == Some("normal") || tier.is_none() {
+                    (1.0, 2) // Normal tier: 1 PIPE per GB, 2 concurrent
+                } else {
+                    // For priority tiers, we need to fetch the actual pricing
+                    let fee_url = format!("{}/getTierPricing", base_url);
+                    let fee_req = if let Some(ref auth_tokens) = creds.auth_tokens {
+                        client.get(&fee_url).header(
+                            "Authorization",
+                            format!("Bearer {}", auth_tokens.access_token),
+                        )
+                    } else {
+                        client
+                            .get(&fee_url)
+                            .header("X-User-Id", &creds.user_id)
+                            .header("X-User-App-Key", &creds.user_app_key)
+                    };
+
+                    match fee_req.send().await {
+                        Ok(resp) if resp.status().is_success() => {
+                            #[derive(Deserialize)]
+                            struct TierInfo {
+                                name: String,
+                                current_price: f64,
+                                concurrency: usize,
+                            }
+
+                            if let Ok(pricing_list) = resp.json::<Vec<TierInfo>>().await {
+                                // Find the tier we're using
+                                pricing_list
+                                    .iter()
+                                    .find(|t| Some(&t.name) == tier.as_ref())
+                                    .map(|t| (t.current_price, t.concurrency))
+                                    .unwrap_or((25.0, 50)) // Default to enterprise pricing/concurrency if not found
+                            } else {
+                                (25.0, 50) // Default to enterprise pricing on parse error
+                            }
+                        }
+                        _ => (25.0, 50), // Default to enterprise pricing on request error
+                    }
+                };
+
+            let total_cost_estimate = (total_size as f64 / 1_000_000_000.0) * fee_per_gb;
+
+            // Get current token balance
+            let balance_url = format!("{}/checkCustomToken", base_url);
+
+            let balance_body = if creds.auth_tokens.is_some() {
+                // For JWT auth, send empty body (server gets user from token)
+                CheckCustomTokenRequest {
+                    user_id: None,
+                    user_app_key: None,
+                }
+            } else {
+                // For legacy auth, include credentials in body
+                CheckCustomTokenRequest {
+                    user_id: Some(creds.user_id.clone()),
+                    user_app_key: Some(creds.user_app_key.clone()),
+                }
+            };
+
+            let mut balance_req = client.post(&balance_url);
+            balance_req = add_auth_headers(balance_req, &creds, false); // false = not state-changing
+            balance_req = balance_req.json(&balance_body);
+
+            match balance_req.send().await {
+                Ok(resp) => {
+                    let status = resp.status();
+                    if status.is_success() {
+                        match resp.json::<CheckCustomTokenResponse>().await {
+                            Ok(balance_resp) => {
+                                let current_balance = balance_resp.ui_amount;
+                                if current_balance < total_cost_estimate {
+                                    eprintln!("\n❌ Insufficient tokens for directory upload");
+                                    eprintln!(
+                                        "Total cost: {:.4} PIPE tokens (at {} tokens/GB)",
+                                        total_cost_estimate, fee_per_gb
+                                    );
+                                    eprintln!("Your balance: {:.4} PIPE tokens", current_balance);
+                                    eprintln!(
+                                        "Needed: {:.4} PIPE tokens",
+                                        total_cost_estimate - current_balance
+                                    );
+                                    eprintln!("\nPlease use 'pipe swap-sol-for-pipe {:.1}' to get enough tokens.", 
+                                    (total_cost_estimate - current_balance) / 10.0 + 0.1);
+                                    return Ok(());
+                                }
+                                println!("💰 Estimated cost: {:.4} PIPE tokens at {} tokens/GB (current balance: {:.4} PIPE)", 
+                                total_cost_estimate, fee_per_gb, current_balance);
+                            }
+                            Err(e) => {
+                                eprintln!("⚠️  Failed to parse balance response: {}", e);
+                                eprintln!(
+                                    "Estimated cost: {:.4} PIPE tokens at {} tokens/GB",
+                                    total_cost_estimate, fee_per_gb
+                                );
+                                eprintln!("\nProceed with caution - could not verify if you have enough tokens.");
+                                eprintln!(
+                                    "Consider checking your balance with 'pipe check-token' first."
+                                );
+                            }
+                        }
+                    } else {
+                        let error_text = resp
+                            .text()
+                            .await
+                            .unwrap_or_else(|_| "Unknown error".to_string());
+                        eprintln!(
+                            "⚠️  Failed to check token balance: {} - {}",
+                            status, error_text
+                        );
+                        eprintln!(
+                            "Estimated cost: {:.4} PIPE tokens at {} tokens/GB",
+                            total_cost_estimate, fee_per_gb
+                        );
+                        eprintln!(
+                            "\nProceed with caution - could not verify if you have enough tokens."
+                        );
+                        eprintln!("Consider checking your balance with 'pipe check-token' first.");
+                    }
+                }
+                Err(e) => {
+                    eprintln!("⚠️  Could not connect to check token balance: {}", e);
+                    eprintln!(
+                        "Estimated cost: {:.4} PIPE tokens at {} tokens/GB",
+                        total_cost_estimate, fee_per_gb
+                    );
+                    eprintln!(
+                        "\nProceed with caution - could not verify if you have enough tokens."
+                    );
+                    eprintln!("Consider checking your balance with 'pipe check-token' first.");
+                }
+            }
+
+            // Create shared progress bar
+            let progress = Arc::new(ProgressBar::new(total_size));
+            progress.set_style(
+                ProgressStyle::default_bar()
+                    .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta}) - {msg}")
+                    .unwrap()
+                    .progress_chars("#>-"),
+            );
+            progress.set_message(format!("Uploading {} files...", file_count));
+
+            let shared_progress = DirectoryUploadProgress {
+                uploaded_bytes: Arc::new(TokioMutex::new(0)),
+                progress_bar: progress.clone(),
+            };
+
+            // Limit concurrency to avoid overwhelming local uploads
+            let concurrency_limit = tier_concurrency.min(10); // Cap at 10 for better performance
+            println!(
+                "🚀 Using {} concurrent upload slots for {} tier",
+                concurrency_limit,
+                tier.as_deref().unwrap_or("normal")
+            );
             let sem = Arc::new(Semaphore::new(concurrency_limit));
             let mut handles = Vec::new();
+
+            let completed_count = Arc::new(TokioMutex::new(0u32));
+            let failed_count = Arc::new(TokioMutex::new(0u32));
+            let total_cost = Arc::new(TokioMutex::new(0.0f64));
 
             for path in file_entries {
                 let sem_clone = Arc::clone(&sem);
                 let client_clone = client.clone();
                 let base_url_clone = base_url.to_string();
-                let user_id_clone = uid.clone();
-                let user_app_key_clone = key.clone();
+                let service_cache_clone = service_cache.clone();
+                let creds_clone = creds.clone();
+                let shared_progress_clone = shared_progress.clone();
+                let completed_clone = completed_count.clone();
+                let failed_clone = failed_count.clone();
+                let total_cost_clone = total_cost.clone();
+                let file_count_copy = file_count;
+                let progress_clone = progress.clone();
 
                 let rel_path = match path.strip_prefix(dir) {
                     Ok(r) => r.to_string_lossy().to_string(),
@@ -1311,31 +3568,91 @@ pub async fn run_cli() -> Result<()> {
                         .map(|os| os.to_string_lossy().to_string())
                         .unwrap_or_else(|| "untitled".to_string()),
                 };
+                let tier_clone = tier.clone();
+                let encrypt_clone = encrypt;
+                let password_clone = encryption_password.clone();
 
                 let handle = tokio::spawn(async move {
                     let _permit = sem_clone.acquire_owned().await.unwrap();
-                    let url_no_epochs = format!(
-                        "{}/upload?user_id={}&user_app_key={}&file_name={}",
-                        base_url_clone, user_id_clone, user_app_key_clone, rel_path
-                    );
 
-                    match upload_file(&client_clone, &path, &url_no_epochs, &rel_path).await {
-                        Ok(uploaded_file) => {
-                            println!("Uploaded: {}", uploaded_file);
+                    // Get endpoint for this specific file upload
+                    let selected_endpoint = get_endpoint_for_operation(
+                        &service_cache_clone,
+                        &client_clone,
+                        &base_url_clone,
+                        "upload",
+                        &creds_clone.user_id,
+                        Some(&rel_path),
+                    )
+                    .await;
+
+                    // Build URL based on auth type
+                    // Build URL without credentials (security fix)
+                    // Use priority endpoint for tiers above normal to avoid rate limiting
+                    let endpoint = if let Some(ref t) = tier_clone {
+                        match t.as_str() {
+                            "normal" => "upload",
+                            _ => "priorityUpload", // All other tiers use priority endpoint
+                        }
+                    } else {
+                        "upload" // Default to normal upload if no tier specified
+                    };
+
+                    let mut url =
+                        format!("{}/{}?file_name={}", selected_endpoint, endpoint, rel_path);
+                    if let Some(tier_name) = &tier_clone {
+                        url = format!("{}&tier={}", url, tier_name);
+                    }
+
+                    // Use retry wrapper for directory uploads
+                    let upload_result =
+                        upload_with_retry(&format!("upload of {}", rel_path), || {
+                            upload_file_with_encryption(
+                                &client_clone,
+                                &path,
+                                &url,
+                                &rel_path,
+                                &creds_clone,
+                                encrypt_clone,
+                                password_clone.clone(),
+                                Some(shared_progress_clone.clone()),
+                            )
+                        })
+                        .await;
+
+                    match upload_result {
+                        Ok((uploaded_file, cost)) => {
+                            let mut completed = completed_clone.lock().await;
+                            *completed += 1;
+                            let completed_val = *completed;
+                            drop(completed);
+
+                            let mut total = total_cost_clone.lock().await;
+                            *total += cost;
+                            drop(total);
+
+                            progress_clone.set_message(format!(
+                                "Uploaded {} of {} files",
+                                completed_val, file_count_copy
+                            ));
+
                             let _ = append_to_upload_log(
                                 &path.display().to_string(),
                                 &uploaded_file,
                                 "SUCCESS",
-                                "Directory upload success"
+                                "Directory upload success",
                             );
                         }
                         Err(e) => {
-                            eprintln!("Failed to upload {}: {}", path.display(), e);
+                            let mut failed = failed_clone.lock().await;
+                            *failed += 1;
+
+                            eprintln!("Failed to upload {}: {}", rel_path, e);
                             let _ = append_to_upload_log(
                                 &path.display().to_string(),
                                 &rel_path,
                                 "FAIL",
-                                &format!("Directory upload error: {}", e)
+                                &format!("Directory upload error: {}", e),
                             );
                         }
                     }
@@ -1348,8 +3665,26 @@ pub async fn run_cli() -> Result<()> {
                 let _ = h.await;
             }
 
+            progress.finish_with_message("Upload complete!");
+
+            let completed = *completed_count.lock().await;
+            let failed = *failed_count.lock().await;
+            let final_cost = *total_cost.lock().await;
+
+            println!("\n📊 Upload Summary:");
+            println!("  ✅ Successfully uploaded: {} files", completed);
+            if failed > 0 {
+                println!("  ❌ Failed: {} files", failed);
+            }
+            println!("  📁 Total size: {:.2} MB", total_size as f64 / 1_048_576.0);
+            if let Some(t) = &tier {
+                println!("  📈 Upload tier: {}", t);
+            }
+            if final_cost > 0.0 {
+                println!("  💰 Total cost: {:.4} PIPE tokens", final_cost);
+            }
             println!(
-                "Directory upload complete. Check the log file for details:\n  {}",
+                "\nCheck the log file for details:\n  {}",
                 get_upload_log_path().display()
             );
         }
@@ -1361,18 +3696,38 @@ pub async fn run_cli() -> Result<()> {
             skip_uploaded,
             concurrency,
         } => {
-            let (uid, key) = get_final_user_id_and_app_key(user_id, user_app_key)?;
+            // Load credentials and check for JWT
+            let mut creds = load_credentials_from_file()?.ok_or_else(|| {
+                anyhow!("No credentials found. Please create a user or login first.")
+            })?;
+
+            // Ensure we have valid JWT token if available
+            ensure_valid_token(&client, base_url, &mut creds).await?;
+
+            // Override with command-line args if provided (only for legacy auth)
+            if let Some(uid) = user_id {
+                creds.user_id = uid;
+            }
+            if let Some(key) = user_app_key {
+                creds.user_app_key = key;
+            }
 
             let dir = Path::new(&directory_path);
             if !dir.is_dir() {
-                return Err(anyhow!("Provided path is not a directory: {}", directory_path));
+                return Err(anyhow!(
+                    "Provided path is not a directory: {}",
+                    directory_path
+                ));
             }
 
             // Get current priority fee from server
             let url = format!("{}/getPriorityFee", base_url);
             let resp = client.get(&url).send().await?;
             let fee_resp: PriorityFeeResponse = resp.json().await?;
-            println!("Current priority fee: {} tokens/GB", fee_resp.priority_fee_per_gb);
+            println!(
+                "Current priority fee: {} tokens/GB",
+                fee_resp.priority_fee_per_gb
+            );
             println!("Starting priority upload of directory...");
 
             // Read upload log if skip_uploaded == true
@@ -1383,56 +3738,189 @@ pub async fn run_cli() -> Result<()> {
                     let contents = fs::read_to_string(&log_path)?;
                     for line in contents.lines() {
                         if let Ok(entry) = serde_json::from_str::<UploadLogEntry>(line) {
-                            if entry.status.contains("SUCCESS") || entry.status.contains("BACKGROUND") {
+                            if entry.status.contains("SUCCESS")
+                                || entry.status.contains("BACKGROUND")
+                            {
                                 previously_uploaded.insert(entry.local_path);
                             }
                         }
                     }
                 }
-                println!("Found {} previously uploaded files in log", previously_uploaded.len());
+                println!(
+                    "Found {} previously uploaded files in log",
+                    previously_uploaded.len()
+                );
             }
 
-            let file_entries: Vec<_> = WalkDir::new(dir)
-                .into_iter()
-                .filter_map(|entry| {
-                    match entry {
-                        Ok(e) if e.path().is_file() => Some(e.path().to_owned()),
-                        _ => None,
+            println!("Scanning directory for files...");
+
+            // Collect files and calculate total size
+            let mut file_entries = Vec::new();
+            let mut total_size = 0u64;
+            let mut file_count = 0;
+            let mut skipped_count = 0;
+
+            for entry in WalkDir::new(dir).into_iter().filter_map(|e| e.ok()) {
+                if entry.path().is_file() {
+                    if skip_uploaded
+                        && previously_uploaded.contains(&entry.path().display().to_string())
+                    {
+                        skipped_count += 1;
+                        continue;
                     }
-                })
-                .collect();
+                    if let Ok(meta) = entry.metadata() {
+                        total_size += meta.len();
+                        file_count += 1;
+                        file_entries.push(entry.path().to_owned());
+                    }
+                }
+            }
 
-            println!("Found {} files to upload", file_entries.len());
+            if skipped_count > 0 {
+                println!("Skipping {} previously uploaded files", skipped_count);
+            }
 
-            let total_files = file_entries.len() as u64;
-            let progress = Arc::new(ProgressBar::new(total_files));
+            if file_entries.is_empty() {
+                println!("No files to upload (all files either don't exist or were previously uploaded).");
+                return Ok(());
+            }
+
+            println!(
+                "Found {} files to upload, total size: {:.2} MB",
+                file_count,
+                total_size as f64 / 1_048_576.0
+            );
+
+            // Check if user has enough tokens for the entire priority upload
+            let total_cost_estimate =
+                (total_size as f64 / 1_000_000_000.0) * fee_resp.priority_fee_per_gb;
+
+            // Get current token balance
+            let balance_url = format!("{}/checkCustomToken", base_url);
+
+            let balance_body = if creds.auth_tokens.is_some() {
+                // For JWT auth, send empty body (server gets user from token)
+                CheckCustomTokenRequest {
+                    user_id: None,
+                    user_app_key: None,
+                }
+            } else {
+                // For legacy auth, include credentials in body
+                CheckCustomTokenRequest {
+                    user_id: Some(creds.user_id.clone()),
+                    user_app_key: Some(creds.user_app_key.clone()),
+                }
+            };
+
+            let mut balance_req = client.post(&balance_url);
+            balance_req = add_auth_headers(balance_req, &creds, false); // false = not state-changing
+            balance_req = balance_req.json(&balance_body);
+
+            match balance_req.send().await {
+                Ok(resp) => {
+                    let status = resp.status();
+                    if status.is_success() {
+                        match resp.json::<CheckCustomTokenResponse>().await {
+                            Ok(balance_resp) => {
+                                let current_balance = balance_resp.ui_amount;
+                                if current_balance < total_cost_estimate {
+                                    eprintln!(
+                                        "\n❌ Insufficient tokens for priority directory upload"
+                                    );
+                                    eprintln!(
+                                        "Total cost: {:.4} PIPE tokens (at {} tokens/GB)",
+                                        total_cost_estimate, fee_resp.priority_fee_per_gb
+                                    );
+                                    eprintln!("Your balance: {:.4} PIPE tokens", current_balance);
+                                    eprintln!(
+                                        "Needed: {:.4} PIPE tokens",
+                                        total_cost_estimate - current_balance
+                                    );
+                                    eprintln!("\nPlease use 'pipe swap-sol-for-pipe {:.1}' to get enough tokens.", 
+                                        (total_cost_estimate - current_balance) / 10.0 + 0.1);
+                                    return Ok(());
+                                }
+                                println!("💰 Estimated cost: {:.4} PIPE tokens at {} tokens/GB (current balance: {:.4} PIPE)", 
+                                    total_cost_estimate, fee_resp.priority_fee_per_gb, current_balance);
+                            }
+                            Err(e) => {
+                                eprintln!("⚠️  Failed to parse balance response: {}", e);
+                                eprintln!(
+                                    "Estimated cost: {:.4} PIPE tokens at {} tokens/GB",
+                                    total_cost_estimate, fee_resp.priority_fee_per_gb
+                                );
+                                eprintln!("\nProceed with caution - could not verify if you have enough tokens.");
+                                eprintln!(
+                                    "Consider checking your balance with 'pipe check-token' first."
+                                );
+                            }
+                        }
+                    } else {
+                        let error_text = resp
+                            .text()
+                            .await
+                            .unwrap_or_else(|_| "Unknown error".to_string());
+                        eprintln!(
+                            "⚠️  Failed to check token balance: {} - {}",
+                            status, error_text
+                        );
+                        eprintln!(
+                            "Estimated cost: {:.4} PIPE tokens at {} tokens/GB",
+                            total_cost_estimate, fee_resp.priority_fee_per_gb
+                        );
+                        eprintln!(
+                            "\nProceed with caution - could not verify if you have enough tokens."
+                        );
+                        eprintln!("Consider checking your balance with 'pipe check-token' first.");
+                    }
+                }
+                Err(e) => {
+                    eprintln!("⚠️  Could not connect to check token balance: {}", e);
+                    eprintln!(
+                        "Estimated cost: {:.4} PIPE tokens at {} tokens/GB",
+                        total_cost_estimate, fee_resp.priority_fee_per_gb
+                    );
+                    eprintln!(
+                        "\nProceed with caution - could not verify if you have enough tokens."
+                    );
+                    eprintln!("Consider checking your balance with 'pipe check-token' first.");
+                }
+            }
+
+            // Create shared progress bar (bytes-based, not file count)
+            let progress = Arc::new(ProgressBar::new(total_size));
             progress.set_style(
                 ProgressStyle::default_bar()
-                    .template(
-                        "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] \
-                         {pos}/{len} ({eta}) - {msg}"
-                    )
+                    .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta}) - {msg}")
                     .unwrap()
                     .progress_chars("#>-"),
             );
-            progress.set_message("Uploading files...");
+            progress.set_message(format!("Priority uploading {} files...", file_count));
+
+            let shared_progress = DirectoryUploadProgress {
+                uploaded_bytes: Arc::new(TokioMutex::new(0)),
+                progress_bar: progress.clone(),
+            };
 
             let sem = Arc::new(Semaphore::new(concurrency));
             let mut handles = Vec::new();
 
-            for path in file_entries {
-                if skip_uploaded && previously_uploaded.contains(&path.display().to_string()) {
-                    println!("Skipping previously uploaded file: {}", path.display());
-                    progress.inc(1);
-                    continue;
-                }
+            let completed_count = Arc::new(TokioMutex::new(0u32));
+            let failed_count = Arc::new(TokioMutex::new(0u32));
+            let total_cost = Arc::new(TokioMutex::new(0.0f64));
 
+            for path in file_entries {
                 let sem_clone = Arc::clone(&sem);
                 let client_clone = client.clone();
                 let base_url_clone = base_url.to_string();
-                let user_id_clone = uid.clone();
-                let user_app_key_clone = key.clone();
-                let progress_clone = Arc::clone(&progress);
+                let service_cache_clone = service_cache.clone();
+                let creds_clone = creds.clone();
+                let shared_progress_clone = shared_progress.clone();
+                let completed_clone = completed_count.clone();
+                let failed_clone = failed_count.clone();
+                let total_cost_clone = total_cost.clone();
+                let file_count_copy = file_count;
+                let progress_clone = progress.clone();
 
                 let rel_path = match path.strip_prefix(dir) {
                     Ok(r) => r.to_string_lossy().to_string(),
@@ -1444,32 +3932,74 @@ pub async fn run_cli() -> Result<()> {
 
                 let handle = tokio::spawn(async move {
                     let _permit = sem_clone.acquire_owned().await.unwrap();
-                    let url_no_epochs = format!(
-                        "{}/priorityUpload?user_id={}&user_app_key={}&file_name={}",
-                        base_url_clone, user_id_clone, user_app_key_clone, rel_path
+
+                    // Get endpoint for this specific file upload
+                    let selected_endpoint = get_endpoint_for_operation(
+                        &service_cache_clone,
+                        &client_clone,
+                        &base_url_clone,
+                        "upload",
+                        &creds_clone.user_id,
+                        Some(&rel_path),
+                    )
+                    .await;
+
+                    // Build URL without credentials (security fix)
+                    let url = format!(
+                        "{}/priorityUpload?file_name={}",
+                        selected_endpoint, rel_path
                     );
 
-                    match upload_file_priority(&client_clone, &path, &url_no_epochs, &rel_path).await {
-                        Ok(uploaded_file) => {
-                            println!("Priority Uploaded: {}", uploaded_file);
+                    // Use retry wrapper for priority directory uploads
+                    let upload_result =
+                        upload_with_retry(&format!("priority upload of {}", rel_path), || {
+                            upload_file_priority_with_shared_progress(
+                                &client_clone,
+                                &path,
+                                &url,
+                                &rel_path,
+                                &creds_clone,
+                                Some(shared_progress_clone.clone()),
+                            )
+                        })
+                        .await;
+
+                    match upload_result {
+                        Ok((uploaded_file, cost)) => {
+                            let mut completed = completed_clone.lock().await;
+                            *completed += 1;
+                            let completed_val = *completed;
+                            drop(completed);
+
+                            let mut total = total_cost_clone.lock().await;
+                            *total += cost;
+                            drop(total);
+
+                            progress_clone.set_message(format!(
+                                "Priority uploaded {} of {} files",
+                                completed_val, file_count_copy
+                            ));
+
                             let _ = append_to_upload_log(
                                 &path.display().to_string(),
                                 &uploaded_file,
                                 "PRIORITY SUCCESS",
-                                "Priority directory upload success"
+                                "Priority directory upload success",
                             );
                         }
                         Err(e) => {
-                            eprintln!("Failed priority upload {}: {}", path.display(), e);
+                            let mut failed = failed_clone.lock().await;
+                            *failed += 1;
+
+                            eprintln!("Failed priority upload {}: {}", rel_path, e);
                             let _ = append_to_upload_log(
                                 &path.display().to_string(),
                                 &rel_path,
                                 "PRIORITY FAIL",
-                                &format!("Priority directory upload error: {}", e)
+                                &format!("Priority directory upload error: {}", e),
                             );
                         }
                     }
-                    progress_clone.inc(1);
                 });
 
                 handles.push(handle);
@@ -1479,9 +4009,26 @@ pub async fn run_cli() -> Result<()> {
                 let _ = h.await;
             }
 
-            progress.finish_with_message("Priority directory upload complete!");
+            progress.finish_with_message("Priority upload complete!");
+
+            let completed = *completed_count.lock().await;
+            let failed = *failed_count.lock().await;
+            let final_cost = *total_cost.lock().await;
+
+            println!("\n📊 Priority Upload Summary:");
+            println!("  ✅ Successfully uploaded: {} files", completed);
+            if failed > 0 {
+                println!("  ❌ Failed: {} files", failed);
+            }
+            println!("  📁 Total size: {:.2} MB", total_size as f64 / 1_048_576.0);
+            if final_cost > 0.0 {
+                println!(
+                    "  💰 Total cost: {:.4} PIPE tokens (priority rate: {} tokens/GB)",
+                    final_cost, fee_resp.priority_fee_per_gb
+                );
+            }
             println!(
-                "Check the log file for details:\n  {}",
+                "\nCheck the log file for details:\n  {}",
                 get_upload_log_path().display()
             );
         }
@@ -1511,6 +4058,54 @@ pub async fn run_cli() -> Result<()> {
             }
         }
 
+        Commands::GetTierPricing => {
+            let url = format!("{}/getTierPricing", base_url);
+            let resp = client.get(&url).send().await?;
+            let status = resp.status();
+            let text_body = resp.text().await?;
+
+            if status.is_success() {
+                #[derive(Deserialize)]
+                struct TierPricing {
+                    name: String,
+                    base_price: f64,
+                    current_price: f64,
+                    concurrency: usize,
+                    active_users: usize,
+                    multipart_concurrency: usize,
+                    chunk_size_mb: u64,
+                }
+                let pricing: Vec<TierPricing> = serde_json::from_str(&text_body)?;
+
+                println!("\n📊 Upload Tier Pricing:");
+                println!("╔═══════════════╦═══════╦═══════════╦═════════════╦══════════╦═══════════════╦═══════════╗");
+                println!("║ Tier          ║ $/GB  ║ Current   ║ Concurrency ║ Active   ║ MP Concurrent ║ Chunk MB  ║");
+                println!("╠═══════════════╬═══════╬═══════════╬═════════════╬══════════╬═══════════════╬═══════════╣");
+                for tier in pricing {
+                    println!(
+                        "║ {:13} ║ {:5.1} ║ {:9.2} ║ {:11} ║ {:8} ║ {:13} ║ {:9} ║",
+                        tier.name,
+                        tier.base_price,
+                        tier.current_price,
+                        tier.concurrency,
+                        tier.active_users,
+                        tier.multipart_concurrency,
+                        tier.chunk_size_mb
+                    );
+                }
+                println!("╚═══════════════╩═══════╩═══════════╩═════════════╩══════════╩═══════════════╩═══════════╝");
+                println!(
+                    "\nNote: Current price adjusts based on demand for Priority and Premium tiers."
+                );
+            } else {
+                return Err(anyhow!(
+                    "Failed to get tier pricing. Status={}, Body={}",
+                    status,
+                    text_body
+                ));
+            }
+        }
+
         Commands::PriorityUpload {
             user_id,
             user_app_key,
@@ -1518,7 +4113,21 @@ pub async fn run_cli() -> Result<()> {
             file_name,
             epochs,
         } => {
-            let (uid, key) = get_final_user_id_and_app_key(user_id, user_app_key)?;
+            // Load credentials and check for JWT
+            let mut creds = load_credentials_from_file()?.ok_or_else(|| {
+                anyhow!("No credentials found. Please create a user or login first.")
+            })?;
+
+            // Ensure we have valid JWT token if available
+            ensure_valid_token(&client, base_url, &mut creds).await?;
+
+            // Override with command-line args if provided (only for legacy auth)
+            if let Some(uid) = user_id {
+                creds.user_id = uid;
+            }
+            if let Some(key) = user_app_key {
+                creds.user_app_key = key;
+            }
 
             let local_path = Path::new(&file_path);
             if !local_path.exists() {
@@ -1526,19 +4135,36 @@ pub async fn run_cli() -> Result<()> {
             }
 
             let epochs_final = epochs.unwrap_or(1);
-            let url_with_epochs = format!(
-                "{}/priorityUpload?user_id={}&user_app_key={}&file_name={}&epochs={}",
-                base_url, uid, key, file_name, epochs_final
+
+            // Build URL without credentials (security fix)
+            let url = format!(
+                "{}/priorityUpload?file_name={}&epochs={}",
+                base_url, file_name, epochs_final
             );
 
-            match upload_file_priority(&client, local_path, &url_with_epochs, &file_name).await {
-                Ok(uploaded_filename) => {
-                    println!("Priority file uploaded (or backgrounded): {}", uploaded_filename);
+            // Use retry wrapper for priority single file upload
+            let upload_result =
+                upload_with_retry(&format!("priority upload of {}", file_path), || {
+                    upload_file_priority_with_shared_progress(
+                        &client, local_path, &url, &file_name, &creds, None,
+                    )
+                })
+                .await;
+
+            match upload_result {
+                Ok((uploaded_filename, token_cost)) => {
+                    println!(
+                        "Priority file uploaded (or backgrounded): {}",
+                        uploaded_filename
+                    );
+                    if token_cost > 0.0 {
+                        println!("💰 Cost: {} PIPE tokens", token_cost);
+                    }
                     append_to_upload_log(
                         &file_path,
                         &uploaded_filename,
                         "PRIORITY SUCCESS",
-                        &format!("Priority upload ({} epochs)", epochs_final)
+                        &format!("Priority upload ({} epochs)", epochs_final),
                     )?;
                 }
                 Err(e) => {
@@ -1547,7 +4173,7 @@ pub async fn run_cli() -> Result<()> {
                         &file_path,
                         &file_name,
                         "PRIORITY FAIL",
-                        &format!("Priority single upload error: {}", e)
+                        &format!("Priority single upload error: {}", e),
                     )?;
                     return Err(e);
                 }
@@ -1560,9 +4186,25 @@ pub async fn run_cli() -> Result<()> {
             file_name,
             output_path,
         } => {
-            let (uid, key) = get_final_user_id_and_app_key(user_id, user_app_key)?;
+            // Load credentials and check for JWT
+            let mut creds = load_credentials_from_file()?.ok_or_else(|| {
+                anyhow!("No credentials found. Please create a user or login first.")
+            })?;
 
-            match priority_download_single_file(&client, base_url, &uid, &key, &file_name).await {
+            // Ensure we have valid JWT token if available
+            ensure_valid_token(&client, base_url, &mut creds).await?;
+
+            // Override with command-line args if provided (only for legacy auth)
+            if let Some(uid) = user_id {
+                creds.user_id = uid;
+            }
+            if let Some(key) = user_app_key {
+                creds.user_app_key = key;
+            }
+
+            match priority_download_single_file_with_auth(&client, base_url, &creds, &file_name)
+                .await
+            {
                 Ok(file_data) => {
                     fs::write(&output_path, &file_data)?;
                     println!("Priority file downloaded to {}", output_path);
@@ -1602,22 +4244,47 @@ pub async fn run_cli() -> Result<()> {
             file_name,
             additional_months,
         } => {
-            let (uid, key) = get_final_user_id_and_app_key(user_id, user_app_key)?;
+            // Load credentials and check for JWT
+            let mut creds = load_credentials_from_file()?.ok_or_else(|| {
+                anyhow!("No credentials found. Please create a user or login first.")
+            })?;
 
-            let req_body = ExtendStorageRequest {
-                user_id: uid,
-                user_app_key: key,
-                file_name,
-                additional_months,
-            };
+            // Ensure we have valid JWT token if available
+            ensure_valid_token(&client, base_url, &mut creds).await?;
+
+            // Override with command-line args if provided (only for legacy auth)
+            if let Some(uid) = user_id {
+                creds.user_id = uid;
+            }
+            if let Some(key) = user_app_key {
+                creds.user_app_key = key;
+            }
 
             let url = format!("{}/extendStorage", base_url);
-            let resp = client
-                .post(url)
-                .json(&req_body)
-                .send()
-                .await?;
+            let mut request = client.post(url);
 
+            // Use add_auth_headers for consistent authentication
+            request = add_auth_headers(request, &creds, true);
+
+            // For JWT auth, send only file name and months. For legacy auth, also need credentials in body
+            if creds.auth_tokens.is_some() {
+                let req_body = serde_json::json!({
+                    "file_name": file_name,
+                    "additional_months": additional_months
+                });
+                request = request.json(&req_body);
+            } else {
+                // Legacy auth still needs credentials in body for this endpoint
+                let req_body = ExtendStorageRequest {
+                    user_id: creds.user_id.clone(),
+                    user_app_key: creds.user_app_key.clone(),
+                    file_name,
+                    additional_months,
+                };
+                request = request.json(&req_body);
+            }
+
+            let resp = request.send().await?;
             let status = resp.status();
             let text_body = resp.text().await?;
 
@@ -1633,6 +4300,320 @@ pub async fn run_cli() -> Result<()> {
                     status,
                     text_body
                 ));
+            }
+        }
+
+        Commands::EncryptLocal {
+            input_file,
+            output_file,
+            password,
+        } => {
+            // Get password if not provided
+            let password = match password {
+                Some(p) => p,
+                None => {
+                    let password = rpassword::prompt_password("Enter encryption password: ")?;
+                    let confirm = rpassword::prompt_password("Confirm encryption password: ")?;
+                    if password != confirm {
+                        return Err(anyhow!("Passwords do not match"));
+                    }
+                    password
+                }
+            };
+
+            println!("Encrypting {} -> {}", input_file, output_file);
+
+            let input = std::fs::File::open(&input_file)?;
+            let output = std::fs::File::create(&output_file)?;
+            let file_size = input.metadata()?.len();
+
+            // Create progress bar
+            let pb = ProgressBar::new(file_size);
+            pb.set_style(
+                ProgressStyle::default_bar()
+                    .template("[{elapsed_precise}] {bar:40.cyan/blue} {bytes}/{total_bytes} {bytes_per_sec}")
+                    .unwrap()
+                    .progress_chars("=>-"),
+            );
+
+            let progress_callback = Box::new(move |bytes: usize| {
+                pb.inc(bytes as u64);
+            });
+
+            crate::encryption::encrypt_file_with_password(
+                input,
+                output,
+                &password,
+                Some(progress_callback),
+            )
+            .await?;
+
+            println!("✅ File encrypted successfully!");
+            println!("   Original: {} ({} bytes)", input_file, file_size);
+            println!(
+                "   Encrypted: {} ({} bytes)",
+                output_file,
+                std::fs::metadata(&output_file)?.len()
+            );
+        }
+
+        Commands::DecryptLocal {
+            input_file,
+            output_file,
+            password,
+        } => {
+            // Check if input file has encryption header
+            let mut check_file = std::fs::File::open(&input_file)?;
+            if !crate::encryption::is_encrypted_file(&mut check_file)? {
+                return Err(anyhow!(
+                    "File '{}' does not appear to be encrypted (missing PIPE-ENC header)",
+                    input_file
+                ));
+            }
+
+            // Get password if not provided
+            let password = match password {
+                Some(p) => p,
+                None => rpassword::prompt_password("Enter decryption password: ")?,
+            };
+
+            println!("Decrypting {} -> {}", input_file, output_file);
+
+            let input = std::fs::File::open(&input_file)?;
+            let output = std::fs::File::create(&output_file)?;
+            let file_size = input.metadata()?.len();
+
+            // Create progress bar
+            let pb = ProgressBar::new(file_size);
+            pb.set_style(
+                ProgressStyle::default_bar()
+                    .template("[{elapsed_precise}] {bar:40.cyan/blue} {bytes}/{total_bytes} {bytes_per_sec}")
+                    .unwrap()
+                    .progress_chars("=>-"),
+            );
+
+            let progress_callback = Box::new(move |bytes: usize| {
+                pb.inc(bytes as u64);
+            });
+
+            match crate::encryption::decrypt_file_with_password(
+                input,
+                output,
+                &password,
+                Some(progress_callback),
+            )
+            .await
+            {
+                Ok(_) => {
+                    println!("✅ File decrypted successfully!");
+                    println!("   Encrypted: {} ({} bytes)", input_file, file_size);
+                    println!(
+                        "   Decrypted: {} ({} bytes)",
+                        output_file,
+                        std::fs::metadata(&output_file)?.len()
+                    );
+                }
+                Err(e) => {
+                    // Clean up failed output file
+                    let _ = std::fs::remove_file(&output_file);
+                    return Err(anyhow!("Decryption failed: {}", e));
+                }
+            }
+        }
+
+        Commands::KeyGen {
+            name,
+            algorithm,
+            description,
+            output,
+        } => {
+            let algo = algorithm.as_deref().unwrap_or("aes256");
+
+            // Load or create keyring
+            let keyring_path = keyring::Keyring::default_path()?;
+            let mut keyring = keyring::Keyring::load_from_file(&keyring_path)?;
+
+            let key_name = match algo {
+                "aes256" => {
+                    println!("🔑 Generating AES-256 key...");
+                    keyring.generate_aes_key(name, description)?
+                }
+                "kyber1024" => {
+                    println!("🔐 Generating Kyber1024 keypair (post-quantum)...");
+                    keyring.generate_kyber_keypair(name, description)?
+                }
+                "dilithium5" => {
+                    println!("✍️  Generating Dilithium5 signing keypair (post-quantum)...");
+                    keyring.generate_dilithium_keypair(name, description)?
+                }
+                _ => {
+                    return Err(anyhow!(
+                        "Unknown algorithm: {}. Use: aes256, kyber1024, dilithium5",
+                        algo
+                    ))
+                }
+            };
+
+            if let Some(output_path) = output {
+                // Export to file
+                let password =
+                    rpassword::prompt_password("Enter password to protect exported key: ")?;
+                let confirm = rpassword::prompt_password("Confirm password: ")?;
+                if password != confirm {
+                    return Err(anyhow!("Passwords do not match"));
+                }
+
+                keyring::export_key(&keyring, &key_name, Path::new(&output_path), &password)?;
+                println!("✅ Key exported to: {}", output_path);
+
+                // Don't save to keyring if exporting
+                keyring.delete_key(&key_name)?;
+            } else {
+                // Save keyring
+                keyring.save_to_file(&keyring_path)?;
+                println!("✅ Key '{}' generated and saved to keyring", key_name);
+            }
+        }
+
+        Commands::KeyList => {
+            let keyring_path = keyring::Keyring::default_path()?;
+            let keyring = keyring::Keyring::load_from_file(&keyring_path)?;
+
+            let keys = keyring.list_keys();
+            if keys.is_empty() {
+                println!("No keys in keyring. Use 'pipe keygen' to create one.");
+            } else {
+                println!("🔑 Keys in keyring:\n");
+                for (name, key) in keys {
+                    println!("  Name: {}", name);
+                    println!("  Algorithm: {}", key.algorithm);
+                    println!(
+                        "  Created: {}",
+                        key.metadata.created_at.format("%Y-%m-%d %H:%M:%S")
+                    );
+                    if let Some(ref desc) = key.metadata.description {
+                        println!("  Description: {}", desc);
+                    }
+                    if key.metadata.usage_count > 0 {
+                        println!("  Used: {} times", key.metadata.usage_count);
+                        if let Some(last_used) = key.metadata.last_used {
+                            println!("  Last used: {}", last_used.format("%Y-%m-%d %H:%M:%S"));
+                        }
+                    }
+                    println!();
+                }
+            }
+        }
+
+        Commands::KeyDelete { key_name } => {
+            let keyring_path = keyring::Keyring::default_path()?;
+            let mut keyring = keyring::Keyring::load_from_file(&keyring_path)?;
+
+            keyring.delete_key(&key_name)?;
+            keyring.save_to_file(&keyring_path)?;
+
+            println!("✅ Key '{}' deleted from keyring", key_name);
+        }
+
+        Commands::KeyExport { key_name, output } => {
+            let keyring_path = keyring::Keyring::default_path()?;
+            let keyring = keyring::Keyring::load_from_file(&keyring_path)?;
+
+            let password = rpassword::prompt_password("Enter password to protect exported key: ")?;
+            let confirm = rpassword::prompt_password("Confirm password: ")?;
+            if password != confirm {
+                return Err(anyhow!("Passwords do not match"));
+            }
+
+            keyring::export_key(&keyring, &key_name, Path::new(&output), &password)?;
+            println!("✅ Key '{}' exported to: {}", key_name, output);
+        }
+
+        Commands::SignFile {
+            input_file,
+            signature_file,
+            key,
+        } => {
+            // Read file to sign
+            let data = std::fs::read(&input_file)?;
+
+            // Load key
+            let keyring_path = keyring::Keyring::default_path()?;
+            let mut keyring = keyring::Keyring::load_from_file(&keyring_path)?;
+
+            // Check if key exists and is correct type
+            let public_key = {
+                let stored_key = keyring
+                    .get_key(&key)
+                    .ok_or_else(|| anyhow!("Key '{}' not found in keyring", key))?;
+                if stored_key.algorithm != keyring::KeyAlgorithm::Dilithium5 {
+                    return Err(anyhow!(
+                        "Key '{}' is not a signing key (need Dilithium5)",
+                        key
+                    ));
+                }
+                stored_key.public_key.clone()
+            };
+
+            // Get key material
+            let password = rpassword::prompt_password("Enter keyring password: ")?;
+            let key_material = keyring.get_key_material(&key, &password)?;
+
+            // Sign the data
+            let signature =
+                quantum::sign_with_dilithium(&data, key_material.private_key.as_ref().unwrap())?;
+
+            // Save signature
+            std::fs::write(&signature_file, &signature)?;
+
+            // Also save public key alongside signature for verification
+            let pubkey_file = format!("{}.pubkey", signature_file);
+            if let Some(pubkey) = public_key.as_ref() {
+                std::fs::write(&pubkey_file, pubkey)?;
+                println!("✅ File signed successfully!");
+                println!("   Signature: {}", signature_file);
+                println!("   Public key: {}", pubkey_file);
+            } else {
+                println!("✅ File signed successfully!");
+                println!("   Signature: {}", signature_file);
+            }
+
+            // Update keyring with usage stats
+            keyring.save_to_file(&keyring_path)?;
+        }
+
+        Commands::VerifySignature {
+            input_file,
+            signature_file,
+            public_key,
+        } => {
+            // Read file and signature
+            let data = std::fs::read(&input_file)?;
+            let signature = std::fs::read(&signature_file)?;
+
+            // Read public key (either from file or find .pubkey file)
+            let pubkey_bytes = if std::path::Path::new(&public_key).exists() {
+                std::fs::read(&public_key)?
+            } else {
+                // Try to find .pubkey file alongside signature
+                let pubkey_file = format!("{}.pubkey", signature_file);
+                if std::path::Path::new(&pubkey_file).exists() {
+                    std::fs::read(&pubkey_file)?
+                } else {
+                    return Err(anyhow!("Public key file not found: {}", public_key));
+                }
+            };
+
+            // Verify signature
+            if quantum::verify_dilithium_signature(&data, &signature, &pubkey_bytes)? {
+                println!("✅ Signature verification PASSED");
+                println!(
+                    "   File '{}' was signed by the holder of the private key",
+                    input_file
+                );
+            } else {
+                println!("❌ Signature verification FAILED");
+                println!("   The file may have been modified or signed with a different key");
             }
         }
     }
