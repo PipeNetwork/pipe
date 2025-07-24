@@ -23,6 +23,10 @@ use tokio::sync::Mutex as TokioMutex;
 use tokio::sync::Semaphore;
 use walkdir::WalkDir;
 
+mod encryption;
+mod keyring;
+mod quantum;
+
 pub const MAX_RETRIES: u32 = 5;
 pub const INITIAL_RETRY_DELAY_MS: u64 = 1000;
 pub const MAX_RETRY_DELAY_MS: u64 = 10000;
@@ -99,7 +103,7 @@ pub struct VersionCheckResponse {
 pub struct Cli {
     #[arg(
         long,
-        default_value = "http://74.118.142.173:3333",
+        default_value = "https://us-west-00-firestarter.pipenetwork.com",
         global = true,
         help = "Base URL for the Pipe Network client API"
     )]
@@ -160,6 +164,14 @@ pub enum Commands {
             help = "Upload tier: normal, priority, premium, ultra, enterprise"
         )]
         tier: Option<String>,
+        #[arg(long, help = "Encrypt file with password before upload")]
+        encrypt: bool,
+        #[arg(long, help = "Password for encryption (will prompt if not provided)")]
+        password: Option<String>,
+        #[arg(long, help = "Use key from keyring or key file")]
+        key: Option<String>,
+        #[arg(long, help = "Use post-quantum encryption (kyber)")]
+        quantum: bool,
     },
 
     /// Download a single file
@@ -177,6 +189,13 @@ pub enum Commands {
 
         /// Required local file path to store the downloaded file
         output_path: String,
+
+        #[arg(long, help = "Decrypt file with password after download")]
+        decrypt: bool,
+        #[arg(long, help = "Password for decryption (will prompt if not provided)")]
+        password: Option<String>,
+        #[arg(long, help = "Use key from keyring or key file")]
+        key: Option<String>,
     },
 
     /// Delete a file
@@ -186,6 +205,80 @@ pub enum Commands {
         #[arg(long)]
         user_app_key: Option<String>,
         file_name: String,
+    },
+
+    /// Get information about a file (size, encryption status, etc.)
+    FileInfo {
+        #[arg(long)]
+        user_id: Option<String>,
+        #[arg(long)]
+        user_app_key: Option<String>,
+        file_name: String,
+    },
+
+    /// Encrypt a local file (without uploading)
+    EncryptLocal {
+        input_file: String,
+        output_file: String,
+        #[arg(long, help = "Password for encryption (will prompt if not provided)")]
+        password: Option<String>,
+    },
+
+    /// Decrypt a local file (without downloading)
+    DecryptLocal {
+        input_file: String,
+        output_file: String,
+        #[arg(long, help = "Password for decryption (will prompt if not provided)")]
+        password: Option<String>,
+    },
+
+    /// Generate a new encryption key
+    KeyGen {
+        #[arg(long, help = "Name for the key")]
+        name: Option<String>,
+        #[arg(long, help = "Algorithm: aes256, kyber1024, dilithium5")]
+        algorithm: Option<String>,
+        #[arg(long, help = "Description of the key")]
+        description: Option<String>,
+        #[arg(long, help = "Export to file instead of storing in keyring")]
+        output: Option<String>,
+    },
+
+    /// List all keys in the keyring
+    KeyList,
+
+    /// Delete a key from the keyring
+    KeyDelete {
+        /// Name or ID of the key to delete
+        key_name: String,
+    },
+
+    /// Export a key from the keyring
+    KeyExport {
+        /// Name or ID of the key to export
+        key_name: String,
+        /// Output file path
+        output: String,
+    },
+
+    /// Sign a file with Dilithium
+    SignFile {
+        /// File to sign
+        input_file: String,
+        /// Signature output file
+        signature_file: String,
+        #[arg(long, help = "Signing key name or path")]
+        key: String,
+    },
+
+    /// Verify a file signature
+    VerifySignature {
+        /// File to verify
+        input_file: String,
+        /// Signature file
+        signature_file: String,
+        #[arg(long, help = "Public key file or name")]
+        public_key: String,
     },
 
     /// Check SOL balance
@@ -268,6 +361,10 @@ pub enum Commands {
         tier: Option<String>,
         #[arg(long, help = "Skip files that were already uploaded successfully")]
         skip_uploaded: bool,
+        #[arg(long, help = "Encrypt all files with password before upload")]
+        encrypt: bool,
+        #[arg(long, help = "Password for encryption (will prompt if not provided)")]
+        password: Option<String>,
     },
 
     PriorityUploadDirectory {
@@ -558,7 +655,15 @@ impl ServiceDiscoveryCache {
             .await?;
 
         if resp.status().is_success() {
-            let discovery: ServiceDiscoveryResponse = resp.json().await?;
+            let mut discovery: ServiceDiscoveryResponse = resp.json().await?;
+
+            // Filter out localhost instances if we're not connecting to localhost
+            if !discovery_url.contains("localhost") && !discovery_url.contains("127.0.0.1") {
+                discovery.instances.retain(|instance| {
+                    !instance.endpoint_url.contains("localhost") && 
+                    !instance.endpoint_url.contains("127.0.0.1")
+                });
+            }
 
             let mut instances = self.instances.write().unwrap();
             *instances = discovery.instances;
@@ -1496,6 +1601,133 @@ struct DirectoryUploadProgress {
     progress_bar: Arc<ProgressBar>,
 }
 
+// Helper function to handle file download with optional decryption
+async fn download_file_with_decryption(
+    client: &Client,
+    base_url: &str,
+    creds: &SavedCredentials,
+    file_name: &str,
+    output_path: &str,
+    decrypt: bool,
+    password: Option<String>,
+) -> Result<()> {
+    let actual_file_name = if decrypt && !file_name.ends_with(".enc") {
+        format!("{}.enc", file_name)
+    } else {
+        file_name.to_string()
+    };
+
+    if decrypt {
+        // Download to temporary file first
+        let temp_path = format!("{}.tmp", output_path);
+        improved_download_file_with_auth(client, base_url, creds, &actual_file_name, &temp_path)
+            .await?;
+
+        // Get password if not provided
+        let password = match password {
+            Some(p) => p,
+            None => rpassword::prompt_password("Enter decryption password: ")?,
+        };
+
+        // Decrypt the file
+        let input_file = std::fs::File::open(&temp_path)?;
+        let output_file = std::fs::File::create(output_path)?;
+
+        println!("Decrypting to {}...", output_path);
+
+        match crate::encryption::decrypt_file_with_password(
+            input_file,
+            output_file,
+            &password,
+            None,
+        )
+        .await
+        {
+            Ok(_) => {
+                // Clean up temporary file
+                let _ = std::fs::remove_file(&temp_path);
+                Ok(())
+            }
+            Err(e) => {
+                // Clean up temporary file
+                let _ = std::fs::remove_file(&temp_path);
+                Err(anyhow!("Decryption failed: {}. Wrong password?", e))
+            }
+        }
+    } else {
+        // Regular download without decryption
+        improved_download_file_with_auth(client, base_url, creds, &actual_file_name, output_path)
+            .await
+    }
+}
+
+// Helper function to handle encrypted file upload
+async fn upload_file_with_encryption(
+    client: &Client,
+    file_path: &Path,
+    full_url: &str,
+    file_name_in_bucket: &str,
+    creds: &SavedCredentials,
+    encrypt: bool,
+    password: Option<String>,
+    shared_progress: Option<DirectoryUploadProgress>,
+) -> Result<(String, f64)> {
+    if encrypt {
+        // Get password if not provided
+        let password = match password {
+            Some(p) => p,
+            None => {
+                let password = rpassword::prompt_password("Enter encryption password: ")?;
+                let confirm = rpassword::prompt_password("Confirm encryption password: ")?;
+                if password != confirm {
+                    return Err(anyhow!("Passwords do not match"));
+                }
+                password
+            }
+        };
+
+        // Create a temporary encrypted file
+        let temp_path = file_path.with_extension("enc.tmp");
+
+        // Encrypt the file
+        let input_file = std::fs::File::open(file_path)?;
+        let output_file = std::fs::File::create(&temp_path)?;
+
+        println!("Encrypting {}...", file_path.display());
+
+        crate::encryption::encrypt_file_with_password(input_file, output_file, &password, None)
+            .await?;
+
+        // Upload the encrypted file
+        let remote_name = format!("{}.enc", file_name_in_bucket);
+        let result = upload_file_with_shared_progress(
+            client,
+            &temp_path,
+            &full_url.replace(file_name_in_bucket, &remote_name),
+            &remote_name,
+            creds,
+            shared_progress,
+        )
+        .await;
+
+        // Clean up temporary file
+        let _ = std::fs::remove_file(&temp_path);
+
+        result
+    } else {
+        // Regular upload without encryption
+        upload_file_with_shared_progress(
+            client,
+            file_path,
+            full_url,
+            file_name_in_bucket,
+            creds,
+            shared_progress,
+        )
+        .await
+    }
+}
+
 // Upload file with shared progress bar for directory uploads
 async fn upload_file_with_shared_progress(
     client: &Client,
@@ -1881,6 +2113,7 @@ pub async fn run_cli() -> Result<()> {
             | Commands::UploadFile { .. }
             | Commands::DownloadFile { .. }
             | Commands::DeleteFile { .. }
+            | Commands::FileInfo { .. }
             | Commands::CheckSol { .. }
             | Commands::CheckToken { .. }
             | Commands::SwapSolForPipe { .. }
@@ -2361,6 +2594,10 @@ pub async fn run_cli() -> Result<()> {
             file_name,
             epochs,
             tier,
+            encrypt,
+            password,
+            key: _,
+            quantum: _,
         } => {
             // Load credentials and check for JWT
             let mut creds = load_credentials_from_file()?.ok_or_else(|| {
@@ -2418,8 +2655,15 @@ pub async fn run_cli() -> Result<()> {
 
             // Use retry wrapper for single file upload
             let upload_result = upload_with_retry(&format!("upload of {}", file_path), || {
-                upload_file_with_shared_progress(
-                    &client, local_path, &url, &file_name, &creds, None,
+                upload_file_with_encryption(
+                    &client,
+                    local_path,
+                    &url,
+                    &file_name,
+                    &creds,
+                    encrypt,
+                    password.clone(),
+                    None,
                 )
             })
             .await;
@@ -2455,6 +2699,9 @@ pub async fn run_cli() -> Result<()> {
             user_app_key,
             file_name,
             output_path,
+            decrypt,
+            password,
+            key: _,
         } => {
             // Load credentials and check for JWT
             let mut creds = load_credentials_from_file()?.ok_or_else(|| {
@@ -2483,12 +2730,14 @@ pub async fn run_cli() -> Result<()> {
             )
             .await;
 
-            improved_download_file_with_auth(
+            download_file_with_decryption(
                 &client,
                 &selected_endpoint,
                 &creds,
                 &file_name,
                 &output_path,
+                decrypt,
+                password,
             )
             .await?;
         }
@@ -2561,6 +2810,41 @@ pub async fn run_cli() -> Result<()> {
                     text_body
                 ));
             }
+        }
+
+        Commands::FileInfo {
+            user_id: _,
+            user_app_key: _,
+            file_name,
+        } => {
+            println!("📄 File Information for '{}':", file_name);
+
+            // Check if file is encrypted based on extension
+            let is_encrypted = file_name.ends_with(".enc");
+            println!(
+                "   Encrypted: {}",
+                if is_encrypted {
+                    "Yes (AES-256-GCM)"
+                } else {
+                    "No"
+                }
+            );
+
+            if is_encrypted {
+                println!("\n💡 To download and decrypt this file:");
+                println!(
+                    "   pipe download-file {} output.file --decrypt",
+                    file_name.trim_end_matches(".enc")
+                );
+            } else {
+                println!("\n💡 To check if an encrypted version exists:");
+                println!("   pipe file-info {}.enc", file_name);
+            }
+
+            println!(
+                "\nNote: For detailed file metadata (size, upload date, etc.), the file listing"
+            );
+            println!("feature is not yet implemented in pipe-cli.");
         }
 
         Commands::CheckSol {
@@ -2983,6 +3267,8 @@ pub async fn run_cli() -> Result<()> {
             directory_path,
             tier,
             skip_uploaded,
+            encrypt,
+            password,
         } => {
             // Load credentials and check for JWT
             let mut creds = load_credentials_from_file()?.ok_or_else(|| {
@@ -3007,6 +3293,27 @@ pub async fn run_cli() -> Result<()> {
                     directory_path
                 ));
             }
+
+            // Get password once for all files if encryption is enabled
+            let encryption_password = if encrypt {
+                let pass = match password {
+                    Some(p) => p,
+                    None => {
+                        println!(
+                            "You will use the same password to encrypt all files in the directory."
+                        );
+                        let password = rpassword::prompt_password("Enter encryption password: ")?;
+                        let confirm = rpassword::prompt_password("Confirm encryption password: ")?;
+                        if password != confirm {
+                            return Err(anyhow!("Passwords do not match"));
+                        }
+                        password
+                    }
+                };
+                Some(pass)
+            } else {
+                None
+            };
 
             // Read upload log if skip_uploaded == true
             let mut previously_uploaded: HashSet<String> = HashSet::new();
@@ -3262,6 +3569,8 @@ pub async fn run_cli() -> Result<()> {
                         .unwrap_or_else(|| "untitled".to_string()),
                 };
                 let tier_clone = tier.clone();
+                let encrypt_clone = encrypt;
+                let password_clone = encryption_password.clone();
 
                 let handle = tokio::spawn(async move {
                     let _permit = sem_clone.acquire_owned().await.unwrap();
@@ -3298,12 +3607,14 @@ pub async fn run_cli() -> Result<()> {
                     // Use retry wrapper for directory uploads
                     let upload_result =
                         upload_with_retry(&format!("upload of {}", rel_path), || {
-                            upload_file_with_shared_progress(
+                            upload_file_with_encryption(
                                 &client_clone,
                                 &path,
                                 &url,
                                 &rel_path,
                                 &creds_clone,
+                                encrypt_clone,
+                                password_clone.clone(),
                                 Some(shared_progress_clone.clone()),
                             )
                         })
@@ -3989,6 +4300,320 @@ pub async fn run_cli() -> Result<()> {
                     status,
                     text_body
                 ));
+            }
+        }
+
+        Commands::EncryptLocal {
+            input_file,
+            output_file,
+            password,
+        } => {
+            // Get password if not provided
+            let password = match password {
+                Some(p) => p,
+                None => {
+                    let password = rpassword::prompt_password("Enter encryption password: ")?;
+                    let confirm = rpassword::prompt_password("Confirm encryption password: ")?;
+                    if password != confirm {
+                        return Err(anyhow!("Passwords do not match"));
+                    }
+                    password
+                }
+            };
+
+            println!("Encrypting {} -> {}", input_file, output_file);
+
+            let input = std::fs::File::open(&input_file)?;
+            let output = std::fs::File::create(&output_file)?;
+            let file_size = input.metadata()?.len();
+
+            // Create progress bar
+            let pb = ProgressBar::new(file_size);
+            pb.set_style(
+                ProgressStyle::default_bar()
+                    .template("[{elapsed_precise}] {bar:40.cyan/blue} {bytes}/{total_bytes} {bytes_per_sec}")
+                    .unwrap()
+                    .progress_chars("=>-"),
+            );
+
+            let progress_callback = Box::new(move |bytes: usize| {
+                pb.inc(bytes as u64);
+            });
+
+            crate::encryption::encrypt_file_with_password(
+                input,
+                output,
+                &password,
+                Some(progress_callback),
+            )
+            .await?;
+
+            println!("✅ File encrypted successfully!");
+            println!("   Original: {} ({} bytes)", input_file, file_size);
+            println!(
+                "   Encrypted: {} ({} bytes)",
+                output_file,
+                std::fs::metadata(&output_file)?.len()
+            );
+        }
+
+        Commands::DecryptLocal {
+            input_file,
+            output_file,
+            password,
+        } => {
+            // Check if input file has encryption header
+            let mut check_file = std::fs::File::open(&input_file)?;
+            if !crate::encryption::is_encrypted_file(&mut check_file)? {
+                return Err(anyhow!(
+                    "File '{}' does not appear to be encrypted (missing PIPE-ENC header)",
+                    input_file
+                ));
+            }
+
+            // Get password if not provided
+            let password = match password {
+                Some(p) => p,
+                None => rpassword::prompt_password("Enter decryption password: ")?,
+            };
+
+            println!("Decrypting {} -> {}", input_file, output_file);
+
+            let input = std::fs::File::open(&input_file)?;
+            let output = std::fs::File::create(&output_file)?;
+            let file_size = input.metadata()?.len();
+
+            // Create progress bar
+            let pb = ProgressBar::new(file_size);
+            pb.set_style(
+                ProgressStyle::default_bar()
+                    .template("[{elapsed_precise}] {bar:40.cyan/blue} {bytes}/{total_bytes} {bytes_per_sec}")
+                    .unwrap()
+                    .progress_chars("=>-"),
+            );
+
+            let progress_callback = Box::new(move |bytes: usize| {
+                pb.inc(bytes as u64);
+            });
+
+            match crate::encryption::decrypt_file_with_password(
+                input,
+                output,
+                &password,
+                Some(progress_callback),
+            )
+            .await
+            {
+                Ok(_) => {
+                    println!("✅ File decrypted successfully!");
+                    println!("   Encrypted: {} ({} bytes)", input_file, file_size);
+                    println!(
+                        "   Decrypted: {} ({} bytes)",
+                        output_file,
+                        std::fs::metadata(&output_file)?.len()
+                    );
+                }
+                Err(e) => {
+                    // Clean up failed output file
+                    let _ = std::fs::remove_file(&output_file);
+                    return Err(anyhow!("Decryption failed: {}", e));
+                }
+            }
+        }
+
+        Commands::KeyGen {
+            name,
+            algorithm,
+            description,
+            output,
+        } => {
+            let algo = algorithm.as_deref().unwrap_or("aes256");
+
+            // Load or create keyring
+            let keyring_path = keyring::Keyring::default_path()?;
+            let mut keyring = keyring::Keyring::load_from_file(&keyring_path)?;
+
+            let key_name = match algo {
+                "aes256" => {
+                    println!("🔑 Generating AES-256 key...");
+                    keyring.generate_aes_key(name, description)?
+                }
+                "kyber1024" => {
+                    println!("🔐 Generating Kyber1024 keypair (post-quantum)...");
+                    keyring.generate_kyber_keypair(name, description)?
+                }
+                "dilithium5" => {
+                    println!("✍️  Generating Dilithium5 signing keypair (post-quantum)...");
+                    keyring.generate_dilithium_keypair(name, description)?
+                }
+                _ => {
+                    return Err(anyhow!(
+                        "Unknown algorithm: {}. Use: aes256, kyber1024, dilithium5",
+                        algo
+                    ))
+                }
+            };
+
+            if let Some(output_path) = output {
+                // Export to file
+                let password =
+                    rpassword::prompt_password("Enter password to protect exported key: ")?;
+                let confirm = rpassword::prompt_password("Confirm password: ")?;
+                if password != confirm {
+                    return Err(anyhow!("Passwords do not match"));
+                }
+
+                keyring::export_key(&keyring, &key_name, Path::new(&output_path), &password)?;
+                println!("✅ Key exported to: {}", output_path);
+
+                // Don't save to keyring if exporting
+                keyring.delete_key(&key_name)?;
+            } else {
+                // Save keyring
+                keyring.save_to_file(&keyring_path)?;
+                println!("✅ Key '{}' generated and saved to keyring", key_name);
+            }
+        }
+
+        Commands::KeyList => {
+            let keyring_path = keyring::Keyring::default_path()?;
+            let keyring = keyring::Keyring::load_from_file(&keyring_path)?;
+
+            let keys = keyring.list_keys();
+            if keys.is_empty() {
+                println!("No keys in keyring. Use 'pipe keygen' to create one.");
+            } else {
+                println!("🔑 Keys in keyring:\n");
+                for (name, key) in keys {
+                    println!("  Name: {}", name);
+                    println!("  Algorithm: {}", key.algorithm);
+                    println!(
+                        "  Created: {}",
+                        key.metadata.created_at.format("%Y-%m-%d %H:%M:%S")
+                    );
+                    if let Some(ref desc) = key.metadata.description {
+                        println!("  Description: {}", desc);
+                    }
+                    if key.metadata.usage_count > 0 {
+                        println!("  Used: {} times", key.metadata.usage_count);
+                        if let Some(last_used) = key.metadata.last_used {
+                            println!("  Last used: {}", last_used.format("%Y-%m-%d %H:%M:%S"));
+                        }
+                    }
+                    println!();
+                }
+            }
+        }
+
+        Commands::KeyDelete { key_name } => {
+            let keyring_path = keyring::Keyring::default_path()?;
+            let mut keyring = keyring::Keyring::load_from_file(&keyring_path)?;
+
+            keyring.delete_key(&key_name)?;
+            keyring.save_to_file(&keyring_path)?;
+
+            println!("✅ Key '{}' deleted from keyring", key_name);
+        }
+
+        Commands::KeyExport { key_name, output } => {
+            let keyring_path = keyring::Keyring::default_path()?;
+            let keyring = keyring::Keyring::load_from_file(&keyring_path)?;
+
+            let password = rpassword::prompt_password("Enter password to protect exported key: ")?;
+            let confirm = rpassword::prompt_password("Confirm password: ")?;
+            if password != confirm {
+                return Err(anyhow!("Passwords do not match"));
+            }
+
+            keyring::export_key(&keyring, &key_name, Path::new(&output), &password)?;
+            println!("✅ Key '{}' exported to: {}", key_name, output);
+        }
+
+        Commands::SignFile {
+            input_file,
+            signature_file,
+            key,
+        } => {
+            // Read file to sign
+            let data = std::fs::read(&input_file)?;
+
+            // Load key
+            let keyring_path = keyring::Keyring::default_path()?;
+            let mut keyring = keyring::Keyring::load_from_file(&keyring_path)?;
+
+            // Check if key exists and is correct type
+            let public_key = {
+                let stored_key = keyring
+                    .get_key(&key)
+                    .ok_or_else(|| anyhow!("Key '{}' not found in keyring", key))?;
+                if stored_key.algorithm != keyring::KeyAlgorithm::Dilithium5 {
+                    return Err(anyhow!(
+                        "Key '{}' is not a signing key (need Dilithium5)",
+                        key
+                    ));
+                }
+                stored_key.public_key.clone()
+            };
+
+            // Get key material
+            let password = rpassword::prompt_password("Enter keyring password: ")?;
+            let key_material = keyring.get_key_material(&key, &password)?;
+
+            // Sign the data
+            let signature =
+                quantum::sign_with_dilithium(&data, key_material.private_key.as_ref().unwrap())?;
+
+            // Save signature
+            std::fs::write(&signature_file, &signature)?;
+
+            // Also save public key alongside signature for verification
+            let pubkey_file = format!("{}.pubkey", signature_file);
+            if let Some(pubkey) = public_key.as_ref() {
+                std::fs::write(&pubkey_file, pubkey)?;
+                println!("✅ File signed successfully!");
+                println!("   Signature: {}", signature_file);
+                println!("   Public key: {}", pubkey_file);
+            } else {
+                println!("✅ File signed successfully!");
+                println!("   Signature: {}", signature_file);
+            }
+
+            // Update keyring with usage stats
+            keyring.save_to_file(&keyring_path)?;
+        }
+
+        Commands::VerifySignature {
+            input_file,
+            signature_file,
+            public_key,
+        } => {
+            // Read file and signature
+            let data = std::fs::read(&input_file)?;
+            let signature = std::fs::read(&signature_file)?;
+
+            // Read public key (either from file or find .pubkey file)
+            let pubkey_bytes = if std::path::Path::new(&public_key).exists() {
+                std::fs::read(&public_key)?
+            } else {
+                // Try to find .pubkey file alongside signature
+                let pubkey_file = format!("{}.pubkey", signature_file);
+                if std::path::Path::new(&pubkey_file).exists() {
+                    std::fs::read(&pubkey_file)?
+                } else {
+                    return Err(anyhow!("Public key file not found: {}", public_key));
+                }
+            };
+
+            // Verify signature
+            if quantum::verify_dilithium_signature(&data, &signature, &pubkey_bytes)? {
+                println!("✅ Signature verification PASSED");
+                println!(
+                    "   File '{}' was signed by the holder of the private key",
+                    input_file
+                );
+            } else {
+                println!("❌ Signature verification FAILED");
+                println!("   The file may have been modified or signed with a different key");
             }
         }
     }
