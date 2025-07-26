@@ -224,47 +224,49 @@ impl Keyring {
     }
 
     /// Migrate a legacy keyring to use a user-defined password
-    pub fn migrate_from_legacy(&mut self, old_password: &str, new_password: &str) -> Result<()> {
-        if !self.legacy_mode {
-            return Err(anyhow!("Keyring is not in legacy mode"));
-        }
-
-        // Verify the old password (should be "keyring-protection")
-        if old_password != "keyring-protection" {
-            return Err(anyhow!("Invalid legacy password"));
-        }
-
-        // Re-encrypt all keys with the new password
-        let mut updated_keys = HashMap::new();
-        
-        for (name, stored_key) in self.keys.clone() {
-            // Decrypt with old password
-            let old_protection_key = derive_key_from_password(old_password, &stored_key.salt)?;
-            let decrypted = crate::encryption::decrypt_data(
-                &stored_key.encrypted_key,
-                &old_protection_key,
-                &stored_key.nonce,
-            )?;
-
-            // Re-encrypt with new password
-            let new_salt = generate_salt();
-            let new_protection_key = derive_key_from_password(new_password, &new_salt)?;
-            let (encrypted_key, nonce) = crate::encryption::encrypt_data(&decrypted, &new_protection_key)?;
-
-            let mut new_stored_key = stored_key;
-            new_stored_key.encrypted_key = encrypted_key;
-            new_stored_key.salt = new_salt;
-            new_stored_key.nonce = nonce;
-
-            updated_keys.insert(name, new_stored_key);
-        }
-
-        // Update keyring
-        self.keys = updated_keys;
-        self.initialize_password(new_password)?;
-        
-        Ok(())
+pub fn migrate_from_legacy(&mut self, old_password: &str, new_password: &str) -> Result<()> {
+    if !self.legacy_mode {
+        return Err(anyhow!("Keyring is not in legacy mode"));
     }
+
+    // Verify the old password (should be "keyring-protection")
+    if old_password != "keyring-protection" {
+        return Err(anyhow!("Invalid legacy password"));
+    }
+
+    // Re-encrypt all keys with the new password
+    let mut updated_keys = HashMap::new();
+
+    for (name, mut stored_key) in self.keys.clone() {
+        // Decrypt with old password
+        if stored_key.encrypted_key.len() < 16 {
+            return Err(anyhow!("Ciphertext too short for AES-GCM decryption"));
+        }
+        let old_protection_key = derive_key_from_password(old_password, &stored_key.salt)?;
+        let decrypted = crate::encryption::decrypt_data(
+            &stored_key.encrypted_key,
+            &old_protection_key,
+            &stored_key.nonce,
+        )?;
+
+        // Re-encrypt with new password
+        let new_salt = generate_salt();
+        let new_protection_key = derive_key_from_password(new_password, &new_salt)?;
+        let (encrypted_key, nonce) = crate::encryption::encrypt_data(&decrypted, &new_protection_key)?;
+
+        stored_key.encrypted_key = encrypted_key;
+        stored_key.salt = new_salt;
+        stored_key.nonce = nonce;
+
+        updated_keys.insert(name, stored_key);
+    }
+
+    // Update keyring
+    self.keys = updated_keys;
+    self.initialize_password(new_password)?;
+
+    Ok(())
+}
 
     /// Generate a new AES-256 key
     pub fn generate_aes_key(
@@ -439,6 +441,31 @@ impl Keyring {
 
         // Decrypt the key
         let protection_key = derive_key_from_password(&key_password, &stored_key.salt)?;
+
+        if stored_key.algorithm == KeyAlgorithm::KyberAes {
+            // For hybrid keys, we need to handle both Kyber and AES
+            let kyber_key = stored_key.public_key.as_ref()
+                .ok_or_else(|| anyhow!("Kyber public key not found"))?;
+            
+            let decrypted = crate::encryption::decrypt_data(
+                &stored_key.encrypted_key,
+                &protection_key,
+                &stored_key.nonce,
+            )?;
+
+            // Derive symmetric key from Kyber
+            let symmetric_key = crate::encryption::derive_symmetric_key_from_kyber(&decrypted, kyber_key)?;
+
+            return Ok(KeyMaterial {
+                symmetric_key: Some(symmetric_key),
+                private_key: None,
+                public_key: Some(kyber_key.clone()),
+            });
+        }
+        if stored_key.encrypted_key.len() < 16 {
+            return Err(anyhow!("Ciphertext too short for AES-GCM decryption"));
+        }
+
         let decrypted = crate::encryption::decrypt_data(
             &stored_key.encrypted_key,
             &protection_key,
@@ -512,6 +539,12 @@ pub fn export_key(
     // First decrypt with keyring password
     let key_password = keyring.get_key_password(keyring_password);
     let keyring_protection_key = derive_key_from_password(&key_password, &key.salt)?;
+
+    // Ensure the key is long enough for decryption
+    if key.encrypted_key.len() < 16 {
+        return Err(anyhow!("Ciphertext too short for AES-GCM decryption"));
+    }
+
     let decrypted =
         crate::encryption::decrypt_data(&key.encrypted_key, &keyring_protection_key, &key.nonce)?;
 
