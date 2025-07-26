@@ -128,27 +128,15 @@ impl EncryptedFileHeader {
 /// Derives an encryption key from a password using Argon2id
 pub fn derive_key_from_password(password: &str, salt: &[u8]) -> Result<EncryptionKey> {
     let argon2 = Argon2::default();
-    let salt_string =
-        SaltString::encode_b64(salt).map_err(|e| anyhow!("Failed to encode salt: {}", e))?;
-
-    let password_hash = argon2
-        .hash_password(password.as_bytes(), &salt_string)
-        .map_err(|e| anyhow!("Failed to hash password: {}", e))?;
-
-    let hash_bytes = password_hash
-        .hash
-        .ok_or_else(|| anyhow!("No hash generated"))?;
-    let hash_vec = hash_bytes.as_bytes();
-
-    if hash_vec.len() < KEY_SIZE {
-        return Err(anyhow!("Hash too short"));
-    }
-
     let mut key = [0u8; KEY_SIZE];
-    key.copy_from_slice(&hash_vec[..KEY_SIZE]);
+
+    argon2
+        .hash_password_into(password.as_bytes(), salt, &mut key)
+        .map_err(|e| anyhow!("Failed to derive key: {}", e))?;
 
     Ok(EncryptionKey { key })
 }
+
 
 /// Generates a random salt for password derivation
 pub fn generate_salt() -> [u8; SALT_SIZE] {
@@ -186,6 +174,19 @@ pub fn decrypt_data(
 
     Ok(plaintext)
 }
+
+/// Derive a 32-byte symmetric key from Kyber shared secret (or any input)
+pub fn derive_symmetric_key_from_kyber(shared_secret: &[u8], public_key: &[u8]) -> Result<[u8; 32]> {
+    use sha3::{Digest, Sha3_256};
+    let mut hasher = Sha3_256::new();
+    hasher.update(shared_secret);
+    hasher.update(public_key); // domain separation
+    let result = hasher.finalize();
+    let mut key = [0u8; 32];
+    key.copy_from_slice(&result[..32]);
+    Ok(key)
+}
+
 
 /// Encrypts a file with password-based encryption
 pub async fn encrypt_file_with_password<R: Read, W: Write>(
