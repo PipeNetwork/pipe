@@ -42,8 +42,8 @@ credentials.json
 .pipe-cli-uploads.json
 
 # Documentation build
-/docs/_build/
-/docs/_site/
+/docs/
+/examples/
 
 # Backup files
 *.backup

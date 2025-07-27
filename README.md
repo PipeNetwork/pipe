@@ -70,6 +70,9 @@ pipe download-file my-photo downloaded-photo.jpg
 
 # Upload a directory
 pipe upload-directory /path/to/folder --tier normal
+
+# Download a directory (NEW!)
+pipe download-directory folder ~/restored/folder --parallel 10
 ```
 
 ### Encryption (NEW!)
@@ -89,6 +92,36 @@ Enter decryption password: ****
 # Encrypt entire directory
 pipe upload-directory /sensitive/data --encrypt
 ```
+
+### Directory Downloads (NEW!)
+
+Pipe-cli now supports downloading entire directories based on your upload history:
+
+```bash
+# Download a directory you previously uploaded
+pipe download-directory photos/vacation ~/restored/vacation
+
+# Download with parallel transfers for speed
+pipe download-directory documents ~/Documents --parallel 10
+
+# See what would be downloaded without actually downloading
+pipe download-directory projects ~/restore --dry-run
+
+# Filter files with regex
+pipe download-directory logs ~/logs --filter ".*2024.*\.log$"
+
+# Download and decrypt
+pipe download-directory encrypted ~/decrypted --decrypt
+```
+
+#### Directory Download Features
+
+- **Upload Log Based**: Uses your local upload history (`~/.pipe-cli-uploads.json`)
+- **Preserves Structure**: Maintains original directory hierarchy
+- **Parallel Downloads**: Configurable concurrency (default: 5)
+- **Filtering**: Regex pattern matching for selective downloads
+- **Dry Run**: Preview what would be downloaded
+- **Decryption Support**: Decrypt files during download
 
 #### Encryption Features
 
