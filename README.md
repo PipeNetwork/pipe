@@ -305,7 +305,7 @@ pipe upload-file data.csv mydata --api https://us-east-00-firestarter.pipenetwor
 ### List User Files
 
 ```bash
-pipe list-user-files
+pipe list-uploads
 ```
 
 ### Check File Information
