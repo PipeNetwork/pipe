@@ -310,7 +310,7 @@ pipe upload-directory /large/dataset --skip-uploaded
 pipe upload-file data.csv mydata --api https://us-east-00-firestarter.pipenetwork.com
 ```
 
-### List User Files Uploads
+### User File Upload List
 
 ```bash
 pipe list-uploads
