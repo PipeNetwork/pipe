@@ -46,7 +46,7 @@ Quantum keys are stored locally in `~/.pipe-cli/quantum-keys/` as JSON files:
   "kyber_secret": [...],
   "dilithium_public": [...],
   "dilithium_secret": [...],
-  "file_id": "myfile.txt",
+  "file_id": "myfile",
   "created_at": "2024-07-25T00:00:00Z"
 }
 ```
