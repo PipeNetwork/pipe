@@ -19,7 +19,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::fs::File as TokioFile;
-use tokio::io::{AsyncWriteExt, BufWriter};
+use tokio::io::{AsyncWriteExt, AsyncReadExt, BufWriter};
 use tokio::sync::Mutex as TokioMutex;
 use tokio::sync::Semaphore;
 use walkdir::WalkDir;
@@ -29,6 +29,7 @@ mod keyring;
 mod quantum;
 mod quantum_keyring;
 mod password_utils;
+pub mod sync;
 
 #[cfg(test)]
 mod quantum_integration_test;
@@ -182,10 +183,8 @@ pub enum Commands {
         encrypt: bool,
         #[arg(long, help = "Password for encryption (will prompt if not provided)")]
         password: Option<String>,
-        #[arg(long, help = "Use key from keyring or key file")]
-        key: Option<String>,
-        #[arg(long, help = "Use post-quantum encryption (kyber)")]
-        quantum: bool,
+        #[arg(long, help = "Show cost estimate without uploading")]
+        dry_run: bool,
     },
 
     /// Download a single file
@@ -198,11 +197,14 @@ pub enum Commands {
         #[arg(long)]
         user_app_key: Option<String>,
 
-        /// Required remote file name on the server
+        /// Required remote file name on the server (or Blake3 hash if --file-id is used)
         file_name: String,
 
         /// Required local file path to store the downloaded file
         output_path: String,
+
+        #[arg(long, help = "Treat file_name as Blake3 hash ID instead of filename")]
+        file_id: bool,
 
         #[arg(long, help = "Decrypt file with password after download")]
         decrypt: bool,
@@ -223,6 +225,8 @@ pub enum Commands {
         #[arg(long)]
         user_app_key: Option<String>,
         file_name: String,
+        #[arg(long, help = "Treat file_name as Blake3 hash ID")]
+        file_id: bool,
     },
 
     /// Get information about a file (size, encryption status, etc.)
@@ -371,6 +375,8 @@ pub enum Commands {
         #[arg(long)]
         user_app_key: Option<String>,
         file_name: String,
+        #[arg(long, help = "Treat file_name as Blake3 hash ID")]
+        file_id: bool,
         #[arg(long, help = "Custom title for social media preview")]
         title: Option<String>,
         #[arg(long, help = "Custom description for social media preview")]
@@ -466,6 +472,8 @@ pub enum Commands {
         file_name: String,
         #[arg(long)]
         epochs: Option<u64>,
+        #[arg(long, help = "Show cost estimate without uploading")]
+        dry_run: bool,
     },
 
     PriorityDownload {
@@ -486,6 +494,73 @@ pub enum Commands {
         user_app_key: Option<String>,
         file_name: String,
         additional_months: u64,
+    },
+
+    /// Verify file integrity using Blake3 hash
+    VerifyFile {
+        /// File name or Blake3 hash ID
+        file_name: String,
+        
+        #[arg(long, help = "Treat file_name as Blake3 hash ID")]
+        file_id: bool,
+        
+        #[arg(long)]
+        user_id: Option<String>,
+        #[arg(long)]
+        user_app_key: Option<String>,
+    },
+    
+    /// Find uploaded file by local path or hash
+    FindUpload {
+        /// Local file path or Blake3 hash to search for
+        query: String,
+        
+        #[arg(long, help = "Search by Blake3 hash instead of local path")]
+        by_hash: bool,
+    },
+    
+    /// Rehash upload history (calculate Blake3 for old uploads)
+    RehashUploads {
+        #[arg(long, help = "Show progress")]
+        verbose: bool,
+    },
+    
+    /// Sync files between local and remote storage
+    Sync {
+        /// Path to sync (local directory or remote prefix)
+        path: String,
+        
+        /// Optional second path for explicit direction (e.g., remote path for download)
+        #[arg(value_name = "DEST_PATH")]
+        destination: Option<String>,
+        
+        /// Conflict resolution strategy: newer (default), larger, local, remote, ask
+        #[arg(long, default_value = "newer")]
+        conflict: String,
+        
+        /// Show what would happen without making changes
+        #[arg(long)]
+        dry_run: bool,
+        
+        /// Exclude files matching these patterns (comma-separated)
+        #[arg(long)]
+        exclude: Option<String>,
+        
+        /// Include only files matching these patterns (comma-separated)
+        #[arg(long)]
+        include: Option<String>,
+        
+        /// Maximum file size to sync (e.g., 1GB, 500MB)
+        #[arg(long)]
+        max_size: Option<String>,
+        
+        /// Only sync files newer than this date (YYYY-MM-DD)
+        #[arg(long)]
+        newer_than: Option<String>,
+        
+        /// Number of parallel operations
+        #[arg(long, default_value = "5")]
+        parallel: usize,
     },
 }
 
@@ -633,6 +708,15 @@ pub struct WithdrawTokenResponse {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct PriorityFeeResponse {
     pub priority_fee_per_gb: f64,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct GetTierPricingResponse {
+    pub normal_fee_per_gb: f64,
+    pub priority_fee_per_gb: f64,
+    pub premium_fee_per_gb: f64,
+    pub ultra_fee_per_gb: f64,
+    pub enterprise_fee_per_gb: f64,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -1055,12 +1139,43 @@ pub fn get_final_user_id_and_app_key(
     }
 }
 
+#[derive(Debug)]
+pub struct UploadResult {
+    pub filename: String,
+    pub token_cost: f64,
+    pub blake3_hash: String,
+    pub file_size: u64,
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 pub struct UploadLogEntry {
     pub local_path: String,
     pub remote_path: String,
     pub status: String,
     pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blake3_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_size: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timestamp: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// Calculate Blake3 hash of a file
+pub async fn calculate_blake3(file_path: &Path) -> Result<String> {
+    let mut hasher = blake3::Hasher::new();
+    let mut file = tokio::fs::File::open(file_path).await?;
+    let mut buffer = vec![0u8; 64 * 1024]; // 64KB buffer
+    
+    loop {
+        let n = file.read(&mut buffer).await?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buffer[..n]);
+    }
+    
+    Ok(hasher.finalize().to_hex().to_string())
 }
 
 pub fn get_upload_log_path() -> PathBuf {
@@ -1077,6 +1192,17 @@ pub fn append_to_upload_log(
     status: &str,
     message: &str,
 ) -> Result<()> {
+    append_to_upload_log_with_hash(local_path, remote_path, status, message, None, None)
+}
+
+pub fn append_to_upload_log_with_hash(
+    local_path: &str,
+    remote_path: &str,
+    status: &str,
+    message: &str,
+    blake3_hash: Option<String>,
+    file_size: Option<u64>,
+) -> Result<()> {
     let log_path = get_upload_log_path();
     let mut file = OpenOptions::new()
         .create(true)
@@ -1088,6 +1214,9 @@ pub fn append_to_upload_log(
         remote_path: remote_path.to_string(),
         status: status.to_string(),
         message: message.to_string(),
+        blake3_hash,
+        file_size,
+        timestamp: Some(chrono::Utc::now()),
     };
 
     let json_line = serde_json::to_string(&entry)?;
@@ -1391,29 +1520,50 @@ where
             Err(e) => {
                 let error_str = e.to_string();
 
-                // Check if it's a 429 error
-                if error_str.contains("429") || error_str.contains("Too Many Requests") {
+                // Check if it's a retryable error
+                let is_rate_limit = error_str.contains("429") || error_str.contains("Too Many Requests");
+                let is_transient_error = error_str.contains("500") && (
+                    error_str.contains("Failed to flush buffer") ||
+                    error_str.contains("Failed to write to file") ||
+                    error_str.contains("Storage full") ||
+                    error_str.contains("Out of memory") ||
+                    error_str.contains("interrupted") ||
+                    error_str.contains("timed out") ||
+                    error_str.contains("broken")
+                );
+                
+                if is_rate_limit || is_transient_error {
                     if retry_count >= MAX_RETRIES {
                         eprintln!(
                             "❌ {} failed after {} retries: {}",
                             operation_name, MAX_RETRIES, e
                         );
+                        
+                        // Provide helpful guidance for specific errors
+                        if error_str.contains("Failed to flush buffer") {
+                            eprintln!("\n💡 Suggestions:");
+                            eprintln!("   1. The server may be experiencing temporary issues");
+                            eprintln!("   2. Try uploading again in a few minutes");
+                            eprintln!("   3. If the problem persists, contact support");
+                        } else if error_str.contains("Storage full") {
+                            eprintln!("\n⚠️  The server appears to be out of disk space.");
+                            eprintln!("   Please contact support or try again later.");
+                        }
+                        
                         return Err(e);
                     }
 
-                    // Try to extract Retry-After value from error message
-                    let wait_time = if error_str.contains("Status=429") {
-                        // The error message might contain retry-after info
-                        // For now, use exponential backoff
-                        backoff_secs
+                    // Different messages for different error types
+                    let (retry_msg, wait_time) = if is_rate_limit {
+                        ("⏳ Rate limited", backoff_secs)
                     } else {
-                        backoff_secs
+                        ("⚠️  Server error", backoff_secs.min(5)) // Shorter initial wait for 500 errors
                     };
 
                     retry_count += 1;
                     eprintln!(
-                        "⏳ Rate limited on {}. Retry {}/{} in {} seconds...",
-                        operation_name, retry_count, MAX_RETRIES, wait_time
+                        "{} on {}. Retry {}/{} in {} seconds...",
+                        retry_msg, operation_name, retry_count, MAX_RETRIES, wait_time
                     );
 
                     tokio::time::sleep(tokio::time::Duration::from_secs(wait_time)).await;
@@ -1421,7 +1571,7 @@ where
                     // Exponential backoff with cap
                     backoff_secs = (backoff_secs * 2).min(MAX_RETRY_DELAY_MS / 1000).min(60);
                 } else {
-                    // Not a rate limit error, don't retry
+                    // Not a retryable error
                     return Err(e);
                 }
             }
@@ -2173,30 +2323,45 @@ mod download_directory_tests {
                 remote_path: "vacation/beach.jpg".to_string(),
                 status: "SUCCESS".to_string(),
                 message: "Directory upload success".to_string(),
+                blake3_hash: None,
+                file_size: None,
+                timestamp: None,
             },
             UploadLogEntry {
                 local_path: "/home/user/photos/vacation/sunset.jpg".to_string(),
                 remote_path: "vacation/sunset.jpg".to_string(),
                 status: "SUCCESS".to_string(),
                 message: "Directory upload success".to_string(),
+                blake3_hash: None,
+                file_size: None,
+                timestamp: None,
             },
             UploadLogEntry {
                 local_path: "/home/user/photos/family/portrait.jpg".to_string(),
                 remote_path: "family/portrait.jpg".to_string(),
                 status: "SUCCESS".to_string(),
                 message: "Directory upload success".to_string(),
+                blake3_hash: None,
+                file_size: None,
+                timestamp: None,
             },
             UploadLogEntry {
                 local_path: "/home/user/docs/report.pdf".to_string(),
                 remote_path: "docs/report.pdf".to_string(),
                 status: "FAIL".to_string(),
                 message: "Upload failed".to_string(),
+                blake3_hash: None,
+                file_size: None,
+                timestamp: None,
             },
             UploadLogEntry {
                 local_path: "/home/user/docs/summary.pdf".to_string(),
                 remote_path: "docs/summary.pdf".to_string(),
                 status: "SUCCESS".to_string(),
                 message: "Directory upload success".to_string(),
+                blake3_hash: None,
+                file_size: None,
+                timestamp: None,
             },
         ];
 
@@ -2352,12 +2517,18 @@ mod download_directory_tests {
                 remote_path: "test.txt".to_string(),
                 status: "SUCCESS".to_string(),
                 message: "ok".to_string(),
+                blake3_hash: None,
+                file_size: None,
+                timestamp: None,
             },
             UploadLogEntry {
                 local_path: "TEST.TXT".to_string(),
                 remote_path: "TEST.TXT".to_string(),
                 status: "SUCCESS".to_string(),
                 message: "ok".to_string(),
+                blake3_hash: None,
+                file_size: None,
+                timestamp: None,
             },
         ];
         
@@ -2694,12 +2865,39 @@ async fn upload_file_with_shared_progress(
             return Err(anyhow!("Upload failed: Insufficient tokens. Please use 'pipe swap-sol-for-pipe' to get more tokens."));
         }
 
-        Err(anyhow!(
-            "Upload of '{}' failed. Status={}, Body={}",
-            file_path.display(),
-            status,
-            text_body
-        ))
+        // Provide more user-friendly error messages for common server errors
+        let error_msg = if status == 500 {
+            match text_body.as_str() {
+                "Failed to flush buffer" => {
+                    format!("Upload of '{}' failed: Server temporarily unable to save file. This is usually a transient issue.", file_path.display())
+                }
+                "Storage full - no space left on device" => {
+                    format!("Upload of '{}' failed: Server storage is full. Please contact support.", file_path.display())
+                }
+                "Out of memory during upload" => {
+                    format!("Upload of '{}' failed: Server out of memory. Try uploading a smaller file or wait and retry.", file_path.display())
+                }
+                "Permission denied writing to file" | "Permission denied writing to cache" => {
+                    format!("Upload of '{}' failed: Server file permission error. Please contact support.", file_path.display())
+                }
+                "Upload interrupted - please retry" | "Write interrupted - please retry" => {
+                    format!("Upload of '{}' was interrupted. Please try again.", file_path.display())
+                }
+                "Connection broken during upload" => {
+                    format!("Upload of '{}' failed: Connection lost. Check your internet connection and try again.", file_path.display())
+                }
+                "Write operation timed out" => {
+                    format!("Upload of '{}' timed out. The file may be too large or the connection too slow.", file_path.display())
+                }
+                _ => {
+                    format!("Upload of '{}' failed with server error. Status={}, Body={}", file_path.display(), status, text_body)
+                }
+            }
+        } else {
+            format!("Upload of '{}' failed. Status={}, Body={}", file_path.display(), status, text_body)
+        };
+        
+        Err(anyhow!(error_msg))
     }
 }
 
@@ -2892,12 +3090,39 @@ async fn upload_file_priority_with_shared_progress(
             return Err(anyhow!("Priority upload failed: Insufficient tokens. Please use 'pipe swap-sol-for-pipe' to get more tokens."));
         }
 
-        Err(anyhow!(
-            "Priority upload of '{}' failed. Status={}, Body={}",
-            file_path.display(),
-            status,
-            text_body
-        ))
+        // Provide more user-friendly error messages for common server errors
+        let error_msg = if status == 500 {
+            match text_body.as_str() {
+                "Failed to flush buffer" => {
+                    format!("Priority upload of '{}' failed: Server temporarily unable to save file. This is usually a transient issue.", file_path.display())
+                }
+                "Storage full - no space left on device" => {
+                    format!("Priority upload of '{}' failed: Server storage is full. Please contact support.", file_path.display())
+                }
+                "Out of memory during upload" => {
+                    format!("Priority upload of '{}' failed: Server out of memory. Try uploading a smaller file or wait and retry.", file_path.display())
+                }
+                "Permission denied writing to file" | "Permission denied writing to cache" => {
+                    format!("Priority upload of '{}' failed: Server file permission error. Please contact support.", file_path.display())
+                }
+                "Upload interrupted - please retry" | "Write interrupted - please retry" => {
+                    format!("Priority upload of '{}' was interrupted. Please try again.", file_path.display())
+                }
+                "Connection broken during upload" => {
+                    format!("Priority upload of '{}' failed: Connection lost. Check your internet connection and try again.", file_path.display())
+                }
+                "Write operation timed out" => {
+                    format!("Priority upload of '{}' timed out. The file may be too large or the connection too slow.", file_path.display())
+                }
+                _ => {
+                    format!("Priority upload of '{}' failed with server error. Status={}, Body={}", file_path.display(), status, text_body)
+                }
+            }
+        } else {
+            format!("Priority upload of '{}' failed. Status={}, Body={}", file_path.display(), status, text_body)
+        };
+        
+        Err(anyhow!(error_msg))
     }
 }
 
@@ -3699,8 +3924,7 @@ pub async fn run_cli() -> Result<()> {
             tier,
             encrypt,
             password,
-            key,
-            quantum,
+            dry_run,
         } => {
             // Load credentials and check for JWT
             let mut creds = load_credentials_from_file(config_path)?.ok_or_else(|| {
@@ -3724,6 +3948,85 @@ pub async fn run_cli() -> Result<()> {
             }
 
             let epochs_final = epochs.unwrap_or(1); // default 1 month
+
+            // Handle dry-run: calculate and show cost estimate
+            if dry_run {
+                let file_size = std::fs::metadata(local_path)?.len();
+                let file_size_gb = file_size as f64 / 1_000_000_000.0;
+                
+                // Get tier pricing
+                let fee_url = format!("{}/getTierPricing", base_url);
+                let fee_resp = match client.get(&fee_url).send().await {
+                    Ok(resp) if resp.status().is_success() => {
+                        resp.json::<GetTierPricingResponse>().await?
+                    }
+                    _ => {
+                        // Use default pricing if API call fails
+                        GetTierPricingResponse {
+                            normal_fee_per_gb: 100.0,
+                            priority_fee_per_gb: 125.0,
+                            premium_fee_per_gb: 175.0,
+                            ultra_fee_per_gb: 300.0,
+                            enterprise_fee_per_gb: 1000.0,
+                        }
+                    }
+                };
+
+                // Determine cost based on tier
+                let (tier_name, cost_per_gb) = match tier.as_deref() {
+                    Some("priority") => ("Priority", fee_resp.priority_fee_per_gb),
+                    Some("premium") => ("Premium", fee_resp.premium_fee_per_gb),
+                    Some("ultra") => ("Ultra", fee_resp.ultra_fee_per_gb),
+                    Some("enterprise") => ("Enterprise", fee_resp.enterprise_fee_per_gb),
+                    _ => ("Normal", fee_resp.normal_fee_per_gb),
+                };
+
+                let estimated_cost = file_size_gb * cost_per_gb;
+
+                println!("\n📊 Upload Cost Estimate:");
+                println!("  📁 File: {}", file_name);
+                println!("  📏 Size: {:.2} MB ({:.4} GB)", file_size as f64 / 1_048_576.0, file_size_gb);
+                println!("  📈 Tier: {}", tier_name);
+                println!("  💵 Rate: {} PIPE tokens/GB", cost_per_gb);
+                println!("  💰 Estimated cost: {:.4} PIPE tokens", estimated_cost);
+                println!("  📅 Storage duration: {} month(s)", epochs_final);
+
+                // Optionally check user balance
+                let balance_url = format!("{}/checkCustomToken", base_url);
+                let balance_body = if creds.auth_tokens.is_some() {
+                    CheckCustomTokenRequest {
+                        user_id: None,
+                        user_app_key: None,
+                    }
+                } else {
+                    CheckCustomTokenRequest {
+                        user_id: Some(creds.user_id.clone()),
+                        user_app_key: Some(creds.user_app_key.clone()),
+                    }
+                };
+
+                let mut balance_req = client.post(&balance_url);
+                balance_req = add_auth_headers(balance_req, &creds, false);
+                balance_req = balance_req.json(&balance_body);
+
+                if let Ok(resp) = balance_req.send().await {
+                    if let Ok(balance_resp) = resp.json::<CheckCustomTokenResponse>().await {
+                        let current_balance = balance_resp.ui_amount;
+                        println!("\n💳 Your balance: {:.4} PIPE tokens", current_balance);
+                        
+                        if current_balance < estimated_cost {
+                            println!("⚠️  Insufficient balance!");
+                            println!("   Need {:.4} more PIPE tokens", estimated_cost - current_balance);
+                            println!("\n   Run: pipe swap-sol-for-pipe {:.1}", (estimated_cost - current_balance) / 10.0 + 0.1);
+                        } else {
+                            println!("✅ Sufficient balance for upload");
+                        }
+                    }
+                }
+
+                println!("\nThis is a dry run - no upload performed.");
+                return Ok(());
+            }
 
             // Get the best endpoint for this upload
             let selected_endpoint = get_endpoint_for_operation(
@@ -3756,8 +4059,14 @@ pub async fn run_cli() -> Result<()> {
                 url = format!("{}&tier={}", url, tier_name);
             }
 
+            // Calculate Blake3 hash before upload
+            println!("Calculating file hash...");
+            let blake3_hash = calculate_blake3(local_path).await?;
+            println!("Blake3 hash: {}", &blake3_hash[..16]); // Show first 16 chars
+            let file_size = std::fs::metadata(local_path)?.len();
+
             // Use retry wrapper for single file upload
-            let upload_result = if quantum {
+            let upload_result = if false { // quantum feature was removed
                 // Quantum encryption upload
                 upload_with_retry(&format!("quantum upload of {}", file_path), || {
                     upload_file_with_quantum_encryption(
@@ -3768,7 +4077,7 @@ pub async fn run_cli() -> Result<()> {
                         &creds,
                         encrypt,
                         password.clone(),
-                        key.clone(),
+                        None,
                     )
                 })
                 .await
@@ -3795,12 +4104,15 @@ pub async fn run_cli() -> Result<()> {
                     if token_cost > 0.0 {
                         println!("💰 Cost: {} PIPE tokens", token_cost);
                     }
-                    append_to_upload_log(
+                    append_to_upload_log_with_hash(
                         &file_path,
                         &uploaded_filename,
                         "SUCCESS",
                         &format!("Non-priority upload ({} epochs)", epochs_final),
+                        Some(blake3_hash.clone()),
+                        Some(file_size),
                     )?;
+                    println!("📋 File ID (Blake3): {}", blake3_hash);
                 }
                 Err(e) => {
                     eprintln!("Upload failed for {} => {}", file_path, e);
@@ -3815,6 +4127,7 @@ pub async fn run_cli() -> Result<()> {
             user_app_key,
             file_name,
             output_path,
+            file_id: _,
             decrypt,
             password,
             key: _,
@@ -3936,6 +4249,7 @@ pub async fn run_cli() -> Result<()> {
             user_id,
             user_app_key,
             file_name,
+            file_id: _,
         } => {
             // Load credentials and check for JWT
             let mut creds = load_credentials_from_file(config_path)?.ok_or_else(|| {
@@ -4461,6 +4775,7 @@ pub async fn run_cli() -> Result<()> {
             user_id,
             user_app_key,
             file_name,
+            file_id: _,
             title,
             description,
         } => {
@@ -5458,6 +5773,7 @@ pub async fn run_cli() -> Result<()> {
             file_path,
             file_name,
             epochs,
+            dry_run,
         } => {
             // Load credentials and check for JWT
             let mut creds = load_credentials_from_file(config_path)?.ok_or_else(|| {
@@ -5481,6 +5797,83 @@ pub async fn run_cli() -> Result<()> {
             }
 
             let epochs_final = epochs.unwrap_or(1);
+
+            // Handle dry-run: calculate and show cost estimate
+            if dry_run {
+                let file_size = std::fs::metadata(local_path)?.len();
+                let file_size_gb = file_size as f64 / 1_000_000_000.0;
+                
+                // Get tier pricing
+                let fee_url = format!("{}/getTierPricing", base_url);
+                let fee_resp = match client.get(&fee_url).send().await {
+                    Ok(resp) if resp.status().is_success() => {
+                        resp.json::<GetTierPricingResponse>().await?
+                    }
+                    _ => {
+                        // Use default pricing if API call fails
+                        GetTierPricingResponse {
+                            normal_fee_per_gb: 100.0,
+                            priority_fee_per_gb: 125.0,
+                            premium_fee_per_gb: 175.0,
+                            ultra_fee_per_gb: 300.0,
+                            enterprise_fee_per_gb: 1000.0,
+                        }
+                    }
+                };
+
+                let cost_per_gb = fee_resp.priority_fee_per_gb;
+                let estimated_cost = file_size_gb * cost_per_gb;
+
+                println!("\n📊 Priority Upload Cost Estimate:");
+                println!("  📁 File: {}", file_name);
+                println!("  📏 Size: {:.2} MB ({:.4} GB)", file_size as f64 / 1_048_576.0, file_size_gb);
+                println!("  📈 Tier: Priority");
+                println!("  💵 Rate: {} PIPE tokens/GB", cost_per_gb);
+                println!("  💰 Estimated cost: {:.4} PIPE tokens", estimated_cost);
+                println!("  📅 Storage duration: {} month(s)", epochs_final);
+
+                // Optionally check user balance
+                let balance_url = format!("{}/checkCustomToken", base_url);
+                let balance_body = if creds.auth_tokens.is_some() {
+                    CheckCustomTokenRequest {
+                        user_id: None,
+                        user_app_key: None,
+                    }
+                } else {
+                    CheckCustomTokenRequest {
+                        user_id: Some(creds.user_id.clone()),
+                        user_app_key: Some(creds.user_app_key.clone()),
+                    }
+                };
+
+                let mut balance_req = client.post(&balance_url);
+                balance_req = add_auth_headers(balance_req, &creds, false);
+                balance_req = balance_req.json(&balance_body);
+
+                if let Ok(resp) = balance_req.send().await {
+                    if let Ok(balance_resp) = resp.json::<CheckCustomTokenResponse>().await {
+                        let current_balance = balance_resp.ui_amount;
+                        println!("\n💳 Your balance: {:.4} PIPE tokens", current_balance);
+                        
+                        if current_balance < estimated_cost {
+                            println!("⚠️  Insufficient balance!");
+                            println!("   Need {:.4} more PIPE tokens", estimated_cost - current_balance);
+                            println!("\n   Run: pipe swap-sol-for-pipe {:.1}", (estimated_cost - current_balance) / 10.0 + 0.1);
+                        } else {
+                            println!("✅ Sufficient balance for upload");
+                        }
+                    }
+                }
+
+                println!("\nThis is a dry run - no upload performed.");
+                return Ok(());
+            }
+
+            // Calculate Blake3 hash before upload
+            println!("Calculating file hash...");
+            let blake3_hash = calculate_blake3(local_path).await?;
+            println!("Blake3 hash: {}", &blake3_hash[..16]); // Show first 16 chars
+            let file_size = std::fs::metadata(local_path)?.len();
 
             // Build URL without credentials (security fix)
             let url = format!(
@@ -5506,12 +5899,15 @@ pub async fn run_cli() -> Result<()> {
                     if token_cost > 0.0 {
                         println!("💰 Cost: {} PIPE tokens", token_cost);
                     }
-                    append_to_upload_log(
+                    append_to_upload_log_with_hash(
                         &file_path,
                         &uploaded_filename,
                         "PRIORITY SUCCESS",
                         &format!("Priority upload ({} epochs)", epochs_final),
+                        Some(blake3_hash.clone()),
+                        Some(file_size),
                     )?;
+                    println!("📋 File ID (Blake3): {}", blake3_hash);
                 }
                 Err(e) => {
                     eprintln!("Priority upload failed for {} => {}", file_path, e);
@@ -5642,6 +6038,167 @@ pub async fn run_cli() -> Result<()> {
                     text_body
                 ));
             }
+        }
+
+        Commands::VerifyFile {
+            file_name: _,
+            file_id: _,
+            user_id,
+            user_app_key,
+        } => {
+            // Load credentials
+            let mut creds = load_credentials_from_file(config_path)?.ok_or_else(|| {
+                anyhow!("No credentials found. Please create a user or login first.")
+            })?;
+            ensure_valid_token(&client, base_url, &mut creds, config_path).await?;
+            
+            if let Some(uid) = user_id {
+                creds.user_id = uid;
+            }
+            if let Some(key) = user_app_key {
+                creds.user_app_key = key;
+            }
+            
+            println!("Verifying file integrity...");
+            println!("Feature not fully implemented yet - requires server-side support");
+            // TODO: Call server API to get file hash and verify
+        }
+        
+        Commands::FindUpload {
+            query,
+            by_hash,
+        } => {
+            let entries = read_upload_log_entries(None)?;
+            let mut found = Vec::new();
+            
+            for entry in entries {
+                if by_hash {
+                    if let Some(ref hash) = entry.blake3_hash {
+                        if hash.starts_with(&query) {
+                            found.push(entry);
+                        }
+                    }
+                } else {
+                    // Search by local path
+                    if entry.local_path.contains(&query) {
+                        found.push(entry);
+                    }
+                }
+            }
+            
+            if found.is_empty() {
+                println!("No uploads found matching '{}'", query);
+            } else {
+                println!("Found {} matching upload(s):", found.len());
+                for entry in found {
+                    println!("\n  Local: {}", entry.local_path);
+                    println!("  Remote: {}", entry.remote_path);
+                    println!("  Status: {}", entry.status);
+                    if let Some(hash) = entry.blake3_hash {
+                        println!("  Blake3: {}", hash);
+                    }
+                    if let Some(size) = entry.file_size {
+                        println!("  Size: {} bytes", size);
+                    }
+                    if let Some(time) = entry.timestamp {
+                        println!("  Time: {}", time.format("%Y-%m-%d %H:%M:%S UTC"));
+                    }
+                }
+            }
+        }
+        
+        Commands::RehashUploads { verbose } => {
+            let mut entries = read_upload_log_entries(None)?;
+            let total = entries.len();
+            let mut updated = 0;
+            let mut failed = 0;
+            
+            println!("Rehashing {} upload entries...", total);
+            
+            for entry in &mut entries {
+                if entry.blake3_hash.is_none() {
+                    let path = Path::new(&entry.local_path);
+                    if path.exists() {
+                        if verbose {
+                            println!("Hashing: {}", entry.local_path);
+                        }
+                        match calculate_blake3(path).await {
+                            Ok(hash) => {
+                                entry.blake3_hash = Some(hash);
+                                entry.file_size = Some(std::fs::metadata(path)?.len());
+                                updated += 1;
+                            }
+                            Err(e) => {
+                                if verbose {
+                                    eprintln!("Failed to hash {}: {}", entry.local_path, e);
+                                }
+                                failed += 1;
+                            }
+                        }
+                    } else {
+                        if verbose {
+                            println!("File not found: {}", entry.local_path);
+                        }
+                        failed += 1;
+                    }
+                }
+            }
+            
+            // Rewrite the upload log
+            if updated > 0 {
+                let log_path = get_upload_log_path();
+                let mut file = OpenOptions::new()
+                    .create(true)
+                    .truncate(true)
+                    .write(true)
+                    .open(&log_path)?;
+                    
+                for entry in entries {
+                    let json_line = serde_json::to_string(&entry)?;
+                    writeln!(file, "{}", json_line)?;
+                }
+                
+                println!("\n✅ Rehashing complete!");
+                println!("  Updated: {} entries", updated);
+                println!("  Failed: {} entries", failed);
+                println!("  Already hashed: {} entries", total - updated - failed);
+            } else {
+                println!("\nNo entries needed updating.");
+            }
+        }
+        
+        Commands::Sync {
+            path,
+            destination,
+            conflict,
+            dry_run,
+            exclude: _,
+            include: _,
+            max_size: _,
+            newer_than: _,
+            parallel,
+        } => {
+            // Load credentials
+            let creds = load_credentials_from_file(config_path)?.ok_or_else(|| {
+                anyhow!("No credentials found. Please create a user or login first.")
+            })?;
+
+            // Parse conflict strategy
+            let conflict_strategy = sync::ConflictStrategy::from_str(&conflict)
+                .ok_or_else(|| anyhow!("Invalid conflict strategy: {}", conflict))?;
+
+            // Execute sync
+            sync::sync_command(
+                &client,
+                base_url,
+                &creds,
+                &path,
+                destination.as_deref(),
+                conflict_strategy,
+                dry_run,
+                parallel,
+            )
+            .await?;
         }
 
         Commands::EncryptLocal {

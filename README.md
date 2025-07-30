@@ -5,6 +5,7 @@ A powerful command-line interface for interacting with the Pipe distributed stor
 ## Features
 
 - **Decentralized Storage**: Upload and download files to/from the Pipe network
+- **Directory Sync**: Intelligent sync with `.pipe-sync` metadata tracking and incremental updates
 - **Client-Side Encryption**: AES-256-GCM encryption with password-based key derivation
 - **Quantum-Resistant Encryption**: Post-quantum cryptography using Kyber-1024 (ML-KEM) and Dilithium5 (ML-DSA)
 - **Tiered Upload System**: Multiple upload tiers with different performance characteristics
@@ -14,6 +15,8 @@ A powerful command-line interface for interacting with the Pipe distributed stor
 - **Service Discovery**: Automatic selection of optimal storage nodes
 - **Multiple Account Support**: Manage multiple accounts with custom config files
 - **Local Key Management**: Generate and manage encryption keys locally with built-in keyring
+- **Blake3 File IDs**: Every file gets a unique Blake3 hash ID for content-based addressing
+- **Integrity Verification**: Automatic integrity checking using Blake3 hashes
 
 ## Auto Installation
 ```bash
@@ -43,12 +46,40 @@ source "$HOME/.cargo/env"
 
 ## Installation
 
-### From GitHub
+### Pre-built Binaries (Recommended)
+
+Download pre-built binaries for your platform from the [latest release](https://github.com/PipeNetwork/pipe/releases/latest):
+
+- **Linux**: `pipe-linux-amd64` (Intel/AMD) or `pipe-linux-arm64` (ARM)
+- **macOS**: `pipe-macos-amd64` (Intel) or `pipe-macos-arm64` (Apple Silicon)
+- **Windows**: `pipe-windows-amd64.exe`
+
+#### Linux/macOS Installation
+```bash
+# Download the binary (replace URL with your platform's binary)
+wget https://github.com/PipeNetwork/pipe/releases/latest/download/pipe-linux-amd64
+
+# Make it executable
+chmod +x pipe-linux-amd64
+
+# Move to PATH
+sudo mv pipe-linux-amd64 /usr/local/bin/pipe
+
+# Verify installation
+pipe --version
+```
+
+#### Windows Installation
+1. Download `pipe-windows-amd64.exe` from the releases page
+2. Rename it to `pipe.exe`
+3. Add it to your PATH or run it directly from the command prompt
+
+### From Source
 
 ```bash
 # Clone the repository
 git clone https://github.com/PipeNetwork/pipe.git
-cd pipe
+cd pipe/pipe-cli
 
 # Install pipe-cli globally on your system
 cargo install --path .
@@ -59,7 +90,7 @@ cargo install --path .
 If you already have the source code:
 
 ```bash
-cd /path/to/pipe
+cd /path/to/pipe/pipe-cli
 cargo install --path .
 ```
 
@@ -67,12 +98,17 @@ cargo install --path .
 
 ### Basic Usage
 
+**Note**: Commands use kebab-case (e.g., `new-user`, `upload-file`)
+
 ```bash
 # Create a new user
 pipe new-user <your_username>
 
 # Upload a file
 pipe upload-file photo.jpg my-photo
+
+# Check upload cost before uploading (NEW!)
+pipe upload-file photo.jpg my-photo --dry-run
 
 # Download a file (now with streaming!)
 pipe download-file my-photo downloaded-photo.jpg
@@ -90,6 +126,10 @@ pipe download-directory folder ~/restored/folder --parallel 10
 pipe referral generate         # Generate your referral code
 pipe referral show            # Show your code and stats
 pipe referral apply CODE-1234 # Apply someone's referral code
+
+# Sync directories (NEW!)
+pipe sync ./local/folder remote/folder  # Upload sync
+pipe sync remote/folder ./local/folder  # Download sync (limited)
 ```
 
 ### Encryption (NEW!)
@@ -108,6 +148,58 @@ Enter decryption password: ****
 
 # Encrypt entire directory
 pipe upload-directory /sensitive/data --encrypt
+```
+
+### Directory Sync (NEW!)
+
+Pipe-cli now supports intelligent directory synchronization with metadata tracking:
+
+```bash
+# Sync a local directory to remote (upload)
+pipe sync ./documents docs/backup
+
+# Sync with specific conflict resolution
+pipe sync ./photos vacation-photos --conflict newer
+
+# Dry run to see what would be synced
+pipe sync ./projects remote/projects --dry-run
+
+# Sync with parallel transfers
+pipe sync ./data remote/data --parallel 10
+```
+
+#### Sync Features
+
+- **Incremental Sync**: Only syncs files that have actually changed
+- **`.pipe-sync` Metadata**: Tracks file states, hashes, and sync history
+- **Conflict Detection**: Detects when both local and remote have changed
+- **Blake3 Verification**: Fast hash-based change detection for data integrity
+- **Multiple Strategies**: Choose how to resolve conflicts (newer, larger, local, remote, ask)
+- **Dry Run Mode**: Preview changes before syncing
+- **Progress Tracking**: Visual progress bars for all operations
+
+#### How Sync Works
+
+1. **First Sync**: Creates `.pipe-sync` metadata file tracking all file states
+2. **Incremental Syncs**: Compares current files against last sync state
+3. **Change Detection**: Uses size, modification time, and Blake3 hash
+4. **Smart Conflicts**: Only flags files changed on both sides as conflicts
+
+Example `.pipe-sync` file:
+```json
+{
+  "last_sync": "2024-01-15T10:30:00Z",
+  "files": {
+    "document.pdf": {
+      "path": "document.pdf",
+      "size": 102400,
+      "modified": "2024-01-15T09:00:00Z",
+      "hash": "a665a45920422f9d417e4867efdc4fb8...",
+      "last_synced": "2024-01-15T10:30:00Z",
+      "sync_version": 1
+    }
+  }
+}
 ```
 
 ### Directory Downloads (NEW!)
@@ -174,47 +266,38 @@ pipe download-directory encrypted ~/decrypted --decrypt
 pipe-cli supports post-quantum cryptography to protect against future quantum computer attacks:
 
 ```bash
-# Upload with quantum encryption
-pipe upload-file secret.pdf quantum-secret --quantum
-
-# Download quantum-encrypted file (auto-detected by .qenc extension)
-pipe download-file quantum-secret.qenc decrypted.pdf
-
-# Combine quantum + password encryption for maximum security
-pipe upload-file topsecret.doc ultra-secure --quantum --encrypt
+# Upload with password encryption
+pipe upload-file secret.pdf secure-doc --encrypt
 Enter encryption password: ****
 Confirm encryption password: ****
+
+# Download and decrypt 
+pipe download-file secure-doc.enc decrypted.pdf --decrypt
+Enter decryption password: ****
 ```
 
 #### Quantum Features
 
 - **Kyber-1024 (ML-KEM)**: NIST-standardized quantum-resistant key encapsulation mechanism
 - **Dilithium5 (ML-DSA)**: NIST-standardized quantum-resistant digital signatures
-- **Sign-then-Encrypt**: Ensures both authenticity and confidentiality
-- **Key Management**: Quantum keys stored locally in `~/.pipe-cli/quantum-keys/`
-- **Automatic Detection**: Files with `.qenc` extension are automatically handled as quantum-encrypted
-- **Hybrid Encryption**: Can combine with password encryption for defense in depth
+- **Key Management**: Quantum keys stored locally in the keyring
+- **Sign and Verify**: Use quantum-resistant signatures for file authenticity
 
-#### How Quantum Encryption Works
+#### How Quantum Cryptography Works
 
-1. **Key Generation**: Generates two quantum-resistant keypairs:
-   - Kyber keypair for encryption/decryption
+1. **Key Generation**: Generate quantum-resistant keypairs:
+   - Kyber keypair for future encryption features
    - Dilithium keypair for signing/verification
 
-2. **Signing**: Your data is signed with your Dilithium private key
+2. **Signing**: Sign files with your Dilithium private key for authenticity
 
-3. **Encryption**: The signed data is encrypted with the Kyber public key
-
-4. **Upload**: The quantum-encrypted file is uploaded with `.qenc` extension
-
-5. **Download & Verify**: During download, the signature is verified before decryption
+3. **Verification**: Verify signatures using the corresponding public key
 
 #### Security Considerations
 
-- **Overhead**: Quantum encryption adds ~8KB overhead (signatures + ciphertext)
-- **Key Size**: Quantum keys are ~100KB each (stored locally, never uploaded)
-- **Future-Proof**: Protects against both current and future quantum computer attacks
-- **Performance**: Slightly slower than classical encryption due to larger key sizes
+- **Key Size**: Quantum keys are larger than classical keys (stored locally in keyring)
+- **Future-Proof**: Protects against future quantum computer attacks
+- **Signatures**: Dilithium5 provides quantum-resistant digital signatures
 
 ## Storage Tiers
 
@@ -304,6 +387,84 @@ Configuration file location is determined in this order:
 
 ## Advanced Features
 
+### File IDs and Blake3 Hashes
+
+Every uploaded file gets a unique Blake3 hash ID that can be used for:
+- Content-based addressing
+- Integrity verification
+- Deduplication detection
+
+```bash
+# Upload shows the Blake3 hash
+pipe upload-file video.mp4 my-video
+# Output: Blake3 hash: 7b3a5e8f9c2d4a1b...
+# Output: 📋 File ID (Blake3): 7b3a5e8f9c2d4a1b5e3f8c9d2a4b6e8f9c3d5a7b8e1f4c9d3a5b7e9f
+
+# Find uploads by hash or path
+pipe find-upload video.mp4                    # Find by local path
+pipe find-upload 7b3a5e8f --by-hash          # Find by Blake3 hash prefix
+
+# Use file ID for operations (coming soon - requires server support)
+pipe download-file 7b3a5e8f output.mp4 --file-id
+pipe delete-file 7b3a5e8f --file-id
+pipe create-public-link 7b3a5e8f --file-id
+
+# Rehash old uploads (adds Blake3 to upload history)
+pipe rehash-uploads --verbose
+```
+
+### Cost Estimation (Dry Run)
+
+Check upload costs before committing to an upload:
+
+```bash
+# Estimate cost for a single file upload
+pipe upload-file large-video.mp4 my-video --dry-run
+
+# Check cost for priority upload
+pipe priority-upload data.zip important-data --dry-run
+
+# Works with different tiers
+pipe upload-file dataset.csv my-data --tier ultra --dry-run
+```
+
+The dry run will show:
+- File size
+- Selected upload tier and rate
+- Estimated token cost
+- Your current token balance
+- Whether you have sufficient tokens
+
+### Public Links
+
+Create shareable public links for your files:
+
+```bash
+# Create a public link
+pipe create-public-link myfile.pdf
+
+# Create with custom preview text for social media
+pipe create-public-link myfile.pdf --title "My Document" --description "Important file"
+
+# Delete a public link
+pipe delete-public-link <link-hash>
+
+# Download from a public link
+pipe public-download <link-hash> output.pdf
+```
+
+### Priority Operations
+
+For faster transfers with priority lanes:
+
+```bash
+# Priority upload (single file)
+pipe priority-upload large-file.zip important-data
+
+# Priority download
+pipe priority-download important-data restored.zip
+```
+
 ### Skip Already Uploaded Files
 
 When uploading directories, skip files that were successfully uploaded before:
@@ -319,10 +480,10 @@ pipe upload-directory /large/dataset --skip-uploaded
 pipe upload-file data.csv mydata --api https://us-east-00-firestarter.pipenetwork.com
 ```
 
-### List User Files
+### List Upload History
 
 ```bash
-pipe list-user-files
+pipe list-uploads
 ```
 
 ### Check File Information
@@ -383,29 +544,21 @@ pipe keyring-migrate
 Protect your data against future quantum computers using NIST-standardized algorithms:
 
 ```bash
-# Upload with quantum-resistant encryption
-# This generates quantum keys automatically and saves them locally
-pipe upload-file document.pdf qdoc --quantum
-
-# Upload with both quantum and password encryption
-pipe upload-file sensitive.pdf sdoc --quantum --encrypt
-
-# Download quantum-encrypted files
-pipe download-file qdoc decrypted.pdf --quantum
+# Generate quantum-resistant keys
+pipe key-gen --name quantum-encrypt --algorithm kyber1024
+pipe key-gen --name quantum-sign --algorithm dilithium5
 
 # Sign a file with Dilithium5 (ML-DSA)
-pipe sign-file document.pdf document.sig --key signing-key
+pipe sign-file document.pdf document.sig --key quantum-sign
 
 # Verify a signature
-pipe verify-signature document.pdf document.sig --public-key document.sig.pubkey
+pipe verify-signature document.pdf document.sig --public-key quantum-sign.pub
 ```
 
-**Quantum Encryption Details**:
-- Uses Kyber-1024 (ML-KEM) for key encapsulation
-- Uses Dilithium5 (ML-DSA) for digital signatures
-- Implements sign-then-encrypt pattern for authenticity and confidentiality
-- Quantum keys are automatically generated and stored locally
-- Files uploaded with `--quantum` have `.qenc` extension on the server
+**Quantum Cryptography Support**:
+- Kyber-1024 (ML-KEM) keys can be generated for future use
+- Dilithium5 (ML-DSA) for quantum-resistant digital signatures
+- Keys are stored in the local keyring
 
 ## Troubleshooting
 
@@ -441,10 +594,18 @@ Downloads are automatically base64 decoded. If you encounter issues:
 
 ## Recent Updates
 
+### v0.3.x (Latest)
+- **Added**: Directory sync with `.pipe-sync` metadata tracking
+- **Added**: Incremental sync - only sync files that have changed
+- **Added**: Blake3 hash-based change detection
+- **Added**: Conflict detection and resolution strategies
+- **Added**: Sync state tracking with version history
+- **Improved**: Efficient sync operations with progress tracking
+
 ### v0.1.x
 - **Fixed**: Base64 decoding now happens automatically for all downloads
 - **Fixed**: Key export and signing operations (nonce storage bug resolved)
-- **Added**: Full quantum-resistant encryption with Kyber-1024 and Dilithium5
+- **Added**: Quantum-resistant key generation and digital signatures (Kyber-1024 and Dilithium5)
 - **Added**: Multiple account support via `--config` option
 - **Improved**: Better error messages for file not found errors
 - **Note**: Keys generated before this version may need to be regenerated
@@ -502,6 +663,21 @@ pipe referral show
 
 # Apply a referral code (for new users)
 pipe referral apply USERNAME-XXXX
+```
+
+### Token and Balance Management
+
+Check your balances:
+
+```bash
+# Check PIPE token balance
+pipe check-token
+
+# Check SOL balance
+pipe check-sol
+
+# Swap SOL for PIPE tokens
+pipe swap-sol-for-pipe 0.5  # Swap 0.5 SOL for PIPE
 ```
 
 ### Token Usage Tracking

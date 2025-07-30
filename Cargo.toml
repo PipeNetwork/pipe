@@ -38,6 +38,7 @@ pqcrypto-mlkem = "0.1"
 pqcrypto-mldsa = "0.1" 
 pqcrypto-traits = "0.3"
 sha3 = "0.10"
+blake3 = "1.5"
 
 [dev-dependencies]
 tempfile = "3.7.0"
