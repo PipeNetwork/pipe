@@ -6731,7 +6731,6 @@ pub async fn run_cli() -> Result<()> {
                 }
             }
         }
-        /// update command
         Commands::Update => {
             update::update_command().await?;
         }
