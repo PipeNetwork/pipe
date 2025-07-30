@@ -130,6 +130,9 @@ pipe referral apply CODE-1234 # Apply someone's referral code
 # Sync directories (NEW!)
 pipe sync ./local/folder remote/folder  # Upload sync
 pipe sync remote/folder ./local/folder  # Download sync (limited)
+
+# update pipe-cli
+pipe update
 ```
 
 ### Encryption (NEW!)
