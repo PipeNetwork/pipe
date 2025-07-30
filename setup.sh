@@ -1,6 +1,6 @@
 #!/bin/bash
 
-set -e
+set -euo pipefail
 
 # Color codes
 GREEN='\033[0;32m'
@@ -39,19 +39,31 @@ fi
 if [ "$should_install_rust" = true ]; then
     echo -e "${CYAN}🚀 Installing Rust via rustup...${NC}"
     curl https://sh.rustup.rs -sSf | sh -s -- -y
-    source $HOME/.cargo/env
+    source "$HOME/.cargo/env"
+
+    if ! command -v cargo &> /dev/null; then
+        echo -e "${RED}❌ Cargo not found after install. Exiting.${NC}"
+        exit 1
+    fi
 fi
 
 # Ensure cargo bin path is in PATH
 export PATH="$HOME/.cargo/bin:$PATH"
 
-# Handle --force flag
-if [[ "$1" == "--force" ]]; then
+# Parse flags
+FORCE=false
+for arg in "$@"; do
+    if [[ "$arg" == "--force" ]]; then
+        FORCE=true
+    fi
+done
+
+# Clone if not exists or force
+if [ "$FORCE" = true ]; then
     echo -e "${YELLOW}⚠️ --force enabled. Removing existing 'pipe' folder...${NC}"
     rm -rf pipe
 fi
 
-# Clone if not exists
 if [ -d "pipe" ]; then
     echo -e "${YELLOW}📁 'pipe' folder already exists. Skipping clone.${NC}"
 else
@@ -62,6 +74,7 @@ fi
 cd pipe
 
 echo -e "${CYAN}🔧 Building Pipe CLI...${NC}"
+
 if cargo install --path .; then
     echo -e "${GREEN}✅ Build successful!${NC}"
 else
