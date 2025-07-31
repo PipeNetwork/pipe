@@ -12,6 +12,7 @@ clap = { version = "4.4.0", features = ["derive", "env"] }
 dirs = "5.0.1"
 futures-util = "0.3"
 indicatif = "0.17.0"
+percent-encoding = "2.3"
 reqwest = { version = "0.12", features = ["json", "stream"] }
 rpassword = "7.2"
 serde = { version = "1.0", features = ["derive"] }

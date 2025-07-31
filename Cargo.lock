@@ -1300,6 +1300,7 @@ dependencies = [
  "futures-util",
  "hex",
  "indicatif",
+ "percent-encoding",
  "pqcrypto-mldsa",
  "pqcrypto-mlkem",
  "pqcrypto-traits",
