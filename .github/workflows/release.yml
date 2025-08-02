@@ -1,4 +1,4 @@
-name: Auto Build
+name: Auto Build + Release
 
 on:
   push:
@@ -9,22 +9,19 @@ on:
 
 jobs:
   build:
-    name: Build ${{ matrix.os }}
+    name: Build binaries
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v3
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
 
       - name: Build
-        run: |
-          cargo build --release
+        run: cargo build --release
 
       - name: Rename binary
         run: |
@@ -36,6 +33,27 @@ jobs:
             cp target/release/pipe pipe-linux-amd64
           fi
         shell: bash
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: pipe-${{ runner.os }}
+          path: pipe-*
+
+  release:
+    name: Upload release
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v3
+        with:
+          path: ./dist
+
+      - name: Flatten artifact directory
+        run: |
+          find ./dist -type f -exec cp {} . \;
 
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v1
