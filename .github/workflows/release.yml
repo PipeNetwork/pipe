@@ -1,4 +1,4 @@
-name: Build and Release Pipe (Linux)
+ci: update release workflow name: Build and Release Pipe
 
 on:
   push:
