@@ -9,8 +9,11 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
-    name: Build for Linux (x86_64)
+    name: Build ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
 
     steps:
       - name: Checkout
@@ -19,15 +22,25 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Build Pipe
+      - name: Build
         run: |
           cargo build --release
-          cp target/release/pipe pipe-linux-amd64
-          chmod +x pipe-linux-amd64
+
+      - name: Rename binary
+        run: |
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            mv target/release/pipe.exe pipe-windows-amd64.exe
+          elif [[ "${{ runner.os }}" == "macOS" ]]; then
+            cp target/release/pipe pipe-macos-amd64
+          else
+            cp target/release/pipe pipe-linux-amd64
+          fi
+        shell: bash
 
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v1
         with:
-          files: pipe-linux-amd64
+          files: |
+            pipe-*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
