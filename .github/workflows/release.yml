@@ -1,4 +1,5 @@
-ci: update release workflow name: Build and Release Pipe
+ci: Auto Build workflow
+name: Auto Build and Releaae Binary
 
 on:
   push:
