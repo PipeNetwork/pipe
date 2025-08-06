@@ -57,7 +57,7 @@ Download pre-built binaries for your platform from the [latest release](https://
 #### Linux/macOS Installation
 ```bash
 # Download the binary (replace URL with your platform's binary)
-wget -O /usr/local/bin/pipe https://github.com/whoopsme1337/pipe-cli/releases/download/alpha-v0.1.0/pipe-linux-amd64 && chmod +x /usr/local/bin/pipe
+wget -O /usr/local/bin/pipe https://github.com/PipeNetwork/pipe/releases/latest/download/pipe-linux-amd64 && chmod +x /usr/local/bin/pipe
 
 # Verify installation
 pipe --version
