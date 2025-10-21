@@ -2,6 +2,8 @@
 
 A powerful command-line interface for interacting with the Pipe distributed storage network.
 
+> **Note**: This branch (`cleanup-warnings`) is compatible with the pipe-store `cleanup-warnings` branch. No API changes were made - only internal server warning cleanup.
+
 ## Features
 
 - **Decentralized Storage**: Upload and download files to/from the Pipe network
