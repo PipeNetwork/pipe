@@ -359,15 +359,6 @@ pub enum Commands {
         user_id: Option<String>,
     },
 
-    /// Swap SOL for PIPE tokens
-    SwapSolForPipe {
-        #[arg(long)]
-        user_id: Option<String>,
-        #[arg(long)]
-        user_app_key: Option<String>,
-        amount_sol: f64,
-    },
-
     /// Withdraw SOL to an external Solana address
     WithdrawSol {
         #[arg(long)]
@@ -671,22 +662,6 @@ pub struct CheckCustomTokenResponse {
     pub token_mint: String,
     pub amount: String,
     pub ui_amount: f64,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct SwapSolForPipeRequest {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub user_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub user_app_key: Option<String>,
-    pub amount_sol: f64,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-pub struct SwapSolForPipeResponse {
-    pub user_id: String,
-    pub sol_spent: f64,
-    pub tokens_minted: u64,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -2887,7 +2862,7 @@ async fn upload_file_with_shared_progress(
                     return Err(anyhow!("Upload failed: {}", message));
                 }
             }
-            return Err(anyhow!("Upload failed: Insufficient tokens. Please use 'pipe swap-sol-for-pipe' to get more tokens."));
+            return Err(anyhow!("Upload failed: Insufficient tokens. Please acquire more PIPE tokens to continue."));
         }
 
         // Provide more user-friendly error messages for common server errors
@@ -3112,7 +3087,7 @@ async fn upload_file_priority_with_shared_progress(
                     return Err(anyhow!("Priority upload failed: {}", message));
                 }
             }
-            return Err(anyhow!("Priority upload failed: Insufficient tokens. Please use 'pipe swap-sol-for-pipe' to get more tokens."));
+            return Err(anyhow!("Priority upload failed: Insufficient tokens. Please acquire more PIPE tokens to continue."));
         }
 
         // Provide more user-friendly error messages for common server errors
@@ -3464,7 +3439,6 @@ pub async fn run_cli() -> Result<()> {
             | Commands::CheckSol { .. }
             | Commands::CheckToken { .. }
             | Commands::TokenUsage { .. }
-            | Commands::SwapSolForPipe { .. }
             | Commands::WithdrawSol { .. }
             | Commands::WithdrawCustomToken { .. }
             | Commands::CreatePublicLink { .. }
@@ -4042,7 +4016,7 @@ pub async fn run_cli() -> Result<()> {
                         if current_balance < estimated_cost {
                             println!("⚠️  Insufficient balance!");
                             println!("   Need {:.4} more PIPE tokens", estimated_cost - current_balance);
-                            println!("\n   Run: pipe swap-sol-for-pipe {:.1}", (estimated_cost - current_balance) / 10.0 + 0.1);
+                            println!("\n   You need approximately {:.1} more PIPE tokens.", (estimated_cost - current_balance) / 10.0 + 0.1);
                         } else {
                             println!("✅ Sufficient balance for upload");
                         }
@@ -4633,59 +4607,6 @@ pub async fn run_cli() -> Result<()> {
             }
         }
 
-        Commands::SwapSolForPipe {
-            user_id,
-            user_app_key,
-            amount_sol,
-        } => {
-            // Load credentials and check for JWT
-            let mut creds = load_credentials_from_file(config_path)?.ok_or_else(|| {
-                anyhow!("No credentials found. Please create a user or login first.")
-            })?;
-
-            // Ensure we have valid JWT token if available
-            ensure_valid_token(&client, base_url, &mut creds, config_path).await?;
-
-            // Override with command-line args if provided (only for legacy auth)
-            if let Some(uid) = user_id {
-                creds.user_id = uid;
-            }
-            if let Some(key) = user_app_key {
-                creds.user_app_key = key;
-            }
-
-            let mut request = client.post(format!("{}/exchangeSolForTokens", base_url));
-
-            // Use add_auth_headers for consistent authentication
-            request = add_auth_headers(request, &creds, true);
-
-            // Always send only amount - auth is in headers
-            let req_body = SwapSolForPipeRequest {
-                user_id: None,
-                user_app_key: None,
-                amount_sol,
-            };
-            request = request.json(&req_body);
-
-            let resp = request.send().await?;
-            let status = resp.status();
-            let text_body = resp.text().await?;
-
-            if status.is_success() {
-                let json = serde_json::from_str::<SwapSolForPipeResponse>(&text_body)?;
-                println!(
-                    "Swap SOL -> PIPE complete!\nUser: {}\nSOL spent: {}\nPIPE minted: {}",
-                    json.user_id, json.sol_spent, json.tokens_minted
-                );
-            } else {
-                return Err(anyhow!(
-                    "SwapSolForPipe failed. Status = {}, Body = {}",
-                    status,
-                    text_body
-                ));
-            }
-        }
-
         Commands::WithdrawSol {
             user_id,
             user_app_key,
@@ -5166,7 +5087,7 @@ pub async fn run_cli() -> Result<()> {
                                         "Needed: {:.4} PIPE tokens",
                                         total_cost_estimate - current_balance
                                     );
-                                    eprintln!("\nPlease use 'pipe swap-sol-for-pipe {:.1}' to get enough tokens.", 
+                                    eprintln!("\nPlease acquire approximately {:.1} more PIPE tokens.", 
                                     (total_cost_estimate - current_balance) / 10.0 + 0.1);
                                     return Ok(());
                                 }
@@ -5530,7 +5451,7 @@ pub async fn run_cli() -> Result<()> {
                                         "Needed: {:.4} PIPE tokens",
                                         total_cost_estimate - current_balance
                                     );
-                                    eprintln!("\nPlease use 'pipe swap-sol-for-pipe {:.1}' to get enough tokens.", 
+                                    eprintln!("\nPlease acquire approximately {:.1} more PIPE tokens.", 
                                         (total_cost_estimate - current_balance) / 10.0 + 0.1);
                                     return Ok(());
                                 }
@@ -5886,7 +5807,7 @@ pub async fn run_cli() -> Result<()> {
                         if current_balance < estimated_cost {
                             println!("⚠️  Insufficient balance!");
                             println!("   Need {:.4} more PIPE tokens", estimated_cost - current_balance);
-                            println!("\n   Run: pipe swap-sol-for-pipe {:.1}", (estimated_cost - current_balance) / 10.0 + 0.1);
+                            println!("\n   You need approximately {:.1} more PIPE tokens.", (estimated_cost - current_balance) / 10.0 + 0.1);
                         } else {
                             println!("✅ Sufficient balance for upload");
                         }
@@ -6663,7 +6584,7 @@ pub async fn run_cli() -> Result<()> {
                         
                         println!("\n📋 Referral Program Rules:");
                         println!("  • Share this code with friends who want to join Pipe Network");
-                        println!("  • They must swap at least 1 DevNet SOL to activate your reward");
+                        println!("  • They must use the service to activate your reward");
                         println!("  • You receive 100 PIPE tokens per successful referral");
                         println!("  • Rewards are subject to fraud prevention checks");
                         println!("  • Processing may take up to 24 hours");
@@ -6710,7 +6631,7 @@ pub async fn run_cli() -> Result<()> {
                                 println!("  Total PIPE earned: {}", stats["total_pipe_earned"]);
                                 
                                 println!("\n📋 Referral Program Rules:");
-                                println!("  • Referred user must swap at least 1 DevNet SOL to activate reward");
+                                println!("  • Referred user must use the service to activate reward");
                                 println!("  • You receive 100 PIPE tokens per successful referral");
                                 println!("  • Rewards are subject to fraud prevention checks");
                                 println!("  • Processing may take up to 24 hours");
@@ -6740,10 +6661,8 @@ pub async fn run_cli() -> Result<()> {
                         if response["success"].as_bool().unwrap_or(false) {
                             println!("✅ {}", response["message"].as_str().unwrap_or("Referral code applied successfully!"));
                             println!("\nℹ️  Important: To activate the referral reward for your referrer:");
-                            println!("  • You must complete a swap of at least 1 DevNet SOL");
+                            println!("  • You must use the service");
                             println!("  • Your referrer will receive 100 PIPE tokens");
-                            println!("  • Use 'pipe swap-sol-for-pipe' to get started");
-                            println!("\n💡 Need DevNet SOL? Get it free at: https://faucet.solana.com/");
                         } else {
                             println!("❌ {}", response["message"].as_str().unwrap_or("Failed to apply referral code"));
                         }
