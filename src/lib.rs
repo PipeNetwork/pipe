@@ -358,6 +358,9 @@ pub enum Commands {
         #[arg(long)]
         user_id: Option<String>,
     },
+    
+    /// Check storage quota and usage
+    StorageQuota,
 
     /// Withdraw SOL to an external Solana address
     WithdrawSol {
@@ -3439,6 +3442,7 @@ pub async fn run_cli() -> Result<()> {
             | Commands::CheckSol { .. }
             | Commands::CheckToken { .. }
             | Commands::TokenUsage { .. }
+            | Commands::StorageQuota
             | Commands::WithdrawSol { .. }
             | Commands::WithdrawCustomToken { .. }
             | Commands::CreatePublicLink { .. }
@@ -4601,6 +4605,79 @@ pub async fn run_cli() -> Result<()> {
             } else {
                 return Err(anyhow!(
                     "Token usage request failed. Status = {}, Body = {}",
+                    status,
+                    text_body
+                ));
+            }
+        }
+
+        Commands::StorageQuota => {
+            // Load credentials
+            let mut creds = load_credentials_from_file(config_path)?.ok_or_else(|| {
+                anyhow!("No credentials found. Please login first.")
+            })?;
+
+            // Ensure JWT token is valid
+            let client = reqwest::Client::new();
+            ensure_valid_token(&client, base_url, &mut creds, config_path).await?;
+
+            // Make request with auth header
+            let mut request = client.get(format!("{}/storageQuota", base_url));
+            
+            if let Some(ref auth_tokens) = creds.auth_tokens {
+                request = request.header(
+                    "Authorization",
+                    format!("Bearer {}", auth_tokens.access_token),
+                );
+            }
+            
+            let resp = request.send().await?;
+
+            let status = resp.status();
+            let text_body = resp.text().await?;
+
+            if status.is_success() {
+                // Parse quota response
+                let quota: serde_json::Value = serde_json::from_str(&text_body)?;
+                
+                let q = &quota["quota"];
+                let free_gb = q["free_storage_bytes"].as_u64().unwrap_or(0) as f64 / (1024.0 * 1024.0 * 1024.0);
+                let paid_gb = q["paid_storage_bytes"].as_u64().unwrap_or(0) as f64 / (1024.0 * 1024.0 * 1024.0);
+                let used_gb = q["used_storage_bytes"].as_u64().unwrap_or(0) as f64 / (1024.0 * 1024.0 * 1024.0);
+                let total_gb = q["total_storage_bytes"].as_u64().unwrap_or(0) as f64 / (1024.0 * 1024.0 * 1024.0);
+                let remaining_gb = q["remaining_storage_bytes"].as_u64().unwrap_or(0) as f64 / (1024.0 * 1024.0 * 1024.0);
+                let token_balance = q["token_balance"].as_f64().unwrap_or(0.0);
+                let pipe_price = q["pipe_price_usd"].as_f64().unwrap_or(0.0);
+                let percentage_used = quota["percentage_used"].as_f64().unwrap_or(0.0);
+                let tokens_for_1tb = quota["tokens_needed_for_1tb"].as_f64().unwrap_or(0.0);
+                
+                println!("\n💾 Storage Quota Summary");
+                println!("═══════════════════════════════════════");
+                println!();
+                println!("📊 Current Usage:");
+                println!("  Used:      {:.2} GB / {:.2} GB ({:.1}%)", used_gb, total_gb, percentage_used);
+                println!("  Available: {:.2} GB", remaining_gb);
+                println!();
+                println!("📦 Storage Breakdown:");
+                println!("  Free tier: {:.2} GB", free_gb);
+                println!("  Paid tier: {:.2} GB", paid_gb);
+                println!();
+                println!("🪙 Token Information:");
+                println!("  Balance:   {:.2} PIPE tokens", token_balance);
+                println!("  Value:     ${:.4} (@ ${:.4}/PIPE)", token_balance * pipe_price, pipe_price);
+                println!();
+                println!("💡 Pricing:");
+                println!("  Cost:      $10 per TB per month");
+                println!("  1 TB =     {:.2} PIPE tokens", tokens_for_1tb);
+                println!();
+                
+                if remaining_gb < 10.0 {
+                    println!("⚠️  Warning: Low storage space remaining!");
+                    println!("   Consider acquiring more PIPE tokens.");
+                }
+            } else {
+                return Err(anyhow!(
+                    "Failed to get storage quota. Status = {}, Body = {}",
                     status,
                     text_body
                 ));
