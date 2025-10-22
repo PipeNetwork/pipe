@@ -358,9 +358,6 @@ pub enum Commands {
         #[arg(long)]
         user_id: Option<String>,
     },
-    
-    /// Check storage quota and usage
-    StorageQuota,
 
     /// Withdraw SOL to an external Solana address
     WithdrawSol {
@@ -2865,7 +2862,7 @@ async fn upload_file_with_shared_progress(
                     return Err(anyhow!("Upload failed: {}", message));
                 }
             }
-            return Err(anyhow!("Upload failed: Insufficient tokens. Please acquire more PIPE tokens to continue."));
+            return Err(anyhow!("Upload failed: Insufficient tokens. Please contact support or add more PIPE tokens to your account."));
         }
 
         // Provide more user-friendly error messages for common server errors
@@ -3090,7 +3087,7 @@ async fn upload_file_priority_with_shared_progress(
                     return Err(anyhow!("Priority upload failed: {}", message));
                 }
             }
-            return Err(anyhow!("Priority upload failed: Insufficient tokens. Please acquire more PIPE tokens to continue."));
+            return Err(anyhow!("Priority upload failed: Insufficient tokens. Please contact support or add more PIPE tokens to your account."));
         }
 
         // Provide more user-friendly error messages for common server errors
@@ -3442,7 +3439,6 @@ pub async fn run_cli() -> Result<()> {
             | Commands::CheckSol { .. }
             | Commands::CheckToken { .. }
             | Commands::TokenUsage { .. }
-            | Commands::StorageQuota
             | Commands::WithdrawSol { .. }
             | Commands::WithdrawCustomToken { .. }
             | Commands::CreatePublicLink { .. }
@@ -4020,7 +4016,7 @@ pub async fn run_cli() -> Result<()> {
                         if current_balance < estimated_cost {
                             println!("⚠️  Insufficient balance!");
                             println!("   Need {:.4} more PIPE tokens", estimated_cost - current_balance);
-                            println!("\n   You need approximately {:.1} more PIPE tokens.", (estimated_cost - current_balance) / 10.0 + 0.1);
+                            println!("\n   Please contact support to add more PIPE tokens to your account.");
                         } else {
                             println!("✅ Sufficient balance for upload");
                         }
@@ -4611,79 +4607,6 @@ pub async fn run_cli() -> Result<()> {
             }
         }
 
-        Commands::StorageQuota => {
-            // Load credentials
-            let mut creds = load_credentials_from_file(config_path)?.ok_or_else(|| {
-                anyhow!("No credentials found. Please login first.")
-            })?;
-
-            // Ensure JWT token is valid
-            let client = reqwest::Client::new();
-            ensure_valid_token(&client, base_url, &mut creds, config_path).await?;
-
-            // Make request with auth header
-            let mut request = client.get(format!("{}/storageQuota", base_url));
-            
-            if let Some(ref auth_tokens) = creds.auth_tokens {
-                request = request.header(
-                    "Authorization",
-                    format!("Bearer {}", auth_tokens.access_token),
-                );
-            }
-            
-            let resp = request.send().await?;
-
-            let status = resp.status();
-            let text_body = resp.text().await?;
-
-            if status.is_success() {
-                // Parse quota response
-                let quota: serde_json::Value = serde_json::from_str(&text_body)?;
-                
-                let q = &quota["quota"];
-                let free_gb = q["free_storage_bytes"].as_u64().unwrap_or(0) as f64 / (1024.0 * 1024.0 * 1024.0);
-                let paid_gb = q["paid_storage_bytes"].as_u64().unwrap_or(0) as f64 / (1024.0 * 1024.0 * 1024.0);
-                let used_gb = q["used_storage_bytes"].as_u64().unwrap_or(0) as f64 / (1024.0 * 1024.0 * 1024.0);
-                let total_gb = q["total_storage_bytes"].as_u64().unwrap_or(0) as f64 / (1024.0 * 1024.0 * 1024.0);
-                let remaining_gb = q["remaining_storage_bytes"].as_u64().unwrap_or(0) as f64 / (1024.0 * 1024.0 * 1024.0);
-                let token_balance = q["token_balance"].as_f64().unwrap_or(0.0);
-                let pipe_price = q["pipe_price_usd"].as_f64().unwrap_or(0.0);
-                let percentage_used = quota["percentage_used"].as_f64().unwrap_or(0.0);
-                let tokens_for_1tb = quota["tokens_needed_for_1tb"].as_f64().unwrap_or(0.0);
-                
-                println!("\n💾 Storage Quota Summary");
-                println!("═══════════════════════════════════════");
-                println!();
-                println!("📊 Current Usage:");
-                println!("  Used:      {:.2} GB / {:.2} GB ({:.1}%)", used_gb, total_gb, percentage_used);
-                println!("  Available: {:.2} GB", remaining_gb);
-                println!();
-                println!("📦 Storage Breakdown:");
-                println!("  Free tier: {:.2} GB", free_gb);
-                println!("  Paid tier: {:.2} GB", paid_gb);
-                println!();
-                println!("🪙 Token Information:");
-                println!("  Balance:   {:.2} PIPE tokens", token_balance);
-                println!("  Value:     ${:.4} (@ ${:.4}/PIPE)", token_balance * pipe_price, pipe_price);
-                println!();
-                println!("💡 Pricing:");
-                println!("  Cost:      $10 per TB per month");
-                println!("  1 TB =     {:.2} PIPE tokens", tokens_for_1tb);
-                println!();
-                
-                if remaining_gb < 10.0 {
-                    println!("⚠️  Warning: Low storage space remaining!");
-                    println!("   Consider acquiring more PIPE tokens.");
-                }
-            } else {
-                return Err(anyhow!(
-                    "Failed to get storage quota. Status = {}, Body = {}",
-                    status,
-                    text_body
-                ));
-            }
-        }
-
         Commands::WithdrawSol {
             user_id,
             user_app_key,
@@ -5164,7 +5087,7 @@ pub async fn run_cli() -> Result<()> {
                                         "Needed: {:.4} PIPE tokens",
                                         total_cost_estimate - current_balance
                                     );
-                                    eprintln!("\nPlease acquire approximately {:.1} more PIPE tokens.", 
+                                    eprintln!("\nPlease contact support to add more PIPE tokens to your account. You need approximately {:.1} PIPE tokens.", 
                                     (total_cost_estimate - current_balance) / 10.0 + 0.1);
                                     return Ok(());
                                 }
@@ -5528,7 +5451,7 @@ pub async fn run_cli() -> Result<()> {
                                         "Needed: {:.4} PIPE tokens",
                                         total_cost_estimate - current_balance
                                     );
-                                    eprintln!("\nPlease acquire approximately {:.1} more PIPE tokens.", 
+                                    eprintln!("\nPlease contact support to add more PIPE tokens to your account. You need approximately {:.1} PIPE tokens.", 
                                         (total_cost_estimate - current_balance) / 10.0 + 0.1);
                                     return Ok(());
                                 }
@@ -5884,7 +5807,7 @@ pub async fn run_cli() -> Result<()> {
                         if current_balance < estimated_cost {
                             println!("⚠️  Insufficient balance!");
                             println!("   Need {:.4} more PIPE tokens", estimated_cost - current_balance);
-                            println!("\n   You need approximately {:.1} more PIPE tokens.", (estimated_cost - current_balance) / 10.0 + 0.1);
+                            println!("\n   Please contact support to add more PIPE tokens to your account.");
                         } else {
                             println!("✅ Sufficient balance for upload");
                         }
@@ -6661,7 +6584,7 @@ pub async fn run_cli() -> Result<()> {
                         
                         println!("\n📋 Referral Program Rules:");
                         println!("  • Share this code with friends who want to join Pipe Network");
-                        println!("  • They must use the service to activate your reward");
+                        println!("  • They must swap at least 1 DevNet SOL to activate your reward");
                         println!("  • You receive 100 PIPE tokens per successful referral");
                         println!("  • Rewards are subject to fraud prevention checks");
                         println!("  • Processing may take up to 24 hours");
@@ -6708,7 +6631,7 @@ pub async fn run_cli() -> Result<()> {
                                 println!("  Total PIPE earned: {}", stats["total_pipe_earned"]);
                                 
                                 println!("\n📋 Referral Program Rules:");
-                                println!("  • Referred user must use the service to activate reward");
+                                println!("  • Referred user must swap at least 1 DevNet SOL to activate reward");
                                 println!("  • You receive 100 PIPE tokens per successful referral");
                                 println!("  • Rewards are subject to fraud prevention checks");
                                 println!("  • Processing may take up to 24 hours");
@@ -6738,8 +6661,10 @@ pub async fn run_cli() -> Result<()> {
                         if response["success"].as_bool().unwrap_or(false) {
                             println!("✅ {}", response["message"].as_str().unwrap_or("Referral code applied successfully!"));
                             println!("\nℹ️  Important: To activate the referral reward for your referrer:");
-                            println!("  • You must use the service");
+                            println!("  • You must complete a swap of at least 1 DevNet SOL");
                             println!("  • Your referrer will receive 100 PIPE tokens");
+                            println!("  • Contact support to get started with PIPE tokens");
+                            println!("\n💡 Need DevNet SOL? Get it free at: https://faucet.solana.com/");
                         } else {
                             println!("❌ {}", response["message"].as_str().unwrap_or("Failed to apply referral code"));
                         }
