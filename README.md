@@ -314,7 +314,7 @@ Configuration is stored in `~/.pipe-cli.json` by default:
 {
   "user_id": "your-user-id",
   "user_app_key": "your-app-key",
-  "api_endpoints": ["https:/us-west-00-firestarter.pipenetwork.com", "https://us-east-00-firestarter.pipenetwork.com"],
+  "api_endpoints": ["https://us-west-01-firestarter.pipenetwork.com"],
   "jwt_token": "your-jwt-token"
 }
 ```
@@ -473,8 +473,8 @@ pipe upload-directory /large/dataset --skip-uploaded
 ### Custom API Endpoint
 
 ```bash
-# Use a different endpoint (default is https://us-west-00-firestarter.pipenetwork.com)
-pipe upload-file data.csv mydata --api https://us-east-00-firestarter.pipenetwork.com
+# Use a different endpoint (default is https://us-west-01-firestarter.pipenetwork.com)
+pipe upload-file data.csv mydata --api https://custom-endpoint.pipenetwork.com
 ```
 
 ### List Upload History

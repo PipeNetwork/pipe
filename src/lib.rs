@@ -130,7 +130,7 @@ pub struct VersionCheckResponse {
 pub struct Cli {
     #[arg(
         long,
-        default_value = "https://us-west-00-firestarter.pipenetwork.com",
+        default_value = "https://us-west-01-firestarter.pipenetwork.com",
         global = true,
         help = "Base URL for the Pipe Network client API"
     )]
