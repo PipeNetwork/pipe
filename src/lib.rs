@@ -716,6 +716,8 @@ pub struct CreatePublicLinkRequest {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct CreatePublicLinkResponse {
     pub link_hash: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub public_url: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -4452,11 +4454,21 @@ pub async fn run_cli() -> Result<()> {
                 let json: CreatePublicLinkResponse = serde_json::from_str(&text_body)?;
                 println!("✓ Public link created successfully!");
                 println!();
+                
+                // Use server-provided URL if available, otherwise construct it
+                let direct_link = json.public_url.clone()
+                    .unwrap_or_else(|| format!("{}/publicDownload?hash={}", base_url, json.link_hash));
+                let preview_link = if let Some(ref url) = json.public_url {
+                    format!("{}&preview=true", url)
+                } else {
+                    format!("{}/publicDownload?hash={}&preview=true", base_url, json.link_hash)
+                };
+                
                 println!("Direct link (for downloads/playback):");
-                println!("  {}/publicDownload?hash={}", base_url, json.link_hash);
+                println!("  {}", direct_link);
                 println!();
                 println!("Social media link (for sharing):");
-                println!("  {}/publicDownload?hash={}&preview=true", base_url, json.link_hash);
+                println!("  {}", preview_link);
                 println!(
                     "Use `publicDownload?hash={}` to download the file without auth.",
                     json.link_hash
