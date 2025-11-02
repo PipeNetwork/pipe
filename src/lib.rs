@@ -3947,17 +3947,36 @@ pub async fn run_cli() -> Result<()> {
                 let fee_url = format!("{}/getTierPricing", base_url);
                 let fee_resp = match client.get(&fee_url).send().await {
                     Ok(resp) if resp.status().is_success() => {
-                        resp.json::<GetTierPricingResponse>().await?
+                        match resp.json::<Vec<serde_json::Value>>().await {
+                            Ok(pricing_arr) => {
+                                fn get_price(arr: &Vec<serde_json::Value>, name: &str) -> Option<f64> {
+                                    arr.iter()
+                                    .find(|obj| obj["name"].as_str() == Some(name))
+                                    .and_then(|obj| obj["current_price"].as_f64())
+                                }
+                                let normal = get_price(&pricing_arr, "normal");
+                                let priority = get_price(&pricing_arr, "priority");
+                                let premium = get_price(&pricing_arr, "premium");
+                                let ultra = get_price(&pricing_arr, "ultra");
+                                let enterprise = get_price(&pricing_arr, "enterprise");
+                                if normal.is_none() || priority.is_none() || premium.is_none() || ultra.is_none() || enterprise.is_none() {
+                                    return Err(anyhow!("Tier pricing response missing required fields"));
+                                }
+                                GetTierPricingResponse {
+                                    normal_fee_per_gb: normal.unwrap(),
+                                    priority_fee_per_gb: priority.unwrap(),
+                                    premium_fee_per_gb: premium.unwrap(),
+                                    ultra_fee_per_gb: ultra.unwrap(),
+                                    enterprise_fee_per_gb: enterprise.unwrap(),
+                                }
+                            }
+                            Err(e) => {
+                                return Err(anyhow!(format!("Failed to parse pricing response: {}", e)));
+                            }
+                        }
                     }
                     _ => {
-                        // Use default pricing if API call fails
-                        GetTierPricingResponse {
-                            normal_fee_per_gb: 100.0,
-                            priority_fee_per_gb: 125.0,
-                            premium_fee_per_gb: 175.0,
-                            ultra_fee_per_gb: 300.0,
-                            enterprise_fee_per_gb: 1000.0,
-                        }
+                        return Err(anyhow!("Failed to fetch tier pricing from server"));
                     }
                 };
 
@@ -3999,16 +4018,20 @@ pub async fn run_cli() -> Result<()> {
                 balance_req = balance_req.json(&balance_body);
 
                 if let Ok(resp) = balance_req.send().await {
-                    if let Ok(balance_resp) = resp.json::<CheckCustomTokenResponse>().await {
-                        let current_balance = balance_resp.ui_amount;
-                        println!("\n💳 Your balance: {:.4} PIPE tokens", current_balance);
-                        
-                        if current_balance < estimated_cost {
-                            println!("⚠️  Insufficient balance!");
-                            println!("   Need {:.4} more PIPE tokens", estimated_cost - current_balance);
-                            println!("\n   Please contact support to add more PIPE tokens to your account.");
-                        } else {
-                            println!("✅ Sufficient balance for upload");
+                    match resp.json::<CheckCustomTokenResponse>().await {
+                        Ok(balance_resp) => {
+                            let current_balance = balance_resp.ui_amount;
+                            println!("\n💳 Your balance: {:.4} PIPE tokens", current_balance);
+                            if current_balance < estimated_cost {
+                                println!("⚠️  Insufficient balance!");
+                                println!("   Need {:.4} more PIPE tokens", estimated_cost - current_balance);
+                                println!("\n   Run: pipe swap-sol-for-pipe {:.1}", (estimated_cost - current_balance) / 10.0 + 0.1);
+                            } else {
+                                println!("✅ Sufficient balance for upload");
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("Failed to parse balance response: {}", e);
                         }
                     }
                 }
@@ -5530,17 +5553,37 @@ pub async fn run_cli() -> Result<()> {
                 let fee_url = format!("{}/getTierPricing", base_url);
                 let fee_resp = match client.get(&fee_url).send().await {
                     Ok(resp) if resp.status().is_success() => {
-                        resp.json::<GetTierPricingResponse>().await?
+                        match resp.json::<Vec<serde_json::Value>>().await {
+                            Ok(pricing_arr) => {
+                                fn get_price(arr: &Vec<serde_json::Value>, name: &str) -> Option<f64> {
+                                    arr.iter()
+                                        .find(|obj| obj["name"].as_str() == Some(name))
+                                        .and_then(|obj| obj["current_price"].as_f64())
+                                }
+                                let normal = get_price(&pricing_arr, "normal");
+                                let priority = get_price(&pricing_arr, "priority");
+                                let premium = get_price(&pricing_arr, "premium");
+                                let ultra = get_price(&pricing_arr, "ultra");
+                                let enterprise = get_price(&pricing_arr, "enterprise");
+                                if normal.is_none() || priority.is_none() || premium.is_none() || ultra.is_none() || enterprise.is_none() {
+                                    return Err(anyhow!("Tier pricing response missing required fields"));
+                                }
+                                GetTierPricingResponse {
+                                    normal_fee_per_gb: normal.unwrap(),
+                                    priority_fee_per_gb: priority.unwrap(),
+                                    premium_fee_per_gb: premium.unwrap(),
+                                    ultra_fee_per_gb: ultra.unwrap(),
+                                    enterprise_fee_per_gb: enterprise.unwrap(),
+                                }
+                            }
+                            Err(e) => {
+                                return Err(anyhow!(format!("Failed to parse pricing response: {}", e)));
+                            }
+                        }
                     }
                     _ => {
                         // Use default pricing if API call fails
-                        GetTierPricingResponse {
-                            normal_fee_per_gb: 100.0,
-                            priority_fee_per_gb: 125.0,
-                            premium_fee_per_gb: 175.0,
-                            ultra_fee_per_gb: 300.0,
-                            enterprise_fee_per_gb: 1000.0,
-                        }
+                        return Err(anyhow!("Failed to fetch tier pricing from server"));
                     }
                 };
 
@@ -5574,16 +5617,20 @@ pub async fn run_cli() -> Result<()> {
                 balance_req = balance_req.json(&balance_body);
 
                 if let Ok(resp) = balance_req.send().await {
-                    if let Ok(balance_resp) = resp.json::<CheckCustomTokenResponse>().await {
-                        let current_balance = balance_resp.ui_amount;
-                        println!("\n💳 Your balance: {:.4} PIPE tokens", current_balance);
-                        
-                        if current_balance < estimated_cost {
-                            println!("⚠️  Insufficient balance!");
-                            println!("   Need {:.4} more PIPE tokens", estimated_cost - current_balance);
-                            println!("\n   Please contact support to add more PIPE tokens to your account.");
-                        } else {
-                            println!("✅ Sufficient balance for upload");
+                    match resp.json::<CheckCustomTokenResponse>().await {
+                        Ok(balance_resp) => {
+                            let current_balance = balance_resp.ui_amount;
+                            println!("\n💳 Your balance: {:.4} PIPE tokens", current_balance);
+                            if current_balance < estimated_cost {
+                                println!("⚠️  Insufficient balance!");
+                                println!("   Need {:.4} more PIPE tokens", estimated_cost - current_balance);
+                                println!("\n   Run: pipe swap-sol-for-pipe {:.1}", (estimated_cost - current_balance) / 10.0 + 0.1);
+                            } else {
+                                println!("✅ Sufficient balance for upload");
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("Failed to parse balance response: {}", e);
                         }
                     }
                 }
