@@ -2,6 +2,8 @@
 
 A powerful command-line interface for interacting with the Pipe distributed storage network.
 
+> **Note**: This branch (`cleanup-warnings`) is compatible with the pipe-store `cleanup-warnings` branch. No API changes were made - only internal server warning cleanup.
+
 ## Features
 
 - **Decentralized Storage**: Upload and download files to/from the Pipe network
@@ -121,11 +123,6 @@ pipe upload-directory /path/to/folder --tier normal
 
 # Download a directory (NEW!)
 pipe download-directory folder ~/restored/folder --parallel 10
-
-# Manage referrals
-pipe referral generate         # Generate your referral code
-pipe referral show            # Show your code and stats
-pipe referral apply CODE-1234 # Apply someone's referral code
 
 # Sync directories (NEW!)
 pipe sync ./local/folder remote/folder  # Upload sync
@@ -317,7 +314,7 @@ Configuration is stored in `~/.pipe-cli.json` by default:
 {
   "user_id": "your-user-id",
   "user_app_key": "your-app-key",
-  "api_endpoints": ["https:/us-west-00-firestarter.pipenetwork.com", "https://us-east-00-firestarter.pipenetwork.com"],
+  "api_endpoints": ["https://us-west-01-firestarter.pipenetwork.com"],
   "jwt_token": "your-jwt-token"
 }
 ```
@@ -476,8 +473,8 @@ pipe upload-directory /large/dataset --skip-uploaded
 ### Custom API Endpoint
 
 ```bash
-# Use a different endpoint (default is https://us-west-00-firestarter.pipenetwork.com)
-pipe upload-file data.csv mydata --api https://us-east-00-firestarter.pipenetwork.com
+# Use a different endpoint (default is https://us-west-01-firestarter.pipenetwork.com)
+pipe upload-file data.csv mydata --api https://custom-endpoint.pipenetwork.com
 ```
 
 ### List Upload History
@@ -594,7 +591,21 @@ Downloads are automatically base64 decoded. If you encounter issues:
 
 ## Recent Updates
 
-### v0.3.x (Latest)
+### Mainnet Release (Latest)
+- **BREAKING**: Removed testnet-only features for mainnet deployment
+  - Removed referral system (no longer available)
+  - Removed SOL withdrawal commands
+  - Removed token withdrawal commands  
+  - Removed `check-sol` command
+- **Added**: Prepaid deposit system with one-way PIPE deposits
+  - `check-deposit` - View deposit balance and storage quotas
+  - `estimate-cost` - Estimate upload costs before uploading
+  - `sync-deposits` - Manually sync deposits from wallet
+- **Changed**: USD-based pricing model ($10/TB = $0.01/GB)
+- **Changed**: Deposits are burned as storage is used (no withdrawals)
+- **Important**: This is a production mainnet release - all deposits use real PIPE tokens
+
+### v0.3.x
 - **Added**: Directory sync with `.pipe-sync` metadata tracking
 - **Added**: Incremental sync - only sync files that have changed
 - **Added**: Blake3 hash-based change detection
@@ -634,51 +645,97 @@ pipe download-file large-video.mp4
 pipe download-file large-video.mp4 --legacy
 ```
 
-### Referral Program
+### Deposit System & Storage Management
 
-Earn PIPE tokens by referring friends to the Pipe Network!
+pipe-cli uses a prepaid deposit system where you deposit PIPE tokens that are burned as you use storage. Deposits are one-way and cannot be withdrawn.
 
-#### How It Works
+#### Check Deposit Balance
 
-1. **Generate Your Code**: Run `pipe referral generate` to get your unique referral code
-2. **Share**: Give your code to friends who want to join Pipe Network
-3. **Earn**: Receive 100 PIPE tokens when they complete a qualifying swap (1+ DevNet SOL)
-
-#### Program Rules
-
-- **Minimum Swap**: Referred user must swap at least 1 DevNet SOL to activate reward
-- **Reward Amount**: 100 PIPE tokens per successful referral
-- **Processing Time**: Rewards may take up to 24 hours to process
-- **Fraud Prevention**: All referrals are subject to automated fraud checks
-- **DevNet SOL**: Get free DevNet SOL at [https://faucet.solana.com/](https://faucet.solana.com/)
-
-#### Commands
+View your deposit balance, available storage across all tiers, and pricing information:
 
 ```bash
-# Generate your referral code
-pipe referral generate
-
-# Check your referral stats
-pipe referral show
-
-# Apply a referral code (for new users)
-pipe referral apply USERNAME-XXXX
+pipe check-deposit
 ```
 
-### Token and Balance Management
+This shows:
+- Current deposit balance in PIPE and USD
+- Live PIPE price from Jupiter
+- Available storage for each tier (Normal, Priority, Premium, Ultra, Enterprise)
+- Cost per GB in both PIPE and USD
+- Your deposit wallet address
+- Lifetime deposit and burn statistics
 
-Check your balances:
+#### Estimate Upload Cost
+
+Calculate the cost to upload a file before actually uploading:
 
 ```bash
-# Check PIPE token balance
+# Estimate cost for normal tier
+pipe estimate-cost video.mp4
+
+# Estimate cost for premium tier
+pipe estimate-cost large-dataset.zip --tier premium
+
+# Estimate cost for enterprise tier
+pipe estimate-cost backup.tar.gz --tier enterprise
+```
+
+The estimate shows:
+- File size in GB and bytes
+- Selected tier and pricing
+- Estimated cost in PIPE and USD
+- Your balance before and after upload
+- Whether you can afford the upload
+
+#### Sync Deposits
+
+Manually trigger a deposit sync from your wallet to your deposit balance:
+
+```bash
+pipe sync-deposits
+```
+
+The system auto-syncs every 30 seconds, but use this for immediate confirmation after depositing PIPE to your wallet.
+
+#### How the Deposit System Works
+
+1. **Deposit PIPE**: Send PIPE tokens to your deposit wallet address (shown in `pipe check-deposit`)
+2. **Sync**: Run `pipe sync-deposits` or wait 30 seconds for automatic sync
+3. **Use Storage**: Upload files - costs are automatically deducted from your deposit balance
+4. **Monitor**: Use `pipe check-deposit` to track remaining balance and available storage
+
+**Important**: Deposits are one-way by design. PIPE deposited into the system cannot be withdrawn - it's burned as you use storage.
+
+#### Pricing Model
+
+Storage is priced at **$10 USD per 1 TB**, which equals **$0.01 USD per GB**.
+
+The amount of PIPE you need adjusts based on market price:
+
+| PIPE Price | PIPE per GB | For 1 TB |
+|-----------|-------------|----------|
+| $0.05 USD | 0.2 PIPE | 200 PIPE |
+| $0.10 USD | 0.1 PIPE | 100 PIPE |
+| $0.50 USD | 0.02 PIPE | 20 PIPE |
+| $1.00 USD | 0.01 PIPE | 10 PIPE |
+
+Tier multipliers:
+- **Normal:** 1x = $0.01/GB
+- **Priority:** 2.5x = $0.025/GB
+- **Premium:** 5x = $0.05/GB
+- **Ultra:** 10x = $0.10/GB
+- **Enterprise:** 25x = $0.25/GB
+
+### Token Balance Management
+
+Check your wallet PIPE token balance:
+
+```bash
+# Check PIPE token balance (different from deposit balance)
 pipe check-token
-
-# Check SOL balance
-pipe check-sol
-
-# Swap SOL for PIPE tokens
-pipe swap-sol-for-pipe 0.5  # Swap 0.5 SOL for PIPE
 ```
+
+Note: This shows your wallet balance, which is different from your deposit balance. Use `pipe check-deposit` to see your prepaid storage balance.
 
 ### Token Usage Tracking
 

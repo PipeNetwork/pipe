@@ -130,7 +130,7 @@ pub struct VersionCheckResponse {
 pub struct Cli {
     #[arg(
         long,
-        default_value = "https://us-west-00-firestarter.pipenetwork.com",
+        default_value = "https://us-west-01-firestarter.pipenetwork.com",
         global = true,
         help = "Base URL for the Pipe Network client API"
     )]
@@ -329,14 +329,6 @@ pub enum Commands {
         public_key: String,
     },
 
-    /// Check SOL balance
-    CheckSol {
-        #[arg(long)]
-        user_id: Option<String>,
-        #[arg(long)]
-        user_app_key: Option<String>,
-    },
-
     /// Check custom token balance
     CheckToken {
         #[arg(long)]
@@ -357,36 +349,6 @@ pub enum Commands {
         
         #[arg(long)]
         user_id: Option<String>,
-    },
-
-    /// Swap SOL for PIPE tokens
-    SwapSolForPipe {
-        #[arg(long)]
-        user_id: Option<String>,
-        #[arg(long)]
-        user_app_key: Option<String>,
-        amount_sol: f64,
-    },
-
-    /// Withdraw SOL to an external Solana address
-    WithdrawSol {
-        #[arg(long)]
-        user_id: Option<String>,
-        #[arg(long)]
-        user_app_key: Option<String>,
-        amount_sol: f64,
-        to_pubkey: String,
-    },
-
-    /// Withdraw custom tokens to an external address
-    WithdrawCustomToken {
-        #[arg(long)]
-        user_id: Option<String>,
-        #[arg(long)]
-        user_app_key: Option<String>,
-        token_mint: String,
-        amount: u64,
-        to_pubkey: String,
     },
 
     CreatePublicLink {
@@ -478,10 +440,6 @@ pub enum Commands {
 
     /// Get pricing for all upload tiers
     GetTierPricing,
-
-    /// Manage referral codes
-    #[command(subcommand)]
-    Referral(ReferralCommands),
 
     PriorityUpload {
         #[arg(long)]
@@ -582,18 +540,29 @@ pub enum Commands {
         #[arg(long, default_value = "5")]
         parallel: usize,
     },
-}
-
-#[derive(Subcommand, Debug)]
-pub enum ReferralCommands {
-    /// Generate your referral code
-    Generate,
-    /// Show your referral code and stats
-    Show,
-    /// Apply a referral code to your account
-    Apply {
-        /// The referral code to apply
-        code: String,
+    
+    /// Check deposit balance and storage quota
+    CheckDeposit {
+        #[arg(long)]
+        user_id: Option<String>,
+    },
+    
+    /// Estimate upload cost for a file
+    EstimateCost {
+        /// Path to file to estimate
+        file_path: String,
+        
+        #[arg(long, default_value = "normal", help = "Upload tier: normal, priority, premium, ultra, enterprise")]
+        tier: String,
+        
+        #[arg(long)]
+        user_id: Option<String>,
+    },
+    
+    /// Manually sync deposits from wallet to deposit balance
+    SyncDeposits {
+        #[arg(long)]
+        user_id: Option<String>,
     },
 }
 
@@ -673,58 +642,6 @@ pub struct CheckCustomTokenResponse {
     pub ui_amount: f64,
 }
 
-#[derive(Serialize, Deserialize)]
-pub struct SwapSolForPipeRequest {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub user_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub user_app_key: Option<String>,
-    pub amount_sol: f64,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-pub struct SwapSolForPipeResponse {
-    pub user_id: String,
-    pub sol_spent: f64,
-    pub tokens_minted: u64,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct WithdrawSolRequest {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub user_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub user_app_key: Option<String>,
-    pub to_pubkey: String,
-    pub amount_sol: f64,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-pub struct WithdrawSolResponse {
-    pub user_id: String,
-    pub to_pubkey: String,
-    pub amount_sol: f64,
-    pub signature: String,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct WithdrawTokenRequest {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub user_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub user_app_key: Option<String>,
-    pub to_pubkey: String,
-    pub amount: u64,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-pub struct WithdrawTokenResponse {
-    pub user_id: String,
-    pub to_pubkey: String,
-    pub amount: u64,
-    pub signature: String,
-}
-
 #[derive(Serialize, Deserialize, Debug)]
 pub struct PriorityFeeResponse {
     pub priority_fee_per_gb: f64,
@@ -737,6 +654,60 @@ pub struct GetTierPricingResponse {
     pub premium_fee_per_gb: f64,
     pub ultra_fee_per_gb: f64,
     pub enterprise_fee_per_gb: f64,
+}
+
+// Deposit system structures
+#[derive(Serialize, Deserialize, Debug)]
+pub struct DepositBalanceResponse {
+    pub user_id: String,
+    pub deposit_balance_lamports: u64,
+    pub deposit_balance_pipe: f64,
+    pub total_deposited: u64,
+    pub total_burned: u64,
+    pub storage_quota: StorageQuota,
+    pub last_deposit_at: Option<String>,
+    pub wallet_address: String,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct StorageQuota {
+    pub deposit_balance_lamports: u64,
+    pub deposit_balance_pipe: f64,
+    pub pipe_price_usd: f64,
+    pub tier_estimates: Vec<TierEstimate>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct TierEstimate {
+    pub tier_name: String,
+    pub cost_per_gb_pipe: f64,
+    pub cost_per_gb_usd: f64,
+    pub available_gb: f64,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct EstimateUploadRequest {
+    pub file_size_bytes: u64,
+    pub tier: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct UploadEstimate {
+    pub file_size_bytes: u64,
+    pub tier_name: String,
+    pub estimated_cost_lamports: u64,
+    pub estimated_cost_pipe: f64,
+    pub estimated_cost_usd: f64,
+    pub can_afford: bool,
+    pub remaining_balance_pipe: f64,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct SyncDepositsResponse {
+    pub success: bool,
+    pub deposited_amount: u64,
+    pub deposited_pipe: f64,
+    pub message: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -1542,7 +1513,10 @@ where
 
                 // Check if it's a retryable error
                 let is_rate_limit = error_str.contains("429") || error_str.contains("Too Many Requests");
-                let is_transient_error = error_str.contains("500") && (
+                // Treat common upstream errors as transient (nginx/backends)
+                let is_5xx_gateway = error_str.contains("502") || error_str.contains("503") || error_str.contains("504")
+                    || error_str.contains("Bad Gateway") || error_str.contains("Service Unavailable") || error_str.contains("Gateway Timeout");
+                let is_transient_500 = error_str.contains("500") && (
                     error_str.contains("Failed to flush buffer") ||
                     error_str.contains("Failed to write to file") ||
                     error_str.contains("Storage full") ||
@@ -1551,6 +1525,7 @@ where
                     error_str.contains("timed out") ||
                     error_str.contains("broken")
                 );
+                let is_transient_error = is_5xx_gateway || is_transient_500;
                 
                 if is_rate_limit || is_transient_error {
                     if retry_count >= MAX_RETRIES {
@@ -2887,7 +2862,7 @@ async fn upload_file_with_shared_progress(
                     return Err(anyhow!("Upload failed: {}", message));
                 }
             }
-            return Err(anyhow!("Upload failed: Insufficient tokens. Please use 'pipe swap-sol-for-pipe' to get more tokens."));
+            return Err(anyhow!("Upload failed: Insufficient tokens. Please contact support or add more PIPE tokens to your account."));
         }
 
         // Provide more user-friendly error messages for common server errors
@@ -3112,7 +3087,7 @@ async fn upload_file_priority_with_shared_progress(
                     return Err(anyhow!("Priority upload failed: {}", message));
                 }
             }
-            return Err(anyhow!("Priority upload failed: Insufficient tokens. Please use 'pipe swap-sol-for-pipe' to get more tokens."));
+            return Err(anyhow!("Priority upload failed: Insufficient tokens. Please contact support or add more PIPE tokens to your account."));
         }
 
         // Provide more user-friendly error messages for common server errors
@@ -3461,12 +3436,8 @@ pub async fn run_cli() -> Result<()> {
             | Commands::DownloadFile { .. }
             | Commands::DeleteFile { .. }
             | Commands::FileInfo { .. }
-            | Commands::CheckSol { .. }
             | Commands::CheckToken { .. }
             | Commands::TokenUsage { .. }
-            | Commands::SwapSolForPipe { .. }
-            | Commands::WithdrawSol { .. }
-            | Commands::WithdrawCustomToken { .. }
             | Commands::CreatePublicLink { .. }
             | Commands::DeletePublicLink { .. }
             | Commands::PublicDownload { .. }
@@ -4042,7 +4013,7 @@ pub async fn run_cli() -> Result<()> {
                         if current_balance < estimated_cost {
                             println!("⚠️  Insufficient balance!");
                             println!("   Need {:.4} more PIPE tokens", estimated_cost - current_balance);
-                            println!("\n   Run: pipe swap-sol-for-pipe {:.1}", (estimated_cost - current_balance) / 10.0 + 0.1);
+                            println!("\n   Please contact support to add more PIPE tokens to your account.");
                         } else {
                             println!("✅ Sufficient balance for upload");
                         }
@@ -4378,57 +4349,6 @@ pub async fn run_cli() -> Result<()> {
             println!("feature is not yet implemented in pipe-cli.");
         }
 
-        Commands::CheckSol {
-            user_id,
-            user_app_key,
-        } => {
-            // Load credentials and check for JWT
-            let mut creds = load_credentials_from_file(config_path)?.ok_or_else(|| {
-                anyhow!("No credentials found. Please create a user or login first.")
-            })?;
-
-            // Ensure we have valid JWT token if available
-            ensure_valid_token(&client, base_url, &mut creds, config_path).await?;
-
-            // Override with command-line args if provided (only for legacy auth)
-            if let Some(uid) = user_id {
-                creds.user_id = uid;
-            }
-            if let Some(key) = user_app_key {
-                creds.user_app_key = key;
-            }
-
-            let mut request = client.post(format!("{}/checkWallet", base_url));
-
-            // Use add_auth_headers for consistent authentication
-            request = add_auth_headers(request, &creds, false);
-
-            // Always send empty body - auth is in headers
-            let req_body = CheckWalletRequest {
-                user_id: None,
-                user_app_key: None,
-            };
-            request = request.json(&req_body);
-
-            let resp = request.send().await?;
-            let status = resp.status();
-            let text_body = resp.text().await?;
-
-            if status.is_success() {
-                let json = serde_json::from_str::<CheckWalletResponse>(&text_body)?;
-                println!(
-                    "SOL Balance for user: {}\nPubkey: {}\nLamports: {}\nSOL: {}",
-                    json.user_id, json.public_key, json.balance_lamports, json.balance_sol
-                );
-            } else {
-                return Err(anyhow!(
-                    "Check SOL balance failed. Status = {}, Body = {}",
-                    status,
-                    text_body
-                ));
-            }
-        }
-
         Commands::CheckToken {
             user_id,
             user_app_key,
@@ -4468,7 +4388,7 @@ pub async fn run_cli() -> Result<()> {
             if status.is_success() {
                 let json = serde_json::from_str::<CheckCustomTokenResponse>(&text_body)?;
                 println!(
-                    "Token Balance for user: {}\nPubkey: {}\nMint: {}\nAmount: {}\nUI: {}",
+                    "Token Balance for user: {}\nPubkey: {}\nMint: {}\nAmount: {}\nPIPE: {}",
                     json.user_id, json.public_key, json.token_mint, json.amount, json.ui_amount
                 );
             } else {
@@ -4627,171 +4547,6 @@ pub async fn run_cli() -> Result<()> {
             } else {
                 return Err(anyhow!(
                     "Token usage request failed. Status = {}, Body = {}",
-                    status,
-                    text_body
-                ));
-            }
-        }
-
-        Commands::SwapSolForPipe {
-            user_id,
-            user_app_key,
-            amount_sol,
-        } => {
-            // Load credentials and check for JWT
-            let mut creds = load_credentials_from_file(config_path)?.ok_or_else(|| {
-                anyhow!("No credentials found. Please create a user or login first.")
-            })?;
-
-            // Ensure we have valid JWT token if available
-            ensure_valid_token(&client, base_url, &mut creds, config_path).await?;
-
-            // Override with command-line args if provided (only for legacy auth)
-            if let Some(uid) = user_id {
-                creds.user_id = uid;
-            }
-            if let Some(key) = user_app_key {
-                creds.user_app_key = key;
-            }
-
-            let mut request = client.post(format!("{}/exchangeSolForTokens", base_url));
-
-            // Use add_auth_headers for consistent authentication
-            request = add_auth_headers(request, &creds, true);
-
-            // Always send only amount - auth is in headers
-            let req_body = SwapSolForPipeRequest {
-                user_id: None,
-                user_app_key: None,
-                amount_sol,
-            };
-            request = request.json(&req_body);
-
-            let resp = request.send().await?;
-            let status = resp.status();
-            let text_body = resp.text().await?;
-
-            if status.is_success() {
-                let json = serde_json::from_str::<SwapSolForPipeResponse>(&text_body)?;
-                println!(
-                    "Swap SOL -> PIPE complete!\nUser: {}\nSOL spent: {}\nPIPE minted: {}",
-                    json.user_id, json.sol_spent, json.tokens_minted
-                );
-            } else {
-                return Err(anyhow!(
-                    "SwapSolForPipe failed. Status = {}, Body = {}",
-                    status,
-                    text_body
-                ));
-            }
-        }
-
-        Commands::WithdrawSol {
-            user_id,
-            user_app_key,
-            amount_sol,
-            to_pubkey,
-        } => {
-            // Load credentials and check for JWT
-            let mut creds = load_credentials_from_file(config_path)?.ok_or_else(|| {
-                anyhow!("No credentials found. Please create a user or login first.")
-            })?;
-
-            // Ensure we have valid JWT token if available
-            ensure_valid_token(&client, base_url, &mut creds, config_path).await?;
-
-            // Override with command-line args if provided (only for legacy auth)
-            if let Some(uid) = user_id {
-                creds.user_id = uid;
-            }
-            if let Some(key) = user_app_key {
-                creds.user_app_key = key;
-            }
-
-            let mut request = client.post(format!("{}/withdrawSol", base_url));
-
-            // Use add_auth_headers for consistent authentication
-            request = add_auth_headers(request, &creds, true);
-
-            // Always send withdrawal details only - auth is in headers
-            let req_body = WithdrawSolRequest {
-                user_id: None,
-                user_app_key: None,
-                amount_sol,
-                to_pubkey,
-            };
-            request = request.json(&req_body);
-
-            let resp = request.send().await?;
-            let status = resp.status();
-            let text_body = resp.text().await?;
-
-            if status.is_success() {
-                let json = serde_json::from_str::<WithdrawSolResponse>(&text_body)?;
-                println!(
-                    "SOL Withdrawal complete!\nUser: {}\nTo: {}\nAmount SOL: {}\nSignature: {}",
-                    json.user_id, json.to_pubkey, json.amount_sol, json.signature
-                );
-            } else {
-                return Err(anyhow!(
-                    "Withdraw SOL failed. Status = {}, Body = {}",
-                    status,
-                    text_body
-                ));
-            }
-        }
-
-        Commands::WithdrawCustomToken {
-            user_id,
-            user_app_key,
-            token_mint,
-            amount,
-            to_pubkey,
-        } => {
-            // Load credentials and check for JWT
-            let mut creds = load_credentials_from_file(config_path)?.ok_or_else(|| {
-                anyhow!("No credentials found. Please create a user or login first.")
-            })?;
-
-            // Ensure we have valid JWT token if available
-            ensure_valid_token(&client, base_url, &mut creds, config_path).await?;
-
-            // Override with command-line args if provided (only for legacy auth)
-            if let Some(uid) = user_id {
-                creds.user_id = uid;
-            }
-            if let Some(key) = user_app_key {
-                creds.user_app_key = key;
-            }
-
-            let mut request = client.post(format!("{}/withdrawToken", base_url));
-
-            // Use add_auth_headers for consistent authentication
-            request = add_auth_headers(request, &creds, true);
-
-            // Always send withdrawal details only - auth is in headers
-            let req_body = WithdrawTokenRequest {
-                user_id: None,
-                user_app_key: None,
-                to_pubkey,
-                amount,
-            };
-            request = request.json(&req_body);
-
-            let resp = request.send().await?;
-            let status = resp.status();
-            let text_body = resp.text().await?;
-
-            if status.is_success() {
-                let json = serde_json::from_str::<WithdrawTokenResponse>(&text_body)?;
-                println!(
-                    "Token Withdrawal complete!\nUser: {}\nTo: {}\nAmount: {}\nSignature: {}",
-                    json.user_id, json.to_pubkey, json.amount, json.signature
-                );
-                println!("Token mint used: {}", token_mint);
-            } else {
-                return Err(anyhow!(
-                    "Withdraw custom token failed. Status = {}, Body = {}",
                     status,
                     text_body
                 ));
@@ -5166,7 +4921,7 @@ pub async fn run_cli() -> Result<()> {
                                         "Needed: {:.4} PIPE tokens",
                                         total_cost_estimate - current_balance
                                     );
-                                    eprintln!("\nPlease use 'pipe swap-sol-for-pipe {:.1}' to get enough tokens.", 
+                                    eprintln!("\nPlease contact support to add more PIPE tokens to your account. You need approximately {:.1} PIPE tokens.", 
                                     (total_cost_estimate - current_balance) / 10.0 + 0.1);
                                     return Ok(());
                                 }
@@ -5246,12 +5001,15 @@ pub async fn run_cli() -> Result<()> {
             let failed_count = Arc::new(TokioMutex::new(0u32));
             let total_cost = Arc::new(TokioMutex::new(0.0f64));
 
+            // Share credentials across tasks so we can refresh tokens mid-run
+            let shared_creds = Arc::new(TokioMutex::new(creds));
+
             for path in file_entries {
                 let sem_clone = Arc::clone(&sem);
                 let client_clone = client.clone();
                 let base_url_clone = base_url.to_string();
                 let service_cache_clone = service_cache.clone();
-                let creds_clone = creds.clone();
+                let shared_creds_clone = shared_creds.clone();
                 let shared_progress_clone = shared_progress.clone();
                 let completed_clone = completed_count.clone();
                 let failed_clone = failed_count.clone();
@@ -5274,12 +5032,16 @@ pub async fn run_cli() -> Result<()> {
                     let _permit = sem_clone.acquire_owned().await.unwrap();
 
                     // Get endpoint for this specific file upload
+                    let user_id_owned = {
+                        let creds_guard = shared_creds_clone.lock().await;
+                        creds_guard.user_id.clone()
+                    };
                     let selected_endpoint = get_endpoint_for_operation(
                         &service_cache_clone,
                         &client_clone,
                         &base_url_clone,
                         "upload",
-                        &creds_clone.user_id,
+                        &user_id_owned,
                         Some(&rel_path),
                     )
                     .await;
@@ -5306,16 +5068,57 @@ pub async fn run_cli() -> Result<()> {
                     // Use retry wrapper for directory uploads
                     let upload_result =
                         upload_with_retry(&format!("upload of {}", rel_path), || {
-                            upload_file_with_encryption(
-                                &client_clone,
-                                &path,
-                                &url,
-                                &rel_path,
-                                &creds_clone,
-                                encrypt_clone,
-                                password_clone.clone(),
-                                Some(shared_progress_clone.clone()),
-                            )
+                            let client_inner = client_clone.clone();
+                            let base_url_inner = base_url_clone.clone();
+                            let shared_creds_inner = shared_creds_clone.clone();
+                            let path_inner = path.clone();
+                            let url_inner = url.clone();
+                            let rel_inner = rel_path.clone();
+                            let shared_prog_inner = shared_progress_clone.clone();
+                            let pwd_inner = password_clone.clone();
+                            async move {
+                                // Ensure token valid preflight
+                                let mut creds_guard = shared_creds_inner.lock().await;
+                                let _ = ensure_valid_token(&client_inner, &base_url_inner, &mut *creds_guard, None).await;
+                                let creds_snapshot = creds_guard.clone();
+                                drop(creds_guard);
+
+                                // Attempt upload
+                                match upload_file_with_encryption(
+                                    &client_inner,
+                                    &path_inner,
+                                    &url_inner,
+                                    &rel_inner,
+                                    &creds_snapshot,
+                                    encrypt_clone,
+                                    pwd_inner.clone(),
+                                    Some(shared_prog_inner.clone()),
+                                ).await {
+                                    Ok(ok) => Ok(ok),
+                                    Err(e) => {
+                                        let es = e.to_string();
+                                        if es.contains("401") || es.contains("Unauthorized") || es.contains("Authentication required") {
+                                            // Refresh and retry once
+                                            let mut creds_guard2 = shared_creds_inner.lock().await;
+                                            let _ = ensure_valid_token(&client_inner, &base_url_inner, &mut *creds_guard2, None).await;
+                                            let creds_snapshot2 = creds_guard2.clone();
+                                            drop(creds_guard2);
+                                            upload_file_with_encryption(
+                                                &client_inner,
+                                                &path_inner,
+                                                &url_inner,
+                                                &rel_inner,
+                                                &creds_snapshot2,
+                                                encrypt_clone,
+                                                pwd_inner.clone(),
+                                                Some(shared_prog_inner.clone()),
+                                            ).await
+                                        } else {
+                                            Err(e)
+                                        }
+                                    }
+                                }
+                            }
                         })
                         .await;
 
@@ -5530,7 +5333,7 @@ pub async fn run_cli() -> Result<()> {
                                         "Needed: {:.4} PIPE tokens",
                                         total_cost_estimate - current_balance
                                     );
-                                    eprintln!("\nPlease use 'pipe swap-sol-for-pipe {:.1}' to get enough tokens.", 
+                                    eprintln!("\nPlease contact support to add more PIPE tokens to your account. You need approximately {:.1} PIPE tokens.", 
                                         (total_cost_estimate - current_balance) / 10.0 + 0.1);
                                     return Ok(());
                                 }
@@ -5603,12 +5406,15 @@ pub async fn run_cli() -> Result<()> {
             let failed_count = Arc::new(TokioMutex::new(0u32));
             let total_cost = Arc::new(TokioMutex::new(0.0f64));
 
+            // Share credentials across tasks for auto-refresh
+            let shared_creds = Arc::new(TokioMutex::new(creds));
+
             for path in file_entries {
                 let sem_clone = Arc::clone(&sem);
                 let client_clone = client.clone();
                 let base_url_clone = base_url.to_string();
                 let service_cache_clone = service_cache.clone();
-                let creds_clone = creds.clone();
+                let shared_creds_clone = shared_creds.clone();
                 let shared_progress_clone = shared_progress.clone();
                 let completed_clone = completed_count.clone();
                 let failed_clone = failed_count.clone();
@@ -5628,12 +5434,16 @@ pub async fn run_cli() -> Result<()> {
                     let _permit = sem_clone.acquire_owned().await.unwrap();
 
                     // Get endpoint for this specific file upload
+                    let user_id_owned = {
+                        let creds_guard = shared_creds_clone.lock().await;
+                        creds_guard.user_id.clone()
+                    };
                     let selected_endpoint = get_endpoint_for_operation(
                         &service_cache_clone,
                         &client_clone,
                         &base_url_clone,
                         "upload",
-                        &creds_clone.user_id,
+                        &user_id_owned,
                         Some(&rel_path),
                     )
                     .await;
@@ -5647,14 +5457,49 @@ pub async fn run_cli() -> Result<()> {
                     // Use retry wrapper for priority directory uploads
                     let upload_result =
                         upload_with_retry(&format!("priority upload of {}", rel_path), || {
-                            upload_file_priority_with_shared_progress(
-                                &client_clone,
-                                &path,
-                                &url,
-                                &rel_path,
-                                &creds_clone,
-                                Some(shared_progress_clone.clone()),
-                            )
+                            let client_inner = client_clone.clone();
+                            let base_url_inner = base_url_clone.clone();
+                            let shared_creds_inner = shared_creds_clone.clone();
+                            let path_inner = path.clone();
+                            let url_inner = url.clone();
+                            let rel_inner = rel_path.clone();
+                            let shared_prog_inner = shared_progress_clone.clone();
+                            async move {
+                                // Preflight refresh
+                                let mut creds_guard = shared_creds_inner.lock().await;
+                                let _ = ensure_valid_token(&client_inner, &base_url_inner, &mut *creds_guard, None).await;
+                                let creds_snapshot = creds_guard.clone();
+                                drop(creds_guard);
+                                match upload_file_priority_with_shared_progress(
+                                    &client_inner,
+                                    &path_inner,
+                                    &url_inner,
+                                    &rel_inner,
+                                    &creds_snapshot,
+                                    Some(shared_prog_inner.clone()),
+                                ).await {
+                                    Ok(ok) => Ok(ok),
+                                    Err(e) => {
+                                        let es = e.to_string();
+                                        if es.contains("401") || es.contains("Unauthorized") || es.contains("Authentication required") {
+                                            let mut creds_guard2 = shared_creds_inner.lock().await;
+                                            let _ = ensure_valid_token(&client_inner, &base_url_inner, &mut *creds_guard2, None).await;
+                                            let creds_snapshot2 = creds_guard2.clone();
+                                            drop(creds_guard2);
+                                            upload_file_priority_with_shared_progress(
+                                                &client_inner,
+                                                &path_inner,
+                                                &url_inner,
+                                                &rel_inner,
+                                                &creds_snapshot2,
+                                                Some(shared_prog_inner.clone()),
+                                            ).await
+                                        } else {
+                                            Err(e)
+                                        }
+                                    }
+                                }
+                            }
                         })
                         .await;
 
@@ -5886,7 +5731,7 @@ pub async fn run_cli() -> Result<()> {
                         if current_balance < estimated_cost {
                             println!("⚠️  Insufficient balance!");
                             println!("   Need {:.4} more PIPE tokens", estimated_cost - current_balance);
-                            println!("\n   Run: pipe swap-sol-for-pipe {:.1}", (estimated_cost - current_balance) / 10.0 + 0.1);
+                            println!("\n   Please contact support to add more PIPE tokens to your account.");
                         } else {
                             println!("✅ Sufficient balance for upload");
                         }
@@ -6230,6 +6075,235 @@ pub async fn run_cli() -> Result<()> {
                 parallel,
             )
             .await?;
+        }
+        
+        Commands::CheckDeposit { user_id } => {
+            // Load credentials and check for JWT
+            let mut creds = load_credentials_from_file(config_path)?.ok_or_else(|| {
+                anyhow!("No credentials found. Please create a user or login first.")
+            })?;
+
+            // Ensure we have valid JWT token if available
+            ensure_valid_token(&client, base_url, &mut creds, config_path).await?;
+
+            // Override with command-line args if provided
+            if let Some(uid) = user_id {
+                creds.user_id = uid;
+            }
+
+            let mut request = client.get(format!("{}/deposit/balance", base_url));
+            request = add_auth_headers(request, &creds, false);
+
+            let resp = request.send().await?;
+            let status = resp.status();
+            let text_body = resp.text().await?;
+
+            if status.is_success() {
+                let json = serde_json::from_str::<DepositBalanceResponse>(&text_body)?;
+                
+                println!("╔══════════════════════════════════════════════════════════════╗");
+                println!("║                  💰 DEPOSIT BALANCE                          ║");
+                println!("╚══════════════════════════════════════════════════════════════╝");
+                println!();
+                println!("User: {}", json.user_id);
+                println!("Wallet Address: {}", json.wallet_address);
+                println!();
+                println!("💵 Deposit Balance: {:.4} PIPE (${:.2} USD)", 
+                    json.deposit_balance_pipe,
+                    json.deposit_balance_pipe * json.storage_quota.pipe_price_usd);
+                println!("📊 PIPE Price: ${:.6} USD", json.storage_quota.pipe_price_usd);
+                println!();
+                println!("📦 Available Storage:");
+                println!("┌──────────────┬────────────────┬──────────────┬──────────────┐");
+                println!("│ Tier         │ Available GB   │ PIPE/GB      │ USD/GB       │");
+                println!("├──────────────┼────────────────┼──────────────┼──────────────┤");
+                
+                for tier in &json.storage_quota.tier_estimates {
+                    println!("│ {:<12} │ {:>12.2} GB│ {:>10.4} │ ${:>11.4} │",
+                        tier.tier_name,
+                        tier.available_gb,
+                        tier.cost_per_gb_pipe,
+                        tier.cost_per_gb_usd
+                    );
+                }
+                
+                println!("└──────────────┴────────────────┴──────────────┴──────────────┘");
+                println!();
+                println!("📊 Statistics:");
+                println!("  Total Deposited: {:.4} PIPE", json.total_deposited as f64 / 1e9);
+                println!("  Total Burned:    {:.4} PIPE", json.total_burned as f64 / 1e9);
+                
+                if let Some(last_deposit) = json.last_deposit_at {
+                    println!("  Last Deposit:    {}", last_deposit);
+                }
+                
+                println!();
+                println!("💡 To deposit more PIPE:");
+                println!("   Send PIPE tokens to: {}", json.wallet_address);
+                println!("   Then run: pipe sync-deposits");
+                
+            } else {
+                return Err(anyhow!(
+                    "Check deposit failed. Status = {}, Body = {}",
+                    status,
+                    text_body
+                ));
+            }
+        }
+        
+        Commands::EstimateCost { file_path, tier, user_id } => {
+            // Load credentials and check for JWT
+            let mut creds = load_credentials_from_file(config_path)?.ok_or_else(|| {
+                anyhow!("No credentials found. Please create a user or login first.")
+            })?;
+
+            // Ensure we have valid JWT token if available
+            ensure_valid_token(&client, base_url, &mut creds, config_path).await?;
+
+            // Override with command-line args if provided
+            if let Some(uid) = user_id {
+                creds.user_id = uid;
+            }
+            
+            // Get file size
+            let metadata = tokio::fs::metadata(&file_path).await?;
+            let file_size = metadata.len();
+            
+            let mut request = client.post(format!("{}/deposit/estimate", base_url));
+            request = add_auth_headers(request, &creds, false);
+            
+            let req_body = EstimateUploadRequest {
+                file_size_bytes: file_size,
+                tier: Some(tier.clone()),
+            };
+            request = request.json(&req_body);
+            
+            let resp = request.send().await?;
+            let status = resp.status();
+            let text_body = resp.text().await?;
+            
+            if status.is_success() {
+                let estimate: UploadEstimate = serde_json::from_str(&text_body)?;
+                
+                println!("╔══════════════════════════════════════════════════════════════╗");
+                println!("║                   📊 UPLOAD COST ESTIMATE                    ║");
+                println!("╚══════════════════════════════════════════════════════════════╝");
+                println!();
+                println!("📁 File: {}", file_path);
+                println!("📏 Size: {:.2} GB ({} bytes)", file_size as f64 / 1_073_741_824.0, file_size);
+                println!("🎯 Tier: {}", estimate.tier_name);
+                println!();
+                println!("💰 Estimated Cost:");
+                println!("   {:.6} PIPE (${:.4} USD)", 
+                    estimate.estimated_cost_pipe,
+                    estimate.estimated_cost_usd);
+                println!();
+                println!("💳 Your Balance:");
+                let current_balance = estimate.remaining_balance_pipe + estimate.estimated_cost_pipe;
+                println!("   Before Upload: {:.6} PIPE", current_balance);
+                println!("   After Upload:  {:.6} PIPE", estimate.remaining_balance_pipe);
+                println!();
+                
+                if estimate.can_afford {
+                    println!("✅ Status: CAN AFFORD");
+                    println!();
+                    println!("   You have sufficient deposit balance for this upload.");
+                } else {
+                    println!("❌ Status: INSUFFICIENT BALANCE");
+                    let needed = estimate.estimated_cost_pipe - current_balance;
+                    println!();
+                    println!("   You need {:.6} more PIPE to upload this file.", needed);
+                    println!("   Current balance: {:.6} PIPE", current_balance);
+                    println!("   Required: {:.6} PIPE", estimate.estimated_cost_pipe);
+                }
+                
+            } else {
+                return Err(anyhow!(
+                    "Estimate cost failed. Status = {}, Body = {}",
+                    status,
+                    text_body
+                ));
+            }
+        }
+        
+        Commands::SyncDeposits { user_id } => {
+            // Load credentials and check for JWT
+            let mut creds = load_credentials_from_file(config_path)?.ok_or_else(|| {
+                anyhow!("No credentials found. Please create a user or login first.")
+            })?;
+
+            // Ensure we have valid JWT token if available
+            ensure_valid_token(&client, base_url, &mut creds, config_path).await?;
+
+            // Override with command-line args if provided
+            if let Some(uid) = user_id {
+                creds.user_id = uid;
+            }
+            
+            println!("🔄 Syncing deposits from wallet...");
+            println!();
+            
+            let mut request = client.post(format!("{}/deposit/sync", base_url));
+            request = add_auth_headers(request, &creds, false);
+            
+            let resp = request.send().await?;
+            let status = resp.status();
+            let text_body = resp.text().await?;
+            
+            if status.is_success() {
+                let result: SyncDepositsResponse = serde_json::from_str(&text_body)?;
+                
+                if result.success {
+                    if result.deposited_pipe > 0.0 {
+                        println!("✅ New deposit detected!");
+                        println!();
+                        println!("   Amount: {:.6} PIPE (${:.4} USD)", 
+                            result.deposited_pipe,
+                            result.deposited_amount as f64 / 1e9 * 0.10); // Approximate USD
+                        println!();
+                        
+                        // Get updated balance
+                        let balance_req = client.get(format!("{}/deposit/balance", base_url));
+                        let balance_req = add_auth_headers(balance_req, &creds, false);
+                        
+                        if let Ok(balance_resp) = balance_req.send().await {
+                            if let Ok(balance_text) = balance_resp.text().await {
+                                if let Ok(balance) = serde_json::from_str::<DepositBalanceResponse>(&balance_text) {
+                                    println!("💰 Updated Balance: {:.6} PIPE (${:.2} USD)", 
+                                        balance.deposit_balance_pipe,
+                                        balance.deposit_balance_pipe * balance.storage_quota.pipe_price_usd);
+                                    
+                                    // Show storage for Normal tier
+                                    if let Some(normal) = balance.storage_quota.tier_estimates.first() {
+                                        println!("📦 Storage Available: {:.2} GB (Normal tier)", 
+                                            normal.available_gb);
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        println!("ℹ️  No new deposits found");
+                        println!();
+                        println!("   {}", result.message);
+                    }
+                    
+                    println!();
+                    println!("💡 To deposit PIPE:");
+                    println!("   1. Run: pipe check-deposit");
+                    println!("   2. Send PIPE to your wallet address");
+                    println!("   3. Wait 30 seconds or run: pipe sync-deposits");
+                    
+                } else {
+                    return Err(anyhow!("Sync failed: {}", result.message));
+                }
+                
+            } else {
+                return Err(anyhow!(
+                    "Sync deposits failed. Status = {}, Body = {}",
+                    status,
+                    text_body
+                ));
+            }
         }
 
         Commands::EncryptLocal {
@@ -6622,139 +6696,6 @@ pub async fn run_cli() -> Result<()> {
             } else {
                 println!("❌ Signature verification FAILED");
                 println!("   The file may have been modified or signed with a different key");
-            }
-        }
-
-        Commands::Referral(subcmd) => {
-            // Load credentials
-            let mut creds = load_credentials_from_file(config_path)?.ok_or_else(|| {
-                anyhow!("No credentials found. Please create a user or login first.")
-            })?;
-
-            // Ensure we have valid JWT token
-            ensure_valid_token(&client, base_url, &mut creds, config_path).await?;
-
-            // Get the JWT token
-            let jwt_token = creds.auth_tokens.as_ref()
-                .ok_or_else(|| anyhow!("No authentication tokens found."))?
-                .access_token.clone();
-
-            match subcmd {
-                ReferralCommands::Generate => {
-                    let resp = client
-                        .post(format!("{}/api/referral/generate", base_url))
-                        .header("Authorization", format!("Bearer {}", jwt_token))
-                        .send()
-                        .await?;
-
-                    let status = resp.status();
-                    let text_body = resp.text().await?;
-
-                    if status.is_success() {
-                        let response: serde_json::Value = serde_json::from_str(&text_body)?;
-                        let code = response["code"].as_str().unwrap_or("Unknown");
-                        let existing = response["existing"].as_bool().unwrap_or(false);
-
-                        if existing {
-                            println!("Your existing referral code: {}", code);
-                        } else {
-                            println!("🎉 Your new referral code: {}", code);
-                        }
-                        
-                        println!("\n📋 Referral Program Rules:");
-                        println!("  • Share this code with friends who want to join Pipe Network");
-                        println!("  • They must swap at least 1 DevNet SOL to activate your reward");
-                        println!("  • You receive 100 PIPE tokens per successful referral");
-                        println!("  • Rewards are subject to fraud prevention checks");
-                        println!("  • Processing may take up to 24 hours");
-                        println!("\n💡 Get free DevNet SOL at: https://faucet.solana.com/");
-                    } else {
-                        return Err(anyhow!(
-                            "Failed to generate referral code. Status={}, Body={}",
-                            status,
-                            text_body
-                        ));
-                    }
-                }
-
-                ReferralCommands::Show => {
-                    // Get the code
-                    let code_resp = client
-                        .get(format!("{}/api/referral/my-code", base_url))
-                        .header("Authorization", format!("Bearer {}", jwt_token))
-                        .send()
-                        .await;
-
-                    match code_resp {
-                        Ok(resp) if resp.status().is_success() => {
-                            let text_body = resp.text().await?;
-                            let response: serde_json::Value = serde_json::from_str(&text_body)?;
-                            let code = response["code"].as_str().unwrap_or("Unknown");
-                            println!("Your referral code: {}", code);
-
-                            // Get stats
-                            let stats_resp = client
-                                .get(format!("{}/api/referral/stats", base_url))
-                                .header("Authorization", format!("Bearer {}", jwt_token))
-                                .send()
-                                .await?;
-
-                            if stats_resp.status().is_success() {
-                                let stats_body = stats_resp.text().await?;
-                                let stats: serde_json::Value = serde_json::from_str(&stats_body)?;
-
-                                println!("\n📊 Referral Statistics:");
-                                println!("  Total uses: {}", stats["total_uses"]);
-                                println!("  Successful referrals: {}", stats["successful_referrals"]);
-                                println!("  Pending referrals: {}", stats["pending_referrals"]);
-                                println!("  Total PIPE earned: {}", stats["total_pipe_earned"]);
-                                
-                                println!("\n📋 Referral Program Rules:");
-                                println!("  • Referred user must swap at least 1 DevNet SOL to activate reward");
-                                println!("  • You receive 100 PIPE tokens per successful referral");
-                                println!("  • Rewards are subject to fraud prevention checks");
-                                println!("  • Processing may take up to 24 hours");
-                                println!("\n💡 Get free DevNet SOL at: https://faucet.solana.com/");
-                            }
-                        }
-                        _ => {
-                            println!("You don't have a referral code yet. Generate one with 'pipe referral generate'");
-                        }
-                    }
-                }
-
-                ReferralCommands::Apply { code } => {
-                    let req_body = serde_json::json!({ "code": code });
-                    let resp = client
-                        .post(format!("{}/api/referral/apply", base_url))
-                        .header("Authorization", format!("Bearer {}", jwt_token))
-                        .json(&req_body)
-                        .send()
-                        .await?;
-
-                    let status = resp.status();
-                    let text_body = resp.text().await?;
-
-                    if status.is_success() {
-                        let response: serde_json::Value = serde_json::from_str(&text_body)?;
-                        if response["success"].as_bool().unwrap_or(false) {
-                            println!("✅ {}", response["message"].as_str().unwrap_or("Referral code applied successfully!"));
-                            println!("\nℹ️  Important: To activate the referral reward for your referrer:");
-                            println!("  • You must complete a swap of at least 1 DevNet SOL");
-                            println!("  • Your referrer will receive 100 PIPE tokens");
-                            println!("  • Use 'pipe swap-sol-for-pipe' to get started");
-                            println!("\n💡 Need DevNet SOL? Get it free at: https://faucet.solana.com/");
-                        } else {
-                            println!("❌ {}", response["message"].as_str().unwrap_or("Failed to apply referral code"));
-                        }
-                    } else {
-                        return Err(anyhow!(
-                            "Failed to apply referral code. Status={}, Body={}",
-                            status,
-                            text_body
-                        ));
-                    }
-                }
             }
         }
     }
