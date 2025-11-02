@@ -1,6 +1,6 @@
 use aes_gcm::{
     aead::{Aead, AeadCore, KeyInit, OsRng},
-    Aes256Gcm, Key, Nonce,
+    Aes256Gcm,
 };
 use anyhow::{anyhow, Result};
 use argon2::{
@@ -159,7 +159,7 @@ pub fn generate_salt() -> [u8; SALT_SIZE] {
 
 /// Encrypts data using AES-256-GCM with the provided key
 pub fn encrypt_data(data: &[u8], key: &EncryptionKey) -> Result<(Vec<u8>, [u8; NONCE_SIZE])> {
-    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key.key));
+    let cipher = Aes256Gcm::new((&key.key).into());
     let nonce_bytes = Aes256Gcm::generate_nonce(&mut OsRng);
     let mut nonce = [0u8; NONCE_SIZE];
     nonce.copy_from_slice(&nonce_bytes);
@@ -177,8 +177,8 @@ pub fn decrypt_data(
     key: &EncryptionKey,
     nonce: &[u8; NONCE_SIZE],
 ) -> Result<Vec<u8>> {
-    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key.key));
-    let nonce = Nonce::from_slice(nonce);
+    let cipher = Aes256Gcm::new((&key.key).into());
+    let nonce = nonce.into();
 
     let plaintext = cipher
         .decrypt(nonce, ciphertext)
@@ -207,7 +207,7 @@ pub async fn encrypt_file_with_password<R: Read, W: Write>(
     writer.write_all(&header.to_bytes())?;
 
     // Encrypt file in chunks
-    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key.key));
+    let cipher = Aes256Gcm::new((&key.key).into());
     let mut buffer = vec![0u8; CHUNK_SIZE];
     let mut total_encrypted = 0;
 
@@ -224,7 +224,7 @@ pub async fn encrypt_file_with_password<R: Read, W: Write>(
         chunk_nonce[..8].copy_from_slice(&counter.to_le_bytes());
 
         let chunk_data = &buffer[..bytes_read];
-        let nonce_obj = Nonce::from_slice(&chunk_nonce);
+        let nonce_obj = (&chunk_nonce).into();
 
         let ciphertext = cipher
             .encrypt(nonce_obj, chunk_data)
@@ -261,7 +261,7 @@ pub async fn decrypt_file_with_password<R: Read, W: Write>(
     let key = derive_key_from_password(password, &salt)?;
 
     // Decrypt file in chunks
-    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key.key));
+    let cipher = Aes256Gcm::new((&key.key).into());
     let base_nonce = header.nonce;
     let mut chunk_counter = 0u64;
 
@@ -286,7 +286,7 @@ pub async fn decrypt_file_with_password<R: Read, W: Write>(
         // Prepare chunk nonce
         let mut chunk_nonce = base_nonce;
         chunk_nonce[..8].copy_from_slice(&chunk_counter.to_le_bytes());
-        let nonce_obj = Nonce::from_slice(&chunk_nonce);
+        let nonce_obj = (&chunk_nonce).into();
 
         // Decrypt chunk
         let plaintext = cipher
