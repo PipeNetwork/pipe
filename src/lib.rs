@@ -8,6 +8,7 @@ use clap::{Parser, Subcommand};
 use futures_util::StreamExt;
 use indicatif::{ProgressBar, ProgressStyle};
 use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
+use std::str::FromStr;
 use reqwest::{Body, Client, StatusCode};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -337,20 +338,6 @@ pub enum Commands {
         user_app_key: Option<String>,
     },
     
-    /// View token usage breakdown (storage vs bandwidth)
-    TokenUsage {
-        /// Time period: 7d, 30d, 90d, 365d, or all
-        #[arg(short, long, default_value = "30d")]
-        period: String,
-        
-        /// Show detailed breakdown by tier
-        #[arg(short, long)]
-        detailed: bool,
-        
-        #[arg(long)]
-        user_id: Option<String>,
-    },
-
     CreatePublicLink {
         #[arg(long)]
         user_id: Option<String>,
@@ -474,6 +461,10 @@ pub enum Commands {
         additional_months: u64,
     },
 
+    // NOTE: VerifyFile command is commented out for production release
+    // This feature requires server-side support and is planned for a future release
+    // Uncomment when server API endpoint is ready
+    /*
     /// Verify file integrity using Blake3 hash
     VerifyFile {
         /// File name or Blake3 hash ID
@@ -487,6 +478,7 @@ pub enum Commands {
         #[arg(long)]
         user_app_key: Option<String>,
     },
+    */
     
     /// Find uploaded file by local path or hash
     FindUpload {
@@ -3437,7 +3429,6 @@ pub async fn run_cli() -> Result<()> {
             | Commands::DeleteFile { .. }
             | Commands::FileInfo { .. }
             | Commands::CheckToken { .. }
-            | Commands::TokenUsage { .. }
             | Commands::CreatePublicLink { .. }
             | Commands::DeletePublicLink { .. }
             | Commands::PublicDownload { .. }
@@ -4400,159 +4391,6 @@ pub async fn run_cli() -> Result<()> {
             }
         }
 
-        Commands::TokenUsage { period, detailed, user_id } => {
-            // Load credentials
-            let mut creds = load_credentials_from_file(config_path)?.ok_or_else(|| {
-                anyhow!("No credentials found. Please run 'pipe generate-wallet' first.")
-            })?;
-
-            // Override with provided user_id if given
-            if let Some(id) = user_id {
-                creds.user_id = id;
-            }
-
-            // Ensure JWT token is valid
-            let client = reqwest::Client::new();
-            ensure_valid_token(&client, base_url, &mut creds, config_path).await?;
-
-            // Get service URL
-            let url = format!("{}/api/token-usage", base_url);
-
-            // Make request
-            let resp = client
-                .get(&url)
-                .query(&[
-                    ("user_id", creds.user_id.as_str()),
-                    ("period", period.as_str()),
-                    ("detailed", &detailed.to_string()),
-                ])
-                .send()
-                .await?;
-
-            let status = resp.status();
-            let text_body = resp.text().await?;
-
-            if status.is_success() {
-                // Parse and display the response
-                let usage: serde_json::Value = serde_json::from_str(&text_body)?;
-                
-                println!("📊 Token Usage Report ({})", usage["period"]);
-                println!();
-                
-                let breakdown = &usage["breakdown"];
-                let storage = &breakdown["storage"];
-                let bandwidth = &breakdown["bandwidth"];
-                let total = &breakdown["total"];
-                
-                if detailed {
-                    // Enhanced detailed view
-                    println!("📦 Storage Analysis");
-                    println!("├─ Total Volume: {:.2} GB", storage["gb_transferred"]);
-                    println!("├─ Total Cost: {:.4} PIPE", storage["tokens_spent"]);
-                    println!("└─ By Tier:");
-                    
-                    if let Some(tier_details) = storage["tier_details"].as_object() {
-                        let mut tiers: Vec<_> = tier_details.iter().collect();
-                        tiers.sort_by_key(|(name, _)| match name.as_str() {
-                            "Normal" => 0,
-                            "Priority" => 1,
-                            "Premium" => 2,
-                            "Ultra" => 3,
-                            "Enterprise" => 4,
-                            _ => 5,
-                        });
-                        
-                        for (i, (tier_name, tier_data)) in tiers.iter().enumerate() {
-                            let is_last = i == tiers.len() - 1;
-                            let prefix = if is_last { "└─" } else { "├─" };
-                            let gb = tier_data["gb_transferred"].as_f64().unwrap_or(0.0);
-                            let cost = tier_data["final_cost"].as_f64().unwrap_or(0.0);
-                            let multiplier = tier_data["avg_multiplier"].as_f64().unwrap_or(1.0);
-                            let count = tier_data["transfer_count"].as_i64().unwrap_or(0);
-                            
-                            if gb > 0.0 {
-                                if tier_name.as_str() == "Priority" && multiplier != 1.0 {
-                                    println!("    {} {} ({:.1}x avg): {:.2} GB = {:.4} PIPE ({} uploads)",
-                                        prefix, tier_name, multiplier, gb, cost, count);
-                                } else if tier_name.as_str() != "Normal" {
-                                    let base_multiplier = match tier_name.as_str() {
-                                        "Premium" => 5.0,
-                                        "Ultra" => 10.0,
-                                        "Enterprise" => 25.0,
-                                        _ => 1.0,
-                                    };
-                                    println!("    {} {} ({:.0}x): {:.2} GB = {:.4} PIPE ({} uploads)",
-                                        prefix, tier_name, base_multiplier, gb, cost, count);
-                                } else {
-                                    println!("    {} {} (1x): {:.2} GB = {:.4} PIPE ({} uploads)",
-                                        prefix, tier_name, gb, cost, count);
-                                }
-                            }
-                        }
-                    }
-                    
-                    println!();
-                    println!("🌐 Bandwidth Analysis");
-                    println!("├─ Total Volume: {:.2} GB", bandwidth["gb_transferred"]);
-                    println!("└─ Total Cost: {:.4} PIPE", bandwidth["tokens_spent"]);
-                    
-                    if let Some(count) = bandwidth["transfer_count"].as_i64() {
-                        if count > 0 {
-                            println!("    └─ {} downloads", count);
-                        }
-                    }
-                    
-                    println!();
-                    println!("💰 Token Distribution");
-                    println!("├─ Total Spent: {:.4} PIPE", total["tokens_spent"]);
-                    let total_spent = total["tokens_spent"].as_f64().unwrap_or(0.0);
-                    let total_burned = total["tokens_burned"].as_f64().unwrap_or(0.0);
-                    let total_treasury = total["tokens_to_treasury"].as_f64().unwrap_or(0.0);
-                    let burn_pct = if total_spent > 0.0 { total_burned / total_spent * 100.0 } else { 0.0 };
-                    let treasury_pct = if total_spent > 0.0 { total_treasury / total_spent * 100.0 } else { 0.0 };
-                    println!("├─ Burned: {:.4} PIPE ({:.1}%)", total_burned, burn_pct);
-                    println!("└─ Treasury: {:.4} PIPE ({:.1}%)", total_treasury, treasury_pct);
-                } else {
-                    // Original simple view
-                    println!("📦 Storage (Uploads):");
-                    println!("   Data uploaded:     {:.2} GB", storage["gb_transferred"]);
-                    println!("   Tokens spent:      {:.4} PIPE", storage["tokens_spent"]);
-                    let storage_spent = storage["tokens_spent"].as_f64().unwrap_or(0.0);
-                    let storage_burned = storage["tokens_burned"].as_f64().unwrap_or(0.0);
-                    let storage_treasury = storage["tokens_to_treasury"].as_f64().unwrap_or(0.0);
-                    let storage_burn_pct = if storage_spent > 0.0 { storage_burned / storage_spent * 100.0 } else { 0.0 };
-                    let storage_treasury_pct = if storage_spent > 0.0 { storage_treasury / storage_spent * 100.0 } else { 0.0 };
-                    println!("   → Burned:          {:.4} PIPE ({:.1}%)", storage_burned, storage_burn_pct);
-                    println!("   → Treasury:        {:.4} PIPE ({:.1}%)", storage_treasury, storage_treasury_pct);
-                    println!();
-                    
-                    println!("🌐 Bandwidth (Downloads):");
-                    println!("   Data downloaded:   {:.2} GB", bandwidth["gb_transferred"]);
-                    println!("   Tokens spent:      {:.4} PIPE", bandwidth["tokens_spent"]);
-                    let bandwidth_spent = bandwidth["tokens_spent"].as_f64().unwrap_or(0.0);
-                    let bandwidth_burned = bandwidth["tokens_burned"].as_f64().unwrap_or(0.0);
-                    let bandwidth_treasury = bandwidth["tokens_to_treasury"].as_f64().unwrap_or(0.0);
-                    let bandwidth_burn_pct = if bandwidth_spent > 0.0 { bandwidth_burned / bandwidth_spent * 100.0 } else { 0.0 };
-                    let bandwidth_treasury_pct = if bandwidth_spent > 0.0 { bandwidth_treasury / bandwidth_spent * 100.0 } else { 0.0 };
-                    println!("   → Burned:          {:.4} PIPE ({:.1}%)", bandwidth_burned, bandwidth_burn_pct);
-                    println!("   → Treasury:        {:.4} PIPE ({:.1}%)", bandwidth_treasury, bandwidth_treasury_pct);
-                    println!();
-                    
-                    println!("💰 Total:");
-                    println!("   Data transferred:  {:.2} GB", total["gb_transferred"]);
-                    println!("   Tokens spent:      {:.4} PIPE", total["tokens_spent"]);
-                    println!("   → Burned:          {:.4} PIPE", total["tokens_burned"]);
-                    println!("   → Treasury:        {:.4} PIPE", total["tokens_to_treasury"]);
-                }
-            } else {
-                return Err(anyhow!(
-                    "Token usage request failed. Status = {}, Body = {}",
-                    status,
-                    text_body
-                ));
-            }
-        }
-
         Commands::CreatePublicLink {
             user_id,
             user_app_key,
@@ -5079,7 +4917,7 @@ pub async fn run_cli() -> Result<()> {
                             async move {
                                 // Ensure token valid preflight
                                 let mut creds_guard = shared_creds_inner.lock().await;
-                                let _ = ensure_valid_token(&client_inner, &base_url_inner, &mut *creds_guard, None).await;
+                                let _ = ensure_valid_token(&client_inner, &base_url_inner, &mut creds_guard, None).await;
                                 let creds_snapshot = creds_guard.clone();
                                 drop(creds_guard);
 
@@ -5100,7 +4938,7 @@ pub async fn run_cli() -> Result<()> {
                                         if es.contains("401") || es.contains("Unauthorized") || es.contains("Authentication required") {
                                             // Refresh and retry once
                                             let mut creds_guard2 = shared_creds_inner.lock().await;
-                                            let _ = ensure_valid_token(&client_inner, &base_url_inner, &mut *creds_guard2, None).await;
+                                            let _ = ensure_valid_token(&client_inner, &base_url_inner, &mut creds_guard2, None).await;
                                             let creds_snapshot2 = creds_guard2.clone();
                                             drop(creds_guard2);
                                             upload_file_with_encryption(
@@ -5467,7 +5305,7 @@ pub async fn run_cli() -> Result<()> {
                             async move {
                                 // Preflight refresh
                                 let mut creds_guard = shared_creds_inner.lock().await;
-                                let _ = ensure_valid_token(&client_inner, &base_url_inner, &mut *creds_guard, None).await;
+                                let _ = ensure_valid_token(&client_inner, &base_url_inner, &mut creds_guard, None).await;
                                 let creds_snapshot = creds_guard.clone();
                                 drop(creds_guard);
                                 match upload_file_priority_with_shared_progress(
@@ -5483,7 +5321,7 @@ pub async fn run_cli() -> Result<()> {
                                         let es = e.to_string();
                                         if es.contains("401") || es.contains("Unauthorized") || es.contains("Authentication required") {
                                             let mut creds_guard2 = shared_creds_inner.lock().await;
-                                            let _ = ensure_valid_token(&client_inner, &base_url_inner, &mut *creds_guard2, None).await;
+                                            let _ = ensure_valid_token(&client_inner, &base_url_inner, &mut creds_guard2, None).await;
                                             let creds_snapshot2 = creds_guard2.clone();
                                             drop(creds_guard2);
                                             upload_file_priority_with_shared_progress(
@@ -5913,6 +5751,10 @@ pub async fn run_cli() -> Result<()> {
             }
         }
 
+        // NOTE: VerifyFile command handler is commented out for production release
+        // This feature requires server-side support and is planned for a future release
+        // Uncomment when server API endpoint is ready
+        /*
         Commands::VerifyFile {
             file_name: _,
             file_id: _,
@@ -5936,6 +5778,7 @@ pub async fn run_cli() -> Result<()> {
             println!("Feature not fully implemented yet - requires server-side support");
             // TODO: Call server API to get file hash and verify
         }
+        */
         
         Commands::FindUpload {
             query,
@@ -6049,7 +5892,7 @@ pub async fn run_cli() -> Result<()> {
             include: _,
             max_size: _,
             newer_than: _,
-            parallel,
+            parallel: _,
         } => {
             // Load credentials
             let mut creds = load_credentials_from_file(config_path)?.ok_or_else(|| {
@@ -6061,7 +5904,7 @@ pub async fn run_cli() -> Result<()> {
 
             // Parse conflict strategy
             let conflict_strategy = sync::ConflictStrategy::from_str(&conflict)
-                .ok_or_else(|| anyhow!("Invalid conflict strategy: {}", conflict))?;
+                .map_err(|e| anyhow!("{}", e))?;
 
             // Execute sync
             sync::sync_command(
@@ -6072,7 +5915,6 @@ pub async fn run_cli() -> Result<()> {
                 destination.as_deref(),
                 conflict_strategy,
                 dry_run,
-                parallel,
             )
             .await?;
         }

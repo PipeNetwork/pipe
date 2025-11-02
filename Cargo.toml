@@ -1,6 +1,6 @@
 [package]
 name = "pipe"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
 
 [dependencies]
@@ -25,7 +25,7 @@ atty = "0.2"
 regex = "1.10"
 
 # Encryption dependencies
-aes-gcm = "0.10"
+aes-gcm = "0.10.3"
 argon2 = "0.5"
 rand = "0.8"
 zeroize = { version = "1.7", features = ["derive"] }

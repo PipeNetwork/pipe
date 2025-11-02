@@ -102,15 +102,17 @@ pub enum ConflictStrategy {
     Ask,       // Interactive prompt
 }
 
-impl ConflictStrategy {
-    pub fn from_str(s: &str) -> Option<Self> {
+impl std::str::FromStr for ConflictStrategy {
+    type Err = String;
+    
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "newer" => Some(Self::Newer),
-            "larger" => Some(Self::Larger),
-            "local" => Some(Self::Local),
-            "remote" => Some(Self::Remote),
-            "ask" => Some(Self::Ask),
-            _ => None,
+            "newer" => Ok(Self::Newer),
+            "larger" => Ok(Self::Larger),
+            "local" => Ok(Self::Local),
+            "remote" => Ok(Self::Remote),
+            "ask" => Ok(Self::Ask),
+            _ => Err(format!("Invalid conflict strategy: {}", s)),
         }
     }
 }
@@ -211,7 +213,7 @@ async fn get_file_state(path: &Path, relative_path: &str) -> Result<FileState> {
         path: relative_path.to_string(),
         size: metadata.len(),
         modified: DateTime::from_timestamp(modified as i64, 0)
-            .unwrap_or_else(|| Utc::now()),
+            .unwrap_or_else(Utc::now),
         hash: calculate_file_hash(path).await.ok(),
         last_synced: None,
         sync_version: 0,
@@ -380,7 +382,7 @@ async fn list_local_files_recursive_with_bytes(
                     .duration_since(SystemTime::UNIX_EPOCH)?
                     .as_secs();
                 let current_modified = DateTime::from_timestamp(modified as i64, 0)
-                    .unwrap_or_else(|| Utc::now());
+                    .unwrap_or_else(Utc::now);
                 
                 if existing_state.size == file_size && existing_state.modified == current_modified {
                     // File unchanged, skip hashing
@@ -503,7 +505,7 @@ async fn scan_files_recursive(
                 .duration_since(SystemTime::UNIX_EPOCH)?
                 .as_secs();
             let modified_dt = DateTime::from_timestamp(modified as i64, 0)
-                .unwrap_or_else(|| Utc::now());
+                .unwrap_or_else(Utc::now);
             
             // Get relative path
             let relative_path = path.strip_prefix(base_path)?
@@ -915,7 +917,7 @@ pub async fn list_remote_files(
             let uploaded_at = file_json["uploaded_at"].as_str()
                 .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
                 .map(|dt| dt.with_timezone(&Utc))
-                .unwrap_or_else(|| Utc::now());
+                .unwrap_or_else(Utc::now);
             
             let file_state = FileState {
                 path: path.clone(),
@@ -972,7 +974,7 @@ pub fn compare_files(
     }
     
     // Check remote files not in local
-    for (path, _remote_state) in remote_files {
+    for path in remote_files.keys() {
         if !local_files.contains_key(path) {
             // File only exists remotely - download
             operations.push(SyncOperation::Download(path.clone()));
@@ -1175,7 +1177,6 @@ pub async fn execute_sync(
     let semaphore = Arc::new(tokio::sync::Semaphore::new(ctx.state.files.len().min(10)));
     let results = stream::iter(operations)
         .map(|op| {
-            let ctx = ctx;
             let semaphore = semaphore.clone();
             let multi_progress = multi_progress.clone();
             let overall_pb = overall_pb.clone();
@@ -1337,7 +1338,6 @@ pub async fn sync_command(
     destination: Option<&str>,
     conflict_strategy: ConflictStrategy,
     dry_run: bool,
-    _parallel: usize,
 ) -> Result<()> {
     println!("🔄 Starting sync...");
     
@@ -1368,7 +1368,7 @@ pub async fn sync_command(
     let mut state = SyncState::load(&state_path).await?;
     
     // Show sync state info if exists
-    if state.files.len() > 0 || state.last_sync.is_some() {
+    if !state.files.is_empty() || state.last_sync.is_some() {
         println!("📊 Sync state: {}", state.summary());
     }
     
