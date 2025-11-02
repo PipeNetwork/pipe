@@ -737,60 +737,6 @@ pipe check-token
 
 Note: This shows your wallet balance, which is different from your deposit balance. Use `pipe check-deposit` to see your prepaid storage balance.
 
-### Token Usage Tracking
-
-Track how your PIPE tokens are being spent on storage vs bandwidth:
-
-```bash
-# View last 30 days (default)
-pipe token-usage
-
-# View detailed breakdown by tier
-pipe token-usage --detailed
-
-# View last 7 days with details
-pipe token-usage --period 7d --detailed
-
-# View last 90 days
-pipe token-usage --period 90d
-
-# View last year
-pipe token-usage --period 365d
-
-# View all time usage
-pipe token-usage --period all
-```
-
-The report shows:
-- 📦 **Storage (Uploads)**: Tokens spent storing your files
-- 🌐 **Bandwidth (Downloads)**: Tokens spent retrieving files
-- 💰 **Total Usage**: Combined costs and token distribution
-  - Currently 100% of tokens are burned (removed from circulation)
-  - Historical data may show treasury allocations from when the split was 90/10
-
-Example output:
-```
-📊 Token Usage Report (30d)
-
-📦 Storage (Uploads):
-   Data uploaded:     1,234.56 GB
-   Tokens spent:      30,863.4000 PIPE
-   → Burned:          27,777.0600 PIPE (90%)
-   → Treasury:        3,086.3400 PIPE (10%)
-
-🌐 Bandwidth (Downloads):
-   Data downloaded:   567.89 GB
-   Tokens spent:      567.8900 PIPE
-   → Burned:          511.1010 PIPE (90%)
-   → Treasury:        56.7890 PIPE (10%)
-
-💰 Total:
-   Data transferred:  1,802.45 GB
-   Tokens spent:      31,431.2900 PIPE
-   → Burned:          28,288.1610 PIPE
-   → Treasury:        3,143.1290 PIPE
-```
-
 ## License
 
 Apache-2.0
