@@ -132,26 +132,6 @@ pipe sync ./local/folder remote/folder  # Upload sync
 pipe sync remote/folder ./local/folder  # Download sync (limited)
 ```
 
-### Pipe-store S3 Gateway
-
-If your deployment enables the S3 gateway (`S3_PORT` on the server), you can manage S3 keys and bucket settings from the CLI.
-
-```bash
-# Optional defaults (used for presign + AWS CLI hints; secrets are never saved)
-pipe config set-s3-endpoint https://s3.YOURDOMAIN
-pipe config set-s3-region us-east-1
-pipe config set-s3-virtual-hosted true
-
-# Create and rotate S3 credentials (secret is printed once)
-pipe s3 keys create --read-only
-pipe s3 keys rotate --revoke-old --mode read-write
-
-# Public read + per-bucket CORS
-pipe s3 bucket set-public-read --enabled true
-pipe s3 bucket set-cors --origin https://portal.YOURDOMAIN
-pipe s3 bucket clear-cors
-```
-
 ### Encryption (NEW!)
 
 Pipe-cli now supports client-side AES-256-GCM encryption for maximum privacy:
@@ -621,14 +601,11 @@ Downloads are automatically base64 decoded. If you encounter issues:
   - Removed token withdrawal commands  
   - Removed `check-sol` command
 - **Added**: Prepaid credits system (USDC)
-  - `check-deposit` / `credits-status` - View credits balance and storage quotas
+  - `credits-status` (alias: `check-deposit`) - View credits balance and storage quotas
   - `credits-intent` - Create a top-up intent (prints Solana Pay link)
   - `credits-submit` - Submit a payment tx signature for verification
   - `credits-cancel` - Cancel a pending top-up intent
-  - `pipe-credits-intent` / `pipe-credits-submit` / `pipe-credits-status` / `pipe-credits-cancel` - Top up credits by paying in PIPE tokens (discounted)
   - `estimate-cost` - Estimate upload costs before uploading
-  - `lifetime-intent` / `lifetime-submit` / `lifetime-status` - Lifetime subscription purchase/status (USDC)
-  - `service-config` - Show treasury + mint info
 - **Changed**: USD-based pricing model ($25/TB = $0.025/GB baseline)
 - **Important**: This is a production mainnet release - credits use real USDC
 
@@ -681,7 +658,7 @@ pipe-cli uses **prepaid USDC credits**. Uploads/downloads are billed against you
 View your credits balance, available storage across all tiers, and pricing information:
 
 ```bash
-pipe check-deposit
+pipe credits-status
 ```
 
 This shows:
@@ -726,28 +703,17 @@ After you pay in your wallet, submit the transaction signature:
 pipe credits-submit <intent_id> <tx_sig>
 ```
 
-To pay with **PIPE tokens** (discounted pricing via bonus credits), create a PIPE top-up intent:
-
-```bash
-pipe pipe-credits-intent 10
-pipe pipe-credits-submit <intent_id> <tx_sig>
-```
-
-`pipe sync-deposits` is a legacy alias that can submit a tx signature via `--tx-sig`.
-
 #### How the Credits System Works
 
 1. **Create intent**: `pipe credits-intent 10`
 2. **Pay**: Open the Solana Pay link in a wallet with USDC
 3. **Submit tx**: `pipe credits-submit <intent_id> <tx_sig>`
 4. **Use storage**: Upload/download files - costs are deducted from your credits
-5. **Monitor**: `pipe check-deposit` / `pipe credits-status`
+5. **Monitor**: `pipe credits-status` (alias: `pipe check-deposit`)
 
 #### Pricing Model
 
 Storage is priced at **$25 USD per 1 TB**, which equals **$0.025 USDC per GB**.
-
-If you top up credits by paying in **PIPE tokens**, you receive a **25% bonus** on credited amount (effective rate **$20/TB**).
 
 Tier multipliers:
 - **Normal:** 1x = $0.025/GB
@@ -765,7 +731,7 @@ Check your wallet PIPE token balance:
 pipe check-token
 ```
 
-Note: This shows your wallet balance, which is different from your prepaid credits balance. Use `pipe check-deposit` to see your prepaid credits.
+Note: This shows your wallet balance, which is different from your prepaid credits balance. Use `pipe credits-status` to see your prepaid credits.
 
 ## License
 

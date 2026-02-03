@@ -10,7 +10,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
 use reqwest::{Body, Client, StatusCode};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fs::{self, OpenOptions};
 use std::io::Write as IoWrite; // For writeln!
 use std::path::{Path, PathBuf};
@@ -83,12 +83,6 @@ pub struct LoginRequest {
 pub struct SetPasswordRequest {
     pub user_id: String,
     pub user_app_key: String,
-    pub new_password: String,
-}
-
-#[derive(Serialize, Debug)]
-pub struct ChangePasswordRequest {
-    pub current_password: String,
     pub new_password: String,
 }
 
@@ -195,14 +189,6 @@ pub enum Commands {
         user_id: Option<String>,
         #[arg(long)]
         user_app_key: Option<String>,
-    },
-
-    /// Change password (requires JWT login)
-    ChangePassword {
-        #[arg(long)]
-        current_password: Option<String>,
-        #[arg(long)]
-        new_password: Option<String>,
     },
 
     /// Refresh access token
@@ -570,16 +556,8 @@ pub enum Commands {
         parallel: usize,
     },
 
-    /// Show public service configuration (USDC treasury, lifetime pricing)
-    ServiceConfig,
-
     /// Check prepaid credits balance (USDC) and storage quota
-    CheckDeposit {
-        #[arg(long)]
-        user_id: Option<String>,
-    },
-
-    /// Check prepaid credits balance (USDC) and storage quota
+    #[command(alias = "check-deposit")]
     CreditsStatus {
         #[arg(long)]
         user_id: Option<String>,
@@ -611,59 +589,6 @@ pub enum Commands {
         user_id: Option<String>,
     },
 
-    /// Check PIPE-token top-up intent status (credits bonus)
-    PipeCreditsStatus {
-        #[arg(long)]
-        user_id: Option<String>,
-    },
-
-    /// Create a prepaid credits top-up intent paid in PIPE tokens (discounted)
-    PipeCreditsIntent {
-        /// USDC amount to buy (discount is applied as bonus credits)
-        amount: String,
-
-        #[arg(long)]
-        user_id: Option<String>,
-    },
-
-    /// Submit a PIPE-token payment transaction signature for verification
-    PipeCreditsSubmit {
-        intent_id: String,
-        tx_sig: String,
-
-        #[arg(long)]
-        user_id: Option<String>,
-    },
-
-    /// Cancel a pending PIPE-token top-up intent
-    PipeCreditsCancel {
-        intent_id: String,
-
-        #[arg(long)]
-        user_id: Option<String>,
-    },
-
-    /// Show lifetime subscription status (USDC)
-    LifetimeStatus {
-        #[arg(long)]
-        user_id: Option<String>,
-    },
-
-    /// Create a lifetime subscription purchase intent (USDC)
-    LifetimeIntent {
-        #[arg(long)]
-        user_id: Option<String>,
-    },
-
-    /// Submit a lifetime subscription payment transaction signature for verification
-    LifetimeSubmit {
-        intent_id: String,
-        tx_sig: String,
-
-        #[arg(long)]
-        user_id: Option<String>,
-    },
-
     /// Estimate upload cost for a file
     EstimateCost {
         /// Path to file to estimate
@@ -681,6 +606,7 @@ pub enum Commands {
     },
 
     /// Legacy: submit a prepaid credits top-up payment (USDC)
+    #[command(hide = true)]
     SyncDeposits {
         #[arg(long)]
         user_id: Option<String>,
@@ -692,12 +618,6 @@ pub enum Commands {
         /// Transaction signature for USDC transfer
         #[arg(long)]
         tx_sig: Option<String>,
-    },
-
-    /// Manage S3-compatible access (keys, bucket, presigned URLs)
-    S3 {
-        #[command(subcommand)]
-        command: S3Commands,
     },
 }
 
@@ -729,181 +649,6 @@ pub enum ConfigCommands {
 
     /// Clear the saved virtual-hosted-style default
     ClearS3VirtualHosted,
-}
-
-#[derive(Subcommand, Debug)]
-pub enum S3Commands {
-    /// Manage S3 access keys
-    Keys {
-        #[command(subcommand)]
-        command: S3KeysCommands,
-    },
-
-    /// Manage S3 bucket settings
-    Bucket {
-        #[command(subcommand)]
-        command: S3BucketCommands,
-    },
-
-    /// Generate a presigned S3 URL (SigV4)
-    Presign {
-        #[arg(long, default_value = "GET")]
-        method: String,
-
-        /// Object key (omit to presign ListBuckets)
-        #[arg(long)]
-        key: Option<String>,
-
-        /// Specific S3 access key id to use (defaults to most-recent active)
-        #[arg(long)]
-        access_key_id: Option<String>,
-
-        /// Expiration in seconds (default 900; max 604800)
-        #[arg(long)]
-        expires: Option<u64>,
-
-        /// AWS region (default us-east-1)
-        #[arg(long)]
-        region: Option<String>,
-
-        /// Override S3 endpoint (e.g. https://host:9000)
-        #[arg(long)]
-        endpoint: Option<String>,
-
-        /// Use virtual-hosted-style URLs (bucket as subdomain)
-        #[arg(long, default_value_t = false, conflicts_with = "path_style")]
-        virtual_hosted: bool,
-
-        /// Force path-style URLs (bucket in path). Overrides any saved default.
-        #[arg(long, default_value_t = false, conflicts_with = "virtual_hosted")]
-        path_style: bool,
-
-        /// Extra query parameters (repeatable). Use KEY or KEY=VALUE.
-        #[arg(long, value_name = "KEY=VALUE")]
-        query: Vec<String>,
-    },
-}
-
-#[derive(Subcommand, Debug)]
-pub enum S3KeysCommands {
-    /// Create a new S3 access key (secret is shown once)
-    Create {
-        /// Create a read-only key (GET/HEAD only)
-        #[arg(long)]
-        read_only: bool,
-    },
-
-    /// Rotate an S3 access key (creates a new key; optionally revokes the old key)
-    Rotate {
-        /// Rotate from this access key id (defaults to the most-recent active key)
-        #[arg(long)]
-        from: Option<String>,
-
-        /// Revoke the old key after creating the new one
-        #[arg(long, default_value_t = false)]
-        revoke_old: bool,
-
-        /// Override the permission mode for the new key (defaults to the old key mode; otherwise read-only)
-        #[arg(long, value_name = "read-only|read-write")]
-        mode: Option<String>,
-    },
-
-    /// List S3 access keys
-    List,
-
-    /// Revoke an S3 access key
-    Revoke { access_key_id: String },
-}
-
-#[derive(Subcommand, Debug)]
-pub enum S3BucketCommands {
-    /// Show bucket settings
-    Get,
-
-    /// Enable/disable anonymous (public) reads (GET/HEAD)
-    SetPublicRead { enabled: bool },
-
-    /// Set CORS allowed origins for public reads (comma/newline separated; use "*" to allow any)
-    SetCors {
-        #[arg(long, value_name = "ORIGIN", num_args = 1..)]
-        origin: Vec<String>,
-    },
-
-    /// Clear CORS allowed origins (disables browser access)
-    ClearCors,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-struct S3KeysListResponse {
-    keys: Vec<S3AccessKeyListItem>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-struct S3AccessKeyListItem {
-    access_key_id: String,
-    read_only: bool,
-    created_at: Option<DateTime<Utc>>,
-    last_used_at: Option<DateTime<Utc>>,
-    revoked_at: Option<DateTime<Utc>>,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-struct S3CreateKeyResponse {
-    access_key_id: String,
-    secret: String,
-    read_only: bool,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-struct S3RevokeKeyResponse {
-    revoked: bool,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-struct S3BucketSettingsResponse {
-    bucket_name: String,
-    public_read: bool,
-    #[serde(default)]
-    cors_allowed_origins: Vec<String>,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-struct PatchS3BucketSettingsRequest {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    public_read: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    cors_allowed_origins: Option<Vec<String>>,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-struct PresignS3Request {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    access_key_id: Option<String>,
-    method: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    key: Option<String>,
-    #[serde(default)]
-    query: HashMap<String, String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    expires_secs: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    region: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    endpoint: Option<String>,
-    #[serde(default)]
-    virtual_hosted: bool,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-struct PresignS3Response {
-    url: String,
-    method: String,
-    bucket: String,
-    key: Option<String>,
-    expires_secs: u64,
-    access_key_id: String,
-    read_only: bool,
-    region: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -999,7 +744,6 @@ pub struct TierPricingInfo {
 }
 
 const USDC_DECIMALS_FACTOR: i64 = 1_000_000;
-const PIPE_DECIMALS_FACTOR: i64 = 1_000_000_000;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct CreditsTierEstimate {
@@ -1084,141 +828,8 @@ pub struct CreditsCancelResponse {
     pub status: String,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-pub struct PipeCreditsIntentResponse {
-    pub intent_id: String,
-    pub status: String,
-    pub requested_usdc_raw: i64,
-    pub requested_usdc: f64,
-    pub credited_usdc_raw: i64,
-    pub credited_usdc: f64,
-    pub pipe_price_usd: f64,
-    pub required_pipe_raw: i64,
-    pub required_pipe: f64,
-    pub pipe_mint: String,
-    pub treasury_owner_pubkey: String,
-    pub treasury_pipe_ata: String,
-    pub reference_pubkey: String,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-pub struct SubmitPipeCreditsPaymentResponse {
-    pub intent_id: String,
-    pub status: String,
-    pub requested_usdc_raw: i64,
-    pub credited_usdc_raw: i64,
-    pub required_pipe_raw: i64,
-    pub detected_pipe_raw: i64,
-    pub balance_usdc_raw: i64,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-pub struct PipeCreditsCancelResponse {
-    pub intent_id: String,
-    pub status: String,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-pub struct PipeCreditsIntentStatus {
-    pub intent_id: String,
-    pub status: String,
-    pub requested_usdc_raw: i64,
-    pub credited_usdc_raw: i64,
-    pub pipe_price_usd: f64,
-    pub required_pipe_raw: i64,
-    pub detected_pipe_raw: i64,
-    pub pipe_mint: String,
-    pub treasury_owner_pubkey: String,
-    pub treasury_pipe_ata: String,
-    pub reference_pubkey: String,
-    pub payment_tx_sig: Option<String>,
-    pub last_checked_at: Option<String>,
-    pub credited_at: Option<String>,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-pub struct PipeCreditsStatusResponse {
-    pub balance_usdc_raw: i64,
-    pub balance_usdc: f64,
-    pub intent: Option<PipeCreditsIntentStatus>,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-pub struct ServiceConfigResponse {
-    pub solana_cluster: String,
-    pub usdc_treasury_pubkey: String,
-    pub usdc_treasury_ata: String,
-    pub lifetime_purchase_enabled: bool,
-    pub lifetime_price_usdc: i64,
-    pub usdc_mint: String,
-    pub lifetime_promo_title: Option<String>,
-    pub lifetime_promo_body: Option<String>,
-    pub lifetime_terms_url: Option<String>,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-pub struct LifetimeIntentResponse {
-    pub intent_id: String,
-    pub status: String,
-    pub required_usdc: i64,
-    pub required_usdc_raw: i64,
-    pub usdc_mint: String,
-    pub treasury_owner_pubkey: String,
-    pub treasury_usdc_ata: String,
-    pub reference_pubkey: String,
-    pub lifetime_promo_title: Option<String>,
-    pub lifetime_promo_body: Option<String>,
-    pub lifetime_terms_url: Option<String>,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-pub struct LifetimeIntentStatus {
-    pub intent_id: String,
-    pub status: String,
-    pub required_usdc_raw: i64,
-    pub detected_usdc_raw: i64,
-    pub remaining_usdc_raw: i64,
-    pub usdc_mint: String,
-    pub treasury_owner_pubkey: String,
-    pub treasury_usdc_ata: String,
-    pub reference_pubkey: String,
-    pub payment_tx_sig: Option<String>,
-    pub last_checked_at: Option<String>,
-    pub funds_detected_at: Option<String>,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-pub struct LifetimeStatusResponse {
-    pub lifetime_active: bool,
-    pub lifetime_activated_at: Option<String>,
-    pub intent: Option<LifetimeIntentStatus>,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-pub struct SubmitLifetimePaymentRequest {
-    pub intent_id: String,
-    pub tx_sig: String,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-pub struct SubmitLifetimePaymentResponse {
-    pub intent_id: String,
-    pub status: String,
-    pub required_usdc_raw: i64,
-    pub detected_usdc_raw: i64,
-    pub remaining_usdc_raw: i64,
-}
-
 fn usdc_raw_to_ui(raw: i64) -> f64 {
     raw as f64 / USDC_DECIMALS_FACTOR as f64
-}
-
-fn pipe_raw_to_ui(raw: i64) -> f64 {
-    raw as f64 / PIPE_DECIMALS_FACTOR as f64
-}
-
-fn format_pipe_ui(amount: f64) -> String {
-    format_amount_ui(amount, 9)
 }
 
 fn format_usdc_ui(amount: f64) -> String {
@@ -1266,63 +877,9 @@ fn parse_usdc_ui_to_raw(input: &str) -> Result<i64> {
         .ok_or_else(|| anyhow!("USDC amount too large: {}", input))
 }
 
-fn parse_s3_query_args(args: &[String]) -> Result<HashMap<String, String>> {
-    let mut out = HashMap::new();
-    for raw in args {
-        let trimmed = raw.trim();
-        if trimmed.is_empty() {
-            return Err(anyhow!("Invalid --query value: empty"));
-        }
-
-        let (key_raw, value_raw) = match trimmed.split_once('=') {
-            Some((k, v)) => (k, v),
-            None => (trimmed, ""),
-        };
-        let key = key_raw.trim();
-        if key.is_empty() {
-            return Err(anyhow!("Invalid --query value: {}", raw));
-        }
-        out.insert(key.to_string(), value_raw.to_string());
-    }
-    Ok(out)
-}
-
 #[cfg(test)]
-mod s3_cli_tests {
+mod cli_tests {
     use super::*;
-
-    #[test]
-    fn parse_s3_query_args_supports_key_only_and_key_value() {
-        let args = vec![
-            "uploads".to_string(),
-            "partNumber=1".to_string(),
-            "uploadId=abc".to_string(),
-        ];
-        let parsed = parse_s3_query_args(&args).unwrap();
-        assert_eq!(parsed.get("uploads").map(String::as_str), Some(""));
-        assert_eq!(parsed.get("partNumber").map(String::as_str), Some("1"));
-        assert_eq!(parsed.get("uploadId").map(String::as_str), Some("abc"));
-    }
-
-    #[test]
-    fn parse_s3_query_args_rejects_empty_key() {
-        assert!(parse_s3_query_args(&["".to_string()]).is_err());
-        assert!(parse_s3_query_args(&["=x".to_string()]).is_err());
-    }
-
-    #[test]
-    fn clap_parses_s3_keys_create_read_only() {
-        let cli = Cli::try_parse_from(["pipe", "s3", "keys", "create", "--read-only"]).unwrap();
-        match cli.command {
-            Commands::S3 {
-                command:
-                    S3Commands::Keys {
-                        command: S3KeysCommands::Create { read_only },
-                    },
-            } => assert!(read_only),
-            other => panic!("unexpected command: {other:?}"),
-        }
-    }
 
     #[test]
     fn refresh_token_response_parses_csrf_token() {
@@ -1338,15 +895,19 @@ mod s3_cli_tests {
         let resp: AuthTokens = serde_json::from_str(json).unwrap();
         assert_eq!(resp.csrf_token.as_deref(), Some("c"));
     }
+
+    #[test]
+    fn clap_accepts_check_deposit_alias() {
+        let cli = Cli::try_parse_from(["pipe", "check-deposit"]).unwrap();
+        match cli.command {
+            Commands::CreditsStatus { .. } => {}
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
 }
 
 fn bytes_to_gb_decimal(bytes: u64) -> f64 {
     bytes as f64 / 1_000_000_000.0
-}
-
-fn format_amount_ui(amount: f64, decimals: usize) -> String {
-    let s = format!("{:.*}", decimals, amount);
-    s.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
 fn format_spl_amount_raw(raw: i64, decimals: u32) -> String {
@@ -2281,7 +1842,7 @@ async fn improved_download_file_with_auth_and_options(
                         }
                     }
                     eprintln!("\n💡 Next steps:");
-                    eprintln!("   1) Run: pipe check-deposit");
+                    eprintln!("   1) Run: pipe credits-status");
                     eprintln!("   2) Top up: pipe credits-intent 10");
                 }
             }
@@ -3784,13 +3345,13 @@ async fn upload_file_with_shared_progress(
                         }
                     }
                     eprintln!("\n💡 Next steps:");
-                    eprintln!("   1) Run: pipe check-deposit");
+                    eprintln!("   1) Run: pipe credits-status");
                     eprintln!("   2) Top up: pipe credits-intent 10");
                     return Err(anyhow!("Upload failed: {}", message));
                 }
             }
             return Err(anyhow!(
-                "Upload failed: Insufficient prepaid credits. Run `pipe check-deposit` and top up USDC credits."
+                "Upload failed: Insufficient prepaid credits. Run `pipe credits-status` and top up USDC credits."
             ));
         }
 
@@ -4044,13 +3605,13 @@ async fn upload_file_priority_with_shared_progress(
                         eprintln!("\n📈 Priority multiplier: {}x", priority_multiplier);
                     }
                     eprintln!("\n💡 Next steps:");
-                    eprintln!("   1) Run: pipe check-deposit");
+                    eprintln!("   1) Run: pipe credits-status");
                     eprintln!("   2) Top up: pipe credits-intent 10");
                     return Err(anyhow!("Priority upload failed: {}", message));
                 }
             }
             return Err(anyhow!(
-                "Priority upload failed: Insufficient prepaid credits. Run `pipe check-deposit` and top up USDC credits."
+                "Priority upload failed: Insufficient prepaid credits. Run `pipe credits-status` and top up USDC credits."
             ));
         }
 
@@ -4417,6 +3978,7 @@ fn bucket_name_for_user_id(user_id: &str) -> String {
     format!("pipe-{user_id}")
 }
 
+#[cfg(test)]
 fn split_comma_newline_list(raw: &[String]) -> Vec<String> {
     raw.iter()
         .flat_map(|s| s.split(['\n', ',']))
@@ -4425,6 +3987,7 @@ fn split_comma_newline_list(raw: &[String]) -> Vec<String> {
         .collect()
 }
 
+#[cfg(test)]
 fn parse_s3_key_mode(mode: &str) -> Result<bool> {
     let normalized = mode.trim().to_ascii_lowercase();
     match normalized.as_str() {
@@ -5112,9 +4675,7 @@ pub async fn run_cli() -> Result<()> {
                 }
             } else {
                 if status == StatusCode::CONFLICT {
-                    return Err(anyhow!(
-                        "Password already set. Use `pipe change-password` instead."
-                    ));
+                    return Err(anyhow!("Password already set. Use `pipe login`."));
                 }
 
                 // Try to provide more helpful error message
@@ -5132,78 +4693,6 @@ pub async fn run_cli() -> Result<()> {
                     )
                 };
                 return Err(anyhow!(error_message));
-            }
-        }
-
-        Commands::ChangePassword {
-            current_password,
-            new_password,
-        } => {
-            let mut creds = load_credentials_from_file(config_path)?
-                .ok_or_else(|| anyhow!("No credentials found. Please login first."))?;
-
-            ensure_valid_token(&client, base_url, &mut creds, config_path).await?;
-
-            let current_password = current_password.unwrap_or_else(|| {
-                rpassword::prompt_password("Current password: ").unwrap_or_default()
-            });
-
-            let new_password = match new_password {
-                Some(p) => p,
-                None => {
-                    println!("Password requirements:");
-                    println!("  - Minimum 8 characters");
-                    println!("  - Maximum 128 characters");
-                    println!("  - Cannot be a common weak password (e.g., 'password', '12345678', 'password123', etc.)");
-                    println!();
-
-                    let p1 = rpassword::prompt_password("New password: ").unwrap_or_default();
-                    let p2 =
-                        rpassword::prompt_password("Confirm new password: ").unwrap_or_default();
-                    if p1 != p2 {
-                        return Err(anyhow!("New passwords do not match"));
-                    }
-                    p1
-                }
-            };
-
-            let req_body = ChangePasswordRequest {
-                current_password,
-                new_password,
-            };
-
-            let mut request = client.post(format!("{}/auth/change-password", base_url));
-            request = add_auth_headers(request, &creds, true)?;
-            request = request.json(&req_body);
-
-            let resp = request.send().await?;
-            let status = resp.status();
-            let text_body = resp.text().await?;
-
-            if status.is_success() {
-                let mut auth_tokens: AuthTokens = serde_json::from_str(&text_body)?;
-
-                // Calculate expires_at timestamp
-                let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
-                let expires_at = DateTime::<Utc>::from_timestamp(now + auth_tokens.expires_in, 0)
-                    .ok_or_else(|| anyhow!("Invalid expiration timestamp"))?;
-                auth_tokens.expires_at = Some(expires_at);
-
-                let mut updated_creds = creds.clone();
-                updated_creds.auth_tokens = Some(auth_tokens);
-                save_full_credentials(&updated_creds, config_path)?;
-
-                println!("Password changed successfully (all other sessions revoked).");
-                println!(
-                    "Token expires at: {}",
-                    expires_at.format("%Y-%m-%d %H:%M:%S UTC")
-                );
-            } else {
-                return Err(anyhow!(
-                    "Change password failed. Status = {}, Body = {}",
-                    status,
-                    text_body
-                ));
             }
         }
 
@@ -7229,63 +6718,6 @@ pub async fn run_cli() -> Result<()> {
             .await?;
         }
 
-        Commands::ServiceConfig => {
-            let url = format!("{}/api/service-config", base_url);
-            let resp = client.get(&url).send().await?;
-            let status = resp.status();
-            let text_body = resp.text().await?;
-
-            if !status.is_success() {
-                return Err(anyhow!(
-                    "Service config request failed. Status = {}, Body = {}",
-                    status,
-                    text_body
-                ));
-            }
-
-            let cfg = serde_json::from_str::<ServiceConfigResponse>(&text_body)?;
-            println!("🌐 Solana cluster: {}", cfg.solana_cluster);
-            println!("💳 USDC mint: {}", cfg.usdc_mint);
-            println!("🏦 Treasury pubkey: {}", cfg.usdc_treasury_pubkey);
-            println!("🏦 Treasury ATA: {}", cfg.usdc_treasury_ata);
-            println!(
-                "♾️  Lifetime purchase enabled: {}",
-                if cfg.lifetime_purchase_enabled {
-                    "yes"
-                } else {
-                    "no"
-                }
-            );
-            println!("♾️  Lifetime price: {} USDC", cfg.lifetime_price_usdc);
-            if let Some(title) = cfg.lifetime_promo_title.as_deref() {
-                println!("🪧 Promo title: {}", title);
-            }
-            if let Some(body) = cfg.lifetime_promo_body.as_deref() {
-                println!("📝 Promo body: {}", body);
-            }
-            if let Some(url) = cfg.lifetime_terms_url.as_deref() {
-                println!("📄 Terms: {}", url);
-            }
-        }
-
-        Commands::CheckDeposit { user_id } => {
-            // Load credentials and check for JWT
-            let mut creds = load_credentials_from_file(config_path)?.ok_or_else(|| {
-                anyhow!("No credentials found. Please create a user or login first.")
-            })?;
-
-            // Ensure we have valid JWT token if available
-            ensure_valid_token(&client, base_url, &mut creds, config_path).await?;
-
-            // Override with command-line args if provided
-            if let Some(uid) = user_id {
-                creds.user_id = uid;
-            }
-
-            let status = fetch_credits_status(&client, base_url, &creds).await?;
-            print_credits_status(&status);
-        }
-
         Commands::CreditsStatus { user_id } => {
             let mut creds = load_credentials_from_file(config_path)?.ok_or_else(|| {
                 anyhow!("No credentials found. Please create a user or login first.")
@@ -7437,393 +6869,6 @@ pub async fn run_cli() -> Result<()> {
             );
         }
 
-        Commands::PipeCreditsStatus { user_id } => {
-            let mut creds = load_credentials_from_file(config_path)?.ok_or_else(|| {
-                anyhow!("No credentials found. Please create a user or login first.")
-            })?;
-            ensure_valid_token(&client, base_url, &mut creds, config_path).await?;
-
-            if let Some(uid) = user_id {
-                creds.user_id = uid;
-            }
-
-            let mut request = client.get(format!("{}/api/pipe-credits/status", base_url));
-            request = add_auth_headers(request, &creds, false)?;
-
-            let resp = request.send().await?;
-            let status = resp.status();
-            let text_body = resp.text().await?;
-            if !status.is_success() {
-                return Err(anyhow!(
-                    "Pipe credits status failed. Status = {}, Body = {}",
-                    status,
-                    text_body
-                ));
-            }
-
-            let status_resp = serde_json::from_str::<PipeCreditsStatusResponse>(&text_body)?;
-            println!(
-                "💳 Credits balance: ${} USDC",
-                format_usdc_ui(usdc_raw_to_ui(status_resp.balance_usdc_raw))
-            );
-
-            if let Some(intent) = status_resp.intent.as_ref() {
-                println!();
-                println!("🧾 Pending PIPE top-up:");
-                println!("  Status:    {}", intent.status);
-                println!("  Intent ID: {}", intent.intent_id);
-                println!(
-                    "  Buy:       ${} USDC",
-                    format_usdc_ui(usdc_raw_to_ui(intent.requested_usdc_raw))
-                );
-                println!(
-                    "  Credit:    ${} USDC (bonus)",
-                    format_usdc_ui(usdc_raw_to_ui(intent.credited_usdc_raw))
-                );
-                println!(
-                    "  Required:  {} PIPE",
-                    format_pipe_ui(pipe_raw_to_ui(intent.required_pipe_raw))
-                );
-                if intent.detected_pipe_raw > 0 {
-                    println!(
-                        "  Detected:  {} PIPE",
-                        format_pipe_ui(pipe_raw_to_ui(intent.detected_pipe_raw))
-                    );
-                }
-                if let Some(sig) = intent.payment_tx_sig.as_deref() {
-                    println!("  Tx Sig:    {}", sig);
-                }
-                println!("  Reference: {}", intent.reference_pubkey);
-                if !intent.treasury_owner_pubkey.is_empty() {
-                    println!("  Treasury:  {}", intent.treasury_owner_pubkey);
-                    println!(
-                        "  Solana Pay: {}",
-                        solana_pay_url_raw(
-                            &intent.treasury_owner_pubkey,
-                            intent.required_pipe_raw,
-                            &intent.pipe_mint,
-                            &intent.reference_pubkey,
-                            9
-                        )
-                    );
-                }
-            }
-        }
-
-        Commands::PipeCreditsIntent { amount, user_id } => {
-            let mut creds = load_credentials_from_file(config_path)?.ok_or_else(|| {
-                anyhow!("No credentials found. Please create a user or login first.")
-            })?;
-            ensure_valid_token(&client, base_url, &mut creds, config_path).await?;
-
-            if let Some(uid) = user_id {
-                creds.user_id = uid;
-            }
-
-            let amount_usdc_raw = parse_usdc_ui_to_raw(&amount)?;
-
-            let mut request = client.post(format!("{}/api/pipe-credits/intent", base_url));
-            request = add_auth_headers(request, &creds, true)?;
-            request = request.json(&CreateCreditsIntentRequest { amount_usdc_raw });
-
-            let resp = request.send().await?;
-            let status = resp.status();
-            let text_body = resp.text().await?;
-            if !status.is_success() {
-                return Err(anyhow!(
-                    "Pipe credits intent failed. Status = {}, Body = {}",
-                    status,
-                    text_body
-                ));
-            }
-
-            let intent = serde_json::from_str::<PipeCreditsIntentResponse>(&text_body)?;
-            println!("✅ PIPE top-up intent created");
-            println!("Status: {}", intent.status);
-            println!("Intent ID: {}", intent.intent_id);
-            println!(
-                "Buy: ${} USDC",
-                format_usdc_ui(usdc_raw_to_ui(intent.requested_usdc_raw))
-            );
-            println!(
-                "Credits after bonus: ${} USDC",
-                format_usdc_ui(usdc_raw_to_ui(intent.credited_usdc_raw))
-            );
-            println!("PIPE price (quote): ${:.6}", intent.pipe_price_usd);
-            println!(
-                "Pay: {} PIPE",
-                format_pipe_ui(pipe_raw_to_ui(intent.required_pipe_raw))
-            );
-            println!("PIPE mint: {}", intent.pipe_mint);
-            println!("Treasury: {}", intent.treasury_owner_pubkey);
-            println!("Reference: {}", intent.reference_pubkey);
-            println!();
-            println!(
-                "Solana Pay: {}",
-                solana_pay_url_raw(
-                    &intent.treasury_owner_pubkey,
-                    intent.required_pipe_raw,
-                    &intent.pipe_mint,
-                    &intent.reference_pubkey,
-                    9
-                )
-            );
-            println!();
-            println!("Next:");
-            println!("  1) Pay the Solana Pay link in your wallet");
-            println!(
-                "  2) Submit the tx: pipe pipe-credits-submit {} <tx_sig>",
-                intent.intent_id
-            );
-        }
-
-        Commands::PipeCreditsSubmit {
-            intent_id,
-            tx_sig,
-            user_id,
-        } => {
-            let mut creds = load_credentials_from_file(config_path)?.ok_or_else(|| {
-                anyhow!("No credentials found. Please create a user or login first.")
-            })?;
-            ensure_valid_token(&client, base_url, &mut creds, config_path).await?;
-
-            if let Some(uid) = user_id {
-                creds.user_id = uid;
-            }
-
-            let mut request = client.post(format!("{}/api/pipe-credits/submit", base_url));
-            request = add_auth_headers(request, &creds, true)?;
-            request = request.json(&SubmitCreditsPaymentRequest { intent_id, tx_sig });
-
-            let resp = request.send().await?;
-            let status = resp.status();
-            let text_body = resp.text().await?;
-            if !status.is_success() {
-                return Err(anyhow!(
-                    "Pipe credits submit failed. Status = {}, Body = {}",
-                    status,
-                    text_body
-                ));
-            }
-
-            let result = serde_json::from_str::<SubmitPipeCreditsPaymentResponse>(&text_body)?;
-            println!("✅ Credits updated");
-            println!("Intent: {}", result.intent_id);
-            println!("Status: {}", result.status);
-            println!(
-                "Detected: {} PIPE",
-                format_pipe_ui(pipe_raw_to_ui(result.detected_pipe_raw))
-            );
-            println!(
-                "Credited: ${} USDC",
-                format_usdc_ui(usdc_raw_to_ui(result.credited_usdc_raw))
-            );
-            println!(
-                "Balance:  ${} USDC",
-                format_usdc_ui(usdc_raw_to_ui(result.balance_usdc_raw))
-            );
-        }
-
-        Commands::PipeCreditsCancel { intent_id, user_id } => {
-            let mut creds = load_credentials_from_file(config_path)?.ok_or_else(|| {
-                anyhow!("No credentials found. Please create a user or login first.")
-            })?;
-            ensure_valid_token(&client, base_url, &mut creds, config_path).await?;
-
-            if let Some(uid) = user_id {
-                creds.user_id = uid;
-            }
-
-            let mut request = client.post(format!("{}/api/pipe-credits/cancel", base_url));
-            request = add_auth_headers(request, &creds, true)?;
-            request = request.json(&CancelCreditsIntentRequest { intent_id });
-
-            let resp = request.send().await?;
-            let status = resp.status();
-            let text_body = resp.text().await?;
-            if !status.is_success() {
-                return Err(anyhow!(
-                    "Pipe credits cancel failed. Status = {}, Body = {}",
-                    status,
-                    text_body
-                ));
-            }
-
-            let result = serde_json::from_str::<PipeCreditsCancelResponse>(&text_body)?;
-            println!(
-                "✅ Intent cancelled: {} ({})",
-                result.intent_id, result.status
-            );
-        }
-
-        Commands::LifetimeStatus { user_id } => {
-            let mut creds = load_credentials_from_file(config_path)?.ok_or_else(|| {
-                anyhow!("No credentials found. Please create a user or login first.")
-            })?;
-            ensure_valid_token(&client, base_url, &mut creds, config_path).await?;
-
-            if let Some(uid) = user_id {
-                creds.user_id = uid;
-            }
-
-            let mut request = client.get(format!("{}/api/subscription/lifetime/status", base_url));
-            request = add_auth_headers(request, &creds, false)?;
-
-            let resp = request.send().await?;
-            let status = resp.status();
-            let text_body = resp.text().await?;
-            if !status.is_success() {
-                return Err(anyhow!(
-                    "Lifetime status failed. Status = {}, Body = {}",
-                    status,
-                    text_body
-                ));
-            }
-
-            let lifetime = serde_json::from_str::<LifetimeStatusResponse>(&text_body)?;
-            println!(
-                "♾️  Lifetime active: {}",
-                if lifetime.lifetime_active {
-                    "yes"
-                } else {
-                    "no"
-                }
-            );
-            if let Some(ts) = lifetime.lifetime_activated_at.as_deref() {
-                println!("🕒 Activated at: {}", ts);
-            }
-            if let Some(intent) = lifetime.intent.as_ref() {
-                println!();
-                println!("🧾 Intent:");
-                println!("  Status:    {}", intent.status);
-                println!("  Intent ID: {}", intent.intent_id);
-                println!(
-                    "  Required:  ${} USDC",
-                    format_usdc_ui(usdc_raw_to_ui(intent.required_usdc_raw))
-                );
-                println!(
-                    "  Detected:  ${} USDC",
-                    format_usdc_ui(usdc_raw_to_ui(intent.detected_usdc_raw))
-                );
-                println!(
-                    "  Remaining: ${} USDC",
-                    format_usdc_ui(usdc_raw_to_ui(intent.remaining_usdc_raw))
-                );
-                println!("  Reference: {}", intent.reference_pubkey);
-                if !intent.treasury_owner_pubkey.is_empty() {
-                    println!(
-                        "  Solana Pay: {}",
-                        solana_pay_url_raw(
-                            &intent.treasury_owner_pubkey,
-                            intent.remaining_usdc_raw,
-                            &intent.usdc_mint,
-                            &intent.reference_pubkey,
-                            6
-                        )
-                    );
-                }
-            }
-        }
-
-        Commands::LifetimeIntent { user_id } => {
-            let mut creds = load_credentials_from_file(config_path)?.ok_or_else(|| {
-                anyhow!("No credentials found. Please create a user or login first.")
-            })?;
-            ensure_valid_token(&client, base_url, &mut creds, config_path).await?;
-
-            if let Some(uid) = user_id {
-                creds.user_id = uid;
-            }
-
-            let mut request = client.post(format!("{}/api/subscription/lifetime/intent", base_url));
-            request = add_auth_headers(request, &creds, true)?;
-            request = request.json(&serde_json::json!({}));
-
-            let resp = request.send().await?;
-            let status = resp.status();
-            let text_body = resp.text().await?;
-            if !status.is_success() {
-                return Err(anyhow!(
-                    "Lifetime intent failed. Status = {}, Body = {}",
-                    status,
-                    text_body
-                ));
-            }
-
-            let intent = serde_json::from_str::<LifetimeIntentResponse>(&text_body)?;
-            println!("✅ Lifetime intent created");
-            println!("Status: {}", intent.status);
-            println!("Intent ID: {}", intent.intent_id);
-            println!("Price: {} USDC", intent.required_usdc);
-            println!("USDC mint: {}", intent.usdc_mint);
-            println!("Treasury: {}", intent.treasury_owner_pubkey);
-            println!("Reference: {}", intent.reference_pubkey);
-            println!();
-            println!(
-                "Solana Pay: {}",
-                solana_pay_url_raw(
-                    &intent.treasury_owner_pubkey,
-                    intent.required_usdc_raw,
-                    &intent.usdc_mint,
-                    &intent.reference_pubkey,
-                    6
-                )
-            );
-            if let Some(url) = intent.lifetime_terms_url.as_deref() {
-                println!("Terms: {}", url);
-            }
-            println!();
-            println!("Next:");
-            println!("  1) Pay the Solana Pay link in your wallet");
-            println!(
-                "  2) Submit the tx: pipe lifetime-submit {} <tx_sig>",
-                intent.intent_id
-            );
-        }
-
-        Commands::LifetimeSubmit {
-            intent_id,
-            tx_sig,
-            user_id,
-        } => {
-            let mut creds = load_credentials_from_file(config_path)?.ok_or_else(|| {
-                anyhow!("No credentials found. Please create a user or login first.")
-            })?;
-            ensure_valid_token(&client, base_url, &mut creds, config_path).await?;
-
-            if let Some(uid) = user_id {
-                creds.user_id = uid;
-            }
-
-            let mut request = client.post(format!("{}/api/subscription/lifetime/submit", base_url));
-            request = add_auth_headers(request, &creds, true)?;
-            request = request.json(&SubmitLifetimePaymentRequest { intent_id, tx_sig });
-
-            let resp = request.send().await?;
-            let status = resp.status();
-            let text_body = resp.text().await?;
-            if !status.is_success() {
-                return Err(anyhow!(
-                    "Lifetime submit failed. Status = {}, Body = {}",
-                    status,
-                    text_body
-                ));
-            }
-
-            let result = serde_json::from_str::<SubmitLifetimePaymentResponse>(&text_body)?;
-            println!("✅ Lifetime payment updated");
-            println!("Intent: {}", result.intent_id);
-            println!("Status: {}", result.status);
-            println!(
-                "Detected: ${} USDC",
-                format_usdc_ui(usdc_raw_to_ui(result.detected_usdc_raw))
-            );
-            println!(
-                "Remaining: ${} USDC",
-                format_usdc_ui(usdc_raw_to_ui(result.remaining_usdc_raw))
-            );
-        }
-
         Commands::EstimateCost {
             file_path,
             tier,
@@ -7966,7 +7011,7 @@ pub async fn run_cli() -> Result<()> {
             );
         }
 
-        Commands::S3 { command } => {
+        /* Commands::S3 { command } => {
             let mut creds = load_credentials_from_file(config_path)?.ok_or_else(|| {
                 anyhow!("No credentials found. Please create a user or login first.")
             })?;
@@ -8418,7 +7463,7 @@ pub async fn run_cli() -> Result<()> {
                     println!("{}", presigned.url);
                 }
             }
-        }
+        } */
 
         Commands::EncryptLocal {
             input_file,
