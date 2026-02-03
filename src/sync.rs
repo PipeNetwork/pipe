@@ -891,7 +891,7 @@ pub async fn list_remote_files(
     // Build list files request
     let url = format!("{}/listFiles", base_url);
     let mut request = client.get(&url);
-    request = add_auth_headers(request, creds, true);
+    request = add_auth_headers(request, creds, false)?;
     
     let response = request.send().await?;
     if !response.status().is_success() {

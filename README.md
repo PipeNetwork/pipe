@@ -106,6 +106,9 @@ cargo install --path .
 # Create a new user
 pipe new-user <your_username>
 
+# (Recommended) Persist your pipe-store API base URL for this profile
+pipe config set-api https://api.YOURDOMAIN
+
 # Upload a file
 pipe upload-file photo.jpg my-photo
 
@@ -127,6 +130,26 @@ pipe download-directory folder ~/restored/folder --parallel 10
 # Sync directories (NEW!)
 pipe sync ./local/folder remote/folder  # Upload sync
 pipe sync remote/folder ./local/folder  # Download sync (limited)
+```
+
+### Pipe-store S3 Gateway
+
+If your deployment enables the S3 gateway (`S3_PORT` on the server), you can manage S3 keys and bucket settings from the CLI.
+
+```bash
+# Optional defaults (used for presign + AWS CLI hints; secrets are never saved)
+pipe config set-s3-endpoint https://s3.YOURDOMAIN
+pipe config set-s3-region us-east-1
+pipe config set-s3-virtual-hosted true
+
+# Create and rotate S3 credentials (secret is printed once)
+pipe s3 keys create --read-only
+pipe s3 keys rotate --revoke-old --mode read-write
+
+# Public read + per-bucket CORS
+pipe s3 bucket set-public-read --enabled true
+pipe s3 bucket set-cors --origin https://portal.YOURDOMAIN
+pipe s3 bucket clear-cors
 ```
 
 ### Encryption (NEW!)
@@ -597,13 +620,17 @@ Downloads are automatically base64 decoded. If you encounter issues:
   - Removed SOL withdrawal commands
   - Removed token withdrawal commands  
   - Removed `check-sol` command
-- **Added**: Prepaid deposit system with one-way PIPE deposits
-  - `check-deposit` - View deposit balance and storage quotas
+- **Added**: Prepaid credits system (USDC)
+  - `check-deposit` / `credits-status` - View credits balance and storage quotas
+  - `credits-intent` - Create a top-up intent (prints Solana Pay link)
+  - `credits-submit` - Submit a payment tx signature for verification
+  - `credits-cancel` - Cancel a pending top-up intent
+  - `pipe-credits-intent` / `pipe-credits-submit` / `pipe-credits-status` / `pipe-credits-cancel` - Top up credits by paying in PIPE tokens (discounted)
   - `estimate-cost` - Estimate upload costs before uploading
-  - `sync-deposits` - Manually sync deposits from wallet
-- **Changed**: USD-based pricing model ($10/TB = $0.01/GB)
-- **Changed**: Deposits are burned as storage is used (no withdrawals)
-- **Important**: This is a production mainnet release - all deposits use real PIPE tokens
+  - `lifetime-intent` / `lifetime-submit` / `lifetime-status` - Lifetime subscription purchase/status (USDC)
+  - `service-config` - Show treasury + mint info
+- **Changed**: USD-based pricing model ($25/TB = $0.025/GB baseline)
+- **Important**: This is a production mainnet release - credits use real USDC
 
 ### v0.3.x
 - **Added**: Directory sync with `.pipe-sync` metadata tracking
@@ -645,25 +672,23 @@ pipe download-file large-video.mp4
 pipe download-file large-video.mp4 --legacy
 ```
 
-### Deposit System & Storage Management
+### Prepaid Credits (USDC) & Storage Management
 
-pipe-cli uses a prepaid deposit system where you deposit PIPE tokens that are burned as you use storage. Deposits are one-way and cannot be withdrawn.
+pipe-cli uses **prepaid USDC credits**. Uploads/downloads are billed against your credits balance.
 
-#### Check Deposit Balance
+#### Check Credits Balance
 
-View your deposit balance, available storage across all tiers, and pricing information:
+View your credits balance, available storage across all tiers, and pricing information:
 
 ```bash
 pipe check-deposit
 ```
 
 This shows:
-- Current deposit balance in PIPE and USD
-- Live PIPE price from Jupiter
+- Current prepaid credits balance in USDC
 - Available storage for each tier (Normal, Priority, Premium, Ultra, Enterprise)
-- Cost per GB in both PIPE and USD
-- Your deposit wallet address
-- Lifetime deposit and burn statistics
+- Cost per GB in USDC
+- Any pending top-up intent (and a Solana Pay link to complete it)
 
 #### Estimate Upload Cost
 
@@ -683,48 +708,53 @@ pipe estimate-cost backup.tar.gz --tier enterprise
 The estimate shows:
 - File size in GB and bytes
 - Selected tier and pricing
-- Estimated cost in PIPE and USD
+- Estimated cost in USDC
 - Your balance before and after upload
 - Whether you can afford the upload
 
-#### Sync Deposits
+#### Top Up Credits
 
-Manually trigger a deposit sync from your wallet to your deposit balance:
+Create a top-up intent and get a Solana Pay link:
 
 ```bash
-pipe sync-deposits
+pipe credits-intent 10
 ```
 
-The system auto-syncs every 30 seconds, but use this for immediate confirmation after depositing PIPE to your wallet.
+After you pay in your wallet, submit the transaction signature:
 
-#### How the Deposit System Works
+```bash
+pipe credits-submit <intent_id> <tx_sig>
+```
 
-1. **Deposit PIPE**: Send PIPE tokens to your deposit wallet address (shown in `pipe check-deposit`)
-2. **Sync**: Run `pipe sync-deposits` or wait 30 seconds for automatic sync
-3. **Use Storage**: Upload files - costs are automatically deducted from your deposit balance
-4. **Monitor**: Use `pipe check-deposit` to track remaining balance and available storage
+To pay with **PIPE tokens** (discounted pricing via bonus credits), create a PIPE top-up intent:
 
-**Important**: Deposits are one-way by design. PIPE deposited into the system cannot be withdrawn - it's burned as you use storage.
+```bash
+pipe pipe-credits-intent 10
+pipe pipe-credits-submit <intent_id> <tx_sig>
+```
+
+`pipe sync-deposits` is a legacy alias that can submit a tx signature via `--tx-sig`.
+
+#### How the Credits System Works
+
+1. **Create intent**: `pipe credits-intent 10`
+2. **Pay**: Open the Solana Pay link in a wallet with USDC
+3. **Submit tx**: `pipe credits-submit <intent_id> <tx_sig>`
+4. **Use storage**: Upload/download files - costs are deducted from your credits
+5. **Monitor**: `pipe check-deposit` / `pipe credits-status`
 
 #### Pricing Model
 
-Storage is priced at **$10 USD per 1 TB**, which equals **$0.01 USD per GB**.
+Storage is priced at **$25 USD per 1 TB**, which equals **$0.025 USDC per GB**.
 
-The amount of PIPE you need adjusts based on market price:
-
-| PIPE Price | PIPE per GB | For 1 TB |
-|-----------|-------------|----------|
-| $0.05 USD | 0.2 PIPE | 200 PIPE |
-| $0.10 USD | 0.1 PIPE | 100 PIPE |
-| $0.50 USD | 0.02 PIPE | 20 PIPE |
-| $1.00 USD | 0.01 PIPE | 10 PIPE |
+If you top up credits by paying in **PIPE tokens**, you receive a **25% bonus** on credited amount (effective rate **$20/TB**).
 
 Tier multipliers:
-- **Normal:** 1x = $0.01/GB
-- **Priority:** 2.5x = $0.025/GB
-- **Premium:** 5x = $0.05/GB
-- **Ultra:** 10x = $0.10/GB
-- **Enterprise:** 25x = $0.25/GB
+- **Normal:** 1x = $0.025/GB
+- **Priority:** 2.5x = $0.0625/GB
+- **Premium:** 5x = $0.125/GB
+- **Ultra:** 10x = $0.25/GB
+- **Enterprise:** 25x = $0.625/GB
 
 ### Token Balance Management
 
@@ -735,7 +765,7 @@ Check your wallet PIPE token balance:
 pipe check-token
 ```
 
-Note: This shows your wallet balance, which is different from your deposit balance. Use `pipe check-deposit` to see your prepaid storage balance.
+Note: This shows your wallet balance, which is different from your prepaid credits balance. Use `pipe check-deposit` to see your prepaid credits.
 
 ## License
 

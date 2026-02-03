@@ -4,33 +4,34 @@ use anyhow::{anyhow, Result};
 use base64::{engine::general_purpose, Engine as _};
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use futures_util::StreamExt;
 use indicatif::{ProgressBar, ProgressStyle};
 use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
-use std::str::FromStr;
 use reqwest::{Body, Client, StatusCode};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, OpenOptions};
 use std::io::Write as IoWrite; // For writeln!
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::sync::RwLock;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::fs::File as TokioFile;
-use tokio::io::{AsyncWriteExt, AsyncReadExt, BufWriter};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufWriter};
 use tokio::sync::Mutex as TokioMutex;
 use tokio::sync::Semaphore;
+use uuid::Uuid;
 use walkdir::WalkDir;
 
 mod encryption;
 mod keyring;
+mod password_utils;
 mod quantum;
 mod quantum_keyring;
-mod password_utils;
 pub mod sync;
 
 #[cfg(test)]
@@ -43,21 +44,21 @@ pub const MAX_RETRY_DELAY_MS: u64 = 10000;
 // Define the query encoding set for URL parameters
 // This encodes control characters, spaces, and characters that have special meaning in URLs
 const QUERY_ENCODE_SET: &AsciiSet = &CONTROLS
-    .add(b' ')     // Space
-    .add(b'"')     // Quote
-    .add(b'#')     // Hash (fragment identifier)
-    .add(b'<')     // Less than
-    .add(b'>')     // Greater than
-    .add(b'?')     // Question mark (query separator)
-    .add(b'`')     // Backtick
-    .add(b'{')     // Left brace
-    .add(b'}')     // Right brace
-    .add(b'|')     // Pipe
-    .add(b'\\')    // Backslash
-    .add(b'^')     // Caret
-    .add(b'[')     // Left bracket
-    .add(b']')     // Right bracket
-    .add(b'%');    // Percent (to avoid double encoding)
+    .add(b' ') // Space
+    .add(b'"') // Quote
+    .add(b'#') // Hash (fragment identifier)
+    .add(b'<') // Less than
+    .add(b'>') // Greater than
+    .add(b'?') // Question mark (query separator)
+    .add(b'`') // Backtick
+    .add(b'{') // Left brace
+    .add(b'}') // Right brace
+    .add(b'|') // Pipe
+    .add(b'\\') // Backslash
+    .add(b'^') // Caret
+    .add(b'[') // Left bracket
+    .add(b']') // Right bracket
+    .add(b'%'); // Percent (to avoid double encoding)
 
 // JWT Authentication structures
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -86,6 +87,12 @@ pub struct SetPasswordRequest {
 }
 
 #[derive(Serialize, Debug)]
+pub struct ChangePasswordRequest {
+    pub current_password: String,
+    pub new_password: String,
+}
+
+#[derive(Serialize, Debug)]
 pub struct RefreshTokenRequest {
     pub refresh_token: String,
 }
@@ -95,6 +102,8 @@ pub struct RefreshTokenResponse {
     pub access_token: String,
     pub token_type: String,
     pub expires_in: i64,
+    #[serde(default)]
+    pub csrf_token: Option<String>,
 }
 
 // Combined credentials structure that supports both legacy and JWT auth
@@ -106,6 +115,18 @@ pub struct SavedCredentials {
     pub auth_tokens: Option<AuthTokens>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub username: Option<String>,
+    /// Optional per-profile default API base URL (used when `--api` is not explicitly set).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api_base_url: Option<String>,
+    /// Optional default S3 endpoint override (for presigning and AWS CLI hints).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub s3_endpoint: Option<String>,
+    /// Optional default S3 region override (for presigning).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub s3_region: Option<String>,
+    /// Optional default for presigning style (true = virtual-hosted-style, false = path-style).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub s3_virtual_hosted: Option<bool>,
 }
 
 #[derive(Serialize, Debug)]
@@ -176,8 +197,22 @@ pub enum Commands {
         user_app_key: Option<String>,
     },
 
+    /// Change password (requires JWT login)
+    ChangePassword {
+        #[arg(long)]
+        current_password: Option<String>,
+        #[arg(long)]
+        new_password: Option<String>,
+    },
+
     /// Refresh access token
     RefreshToken,
+
+    /// Manage local CLI configuration (stored in the config file)
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommands,
+    },
 
     RotateAppKey {
         #[arg(long)]
@@ -337,7 +372,7 @@ pub enum Commands {
         #[arg(long)]
         user_app_key: Option<String>,
     },
-    
+
     CreatePublicLink {
         #[arg(long)]
         user_id: Option<String>,
@@ -400,26 +435,29 @@ pub enum Commands {
     DownloadDirectory {
         /// Remote directory prefix to match
         remote_prefix: String,
-        
+
         /// Local directory to download files to
         output_directory: String,
-        
+
         #[arg(long, default_value = "5", help = "Number of parallel downloads")]
         parallel: usize,
-        
+
         #[arg(long, help = "Show what would be downloaded without downloading")]
         dry_run: bool,
-        
+
         #[arg(long, help = "Decrypt files after download")]
         decrypt: bool,
-        
+
         #[arg(long, help = "Password for decryption (will prompt if not provided)")]
         password: Option<String>,
-        
+
         #[arg(long, help = "Filter files by regex pattern")]
         filter: Option<String>,
-        
-        #[arg(long, help = "Path to upload log file (default: ~/.pipe-cli-uploads.json)")]
+
+        #[arg(
+            long,
+            help = "Path to upload log file (default: ~/.pipe-cli-uploads.json)"
+        )]
         upload_log: Option<String>,
     },
 
@@ -469,93 +507,403 @@ pub enum Commands {
     VerifyFile {
         /// File name or Blake3 hash ID
         file_name: String,
-        
+
         #[arg(long, help = "Treat file_name as Blake3 hash ID")]
         file_id: bool,
-        
+
         #[arg(long)]
         user_id: Option<String>,
         #[arg(long)]
         user_app_key: Option<String>,
     },
     */
-    
     /// Find uploaded file by local path or hash
     FindUpload {
         /// Local file path or Blake3 hash to search for
         query: String,
-        
+
         #[arg(long, help = "Search by Blake3 hash instead of local path")]
         by_hash: bool,
     },
-    
+
     /// Rehash upload history (calculate Blake3 for old uploads)
     RehashUploads {
         #[arg(long, help = "Show progress")]
         verbose: bool,
     },
-    
+
     /// Sync files between local and remote storage
     Sync {
         /// Path to sync (local directory or remote prefix)
         path: String,
-        
+
         /// Optional second path for explicit direction (e.g., remote path for download)
         #[arg(value_name = "DEST_PATH")]
         destination: Option<String>,
-        
+
         /// Conflict resolution strategy: newer (default), larger, local, remote, ask
         #[arg(long, default_value = "newer")]
         conflict: String,
-        
+
         /// Show what would happen without making changes
         #[arg(long)]
         dry_run: bool,
-        
+
         /// Exclude files matching these patterns (comma-separated)
         #[arg(long)]
         exclude: Option<String>,
-        
+
         /// Include only files matching these patterns (comma-separated)
         #[arg(long)]
         include: Option<String>,
-        
+
         /// Maximum file size to sync (e.g., 1GB, 500MB)
         #[arg(long)]
         max_size: Option<String>,
-        
+
         /// Only sync files newer than this date (YYYY-MM-DD)
         #[arg(long)]
         newer_than: Option<String>,
-        
+
         /// Number of parallel operations
         #[arg(long, default_value = "5")]
         parallel: usize,
     },
-    
-    /// Check deposit balance and storage quota
+
+    /// Show public service configuration (USDC treasury, lifetime pricing)
+    ServiceConfig,
+
+    /// Check prepaid credits balance (USDC) and storage quota
     CheckDeposit {
         #[arg(long)]
         user_id: Option<String>,
     },
-    
+
+    /// Check prepaid credits balance (USDC) and storage quota
+    CreditsStatus {
+        #[arg(long)]
+        user_id: Option<String>,
+    },
+
+    /// Create a prepaid credits top-up intent (USDC)
+    CreditsIntent {
+        /// USDC amount (e.g. 10.50)
+        amount: String,
+
+        #[arg(long)]
+        user_id: Option<String>,
+    },
+
+    /// Submit a prepaid credits payment transaction signature for verification
+    CreditsSubmit {
+        intent_id: String,
+        tx_sig: String,
+
+        #[arg(long)]
+        user_id: Option<String>,
+    },
+
+    /// Cancel a pending prepaid credits top-up intent
+    CreditsCancel {
+        intent_id: String,
+
+        #[arg(long)]
+        user_id: Option<String>,
+    },
+
+    /// Check PIPE-token top-up intent status (credits bonus)
+    PipeCreditsStatus {
+        #[arg(long)]
+        user_id: Option<String>,
+    },
+
+    /// Create a prepaid credits top-up intent paid in PIPE tokens (discounted)
+    PipeCreditsIntent {
+        /// USDC amount to buy (discount is applied as bonus credits)
+        amount: String,
+
+        #[arg(long)]
+        user_id: Option<String>,
+    },
+
+    /// Submit a PIPE-token payment transaction signature for verification
+    PipeCreditsSubmit {
+        intent_id: String,
+        tx_sig: String,
+
+        #[arg(long)]
+        user_id: Option<String>,
+    },
+
+    /// Cancel a pending PIPE-token top-up intent
+    PipeCreditsCancel {
+        intent_id: String,
+
+        #[arg(long)]
+        user_id: Option<String>,
+    },
+
+    /// Show lifetime subscription status (USDC)
+    LifetimeStatus {
+        #[arg(long)]
+        user_id: Option<String>,
+    },
+
+    /// Create a lifetime subscription purchase intent (USDC)
+    LifetimeIntent {
+        #[arg(long)]
+        user_id: Option<String>,
+    },
+
+    /// Submit a lifetime subscription payment transaction signature for verification
+    LifetimeSubmit {
+        intent_id: String,
+        tx_sig: String,
+
+        #[arg(long)]
+        user_id: Option<String>,
+    },
+
     /// Estimate upload cost for a file
     EstimateCost {
         /// Path to file to estimate
         file_path: String,
-        
-        #[arg(long, default_value = "normal", help = "Upload tier: normal, priority, premium, ultra, enterprise")]
+
+        #[arg(
+            long,
+            default_value = "normal",
+            help = "Upload tier: normal, priority, premium, ultra, enterprise"
+        )]
         tier: String,
-        
+
         #[arg(long)]
         user_id: Option<String>,
     },
-    
-    /// Manually sync deposits from wallet to deposit balance
+
+    /// Legacy: submit a prepaid credits top-up payment (USDC)
     SyncDeposits {
         #[arg(long)]
         user_id: Option<String>,
+
+        /// Optional intent ID (defaults to latest from credits status)
+        #[arg(long)]
+        intent_id: Option<String>,
+
+        /// Transaction signature for USDC transfer
+        #[arg(long)]
+        tx_sig: Option<String>,
     },
+
+    /// Manage S3-compatible access (keys, bucket, presigned URLs)
+    S3 {
+        #[command(subcommand)]
+        command: S3Commands,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ConfigCommands {
+    /// Show local CLI configuration (from the config file)
+    Show,
+
+    /// Set the default API base URL for this config profile
+    SetApi { url: String },
+
+    /// Clear the saved default API base URL
+    ClearApi,
+
+    /// Set the default S3 endpoint (used for presign + AWS CLI hints)
+    SetS3Endpoint { endpoint: String },
+
+    /// Clear the saved S3 endpoint
+    ClearS3Endpoint,
+
+    /// Set the default S3 region (used for presign)
+    SetS3Region { region: String },
+
+    /// Clear the saved S3 region
+    ClearS3Region,
+
+    /// Set whether presigned URLs default to virtual-hosted-style
+    SetS3VirtualHosted { enabled: bool },
+
+    /// Clear the saved virtual-hosted-style default
+    ClearS3VirtualHosted,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum S3Commands {
+    /// Manage S3 access keys
+    Keys {
+        #[command(subcommand)]
+        command: S3KeysCommands,
+    },
+
+    /// Manage S3 bucket settings
+    Bucket {
+        #[command(subcommand)]
+        command: S3BucketCommands,
+    },
+
+    /// Generate a presigned S3 URL (SigV4)
+    Presign {
+        #[arg(long, default_value = "GET")]
+        method: String,
+
+        /// Object key (omit to presign ListBuckets)
+        #[arg(long)]
+        key: Option<String>,
+
+        /// Specific S3 access key id to use (defaults to most-recent active)
+        #[arg(long)]
+        access_key_id: Option<String>,
+
+        /// Expiration in seconds (default 900; max 604800)
+        #[arg(long)]
+        expires: Option<u64>,
+
+        /// AWS region (default us-east-1)
+        #[arg(long)]
+        region: Option<String>,
+
+        /// Override S3 endpoint (e.g. https://host:9000)
+        #[arg(long)]
+        endpoint: Option<String>,
+
+        /// Use virtual-hosted-style URLs (bucket as subdomain)
+        #[arg(long, default_value_t = false, conflicts_with = "path_style")]
+        virtual_hosted: bool,
+
+        /// Force path-style URLs (bucket in path). Overrides any saved default.
+        #[arg(long, default_value_t = false, conflicts_with = "virtual_hosted")]
+        path_style: bool,
+
+        /// Extra query parameters (repeatable). Use KEY or KEY=VALUE.
+        #[arg(long, value_name = "KEY=VALUE")]
+        query: Vec<String>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum S3KeysCommands {
+    /// Create a new S3 access key (secret is shown once)
+    Create {
+        /// Create a read-only key (GET/HEAD only)
+        #[arg(long)]
+        read_only: bool,
+    },
+
+    /// Rotate an S3 access key (creates a new key; optionally revokes the old key)
+    Rotate {
+        /// Rotate from this access key id (defaults to the most-recent active key)
+        #[arg(long)]
+        from: Option<String>,
+
+        /// Revoke the old key after creating the new one
+        #[arg(long, default_value_t = false)]
+        revoke_old: bool,
+
+        /// Override the permission mode for the new key (defaults to the old key mode; otherwise read-only)
+        #[arg(long, value_name = "read-only|read-write")]
+        mode: Option<String>,
+    },
+
+    /// List S3 access keys
+    List,
+
+    /// Revoke an S3 access key
+    Revoke { access_key_id: String },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum S3BucketCommands {
+    /// Show bucket settings
+    Get,
+
+    /// Enable/disable anonymous (public) reads (GET/HEAD)
+    SetPublicRead { enabled: bool },
+
+    /// Set CORS allowed origins for public reads (comma/newline separated; use "*" to allow any)
+    SetCors {
+        #[arg(long, value_name = "ORIGIN", num_args = 1..)]
+        origin: Vec<String>,
+    },
+
+    /// Clear CORS allowed origins (disables browser access)
+    ClearCors,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct S3KeysListResponse {
+    keys: Vec<S3AccessKeyListItem>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct S3AccessKeyListItem {
+    access_key_id: String,
+    read_only: bool,
+    created_at: Option<DateTime<Utc>>,
+    last_used_at: Option<DateTime<Utc>>,
+    revoked_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct S3CreateKeyResponse {
+    access_key_id: String,
+    secret: String,
+    read_only: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct S3RevokeKeyResponse {
+    revoked: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct S3BucketSettingsResponse {
+    bucket_name: String,
+    public_read: bool,
+    #[serde(default)]
+    cors_allowed_origins: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct PatchS3BucketSettingsRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    public_read: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cors_allowed_origins: Option<Vec<String>>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct PresignS3Request {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    access_key_id: Option<String>,
+    method: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    key: Option<String>,
+    #[serde(default)]
+    query: HashMap<String, String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    expires_secs: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    region: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    endpoint: Option<String>,
+    #[serde(default)]
+    virtual_hosted: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct PresignS3Response {
+    url: String,
+    method: String,
+    bucket: String,
+    key: Option<String>,
+    expires_secs: u64,
+    access_key_id: String,
+    read_only: bool,
+    region: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -639,67 +987,529 @@ pub struct PriorityFeeResponse {
     pub priority_fee_per_gb: f64,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-pub struct GetTierPricingResponse {
-    pub normal_fee_per_gb: f64,
-    pub priority_fee_per_gb: f64,
-    pub premium_fee_per_gb: f64,
-    pub ultra_fee_per_gb: f64,
-    pub enterprise_fee_per_gb: f64,
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct TierPricingInfo {
+    pub name: String,
+    pub base_price: f64,
+    pub current_price: f64,
+    pub concurrency: usize,
+    pub active_users: usize,
+    pub multipart_concurrency: usize,
+    pub chunk_size_mb: u64,
 }
 
-// Deposit system structures
-#[derive(Serialize, Deserialize, Debug)]
-pub struct DepositBalanceResponse {
-    pub user_id: String,
-    pub deposit_balance_lamports: u64,
-    pub deposit_balance_pipe: f64,
-    pub total_deposited: u64,
-    pub total_burned: u64,
-    pub storage_quota: StorageQuota,
-    pub last_deposit_at: Option<String>,
-    pub wallet_address: String,
-}
+const USDC_DECIMALS_FACTOR: i64 = 1_000_000;
+const PIPE_DECIMALS_FACTOR: i64 = 1_000_000_000;
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct StorageQuota {
-    pub deposit_balance_lamports: u64,
-    pub deposit_balance_pipe: f64,
-    pub pipe_price_usd: f64,
-    pub tier_estimates: Vec<TierEstimate>,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-pub struct TierEstimate {
+pub struct CreditsTierEstimate {
     pub tier_name: String,
-    pub cost_per_gb_pipe: f64,
-    pub cost_per_gb_usd: f64,
+    pub cost_per_gb_usdc: f64,
     pub available_gb: f64,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct EstimateUploadRequest {
-    pub file_size_bytes: u64,
-    pub tier: Option<String>,
+pub struct CreditsQuota {
+    pub tier_estimates: Vec<CreditsTierEstimate>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct UploadEstimate {
-    pub file_size_bytes: u64,
-    pub tier_name: String,
-    pub estimated_cost_lamports: u64,
-    pub estimated_cost_pipe: f64,
-    pub estimated_cost_usd: f64,
-    pub can_afford: bool,
-    pub remaining_balance_pipe: f64,
+pub struct CreditsIntentStatus {
+    pub intent_id: String,
+    pub status: String,
+    pub requested_usdc_raw: i64,
+    pub detected_usdc_raw: i64,
+    pub credited_usdc_raw: i64,
+    pub usdc_mint: String,
+    pub treasury_owner_pubkey: String,
+    pub treasury_usdc_ata: String,
+    pub reference_pubkey: String,
+    pub payment_tx_sig: Option<String>,
+    pub last_checked_at: Option<String>,
+    pub credited_at: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct SyncDepositsResponse {
-    pub success: bool,
-    pub deposited_amount: u64,
-    pub deposited_pipe: f64,
-    pub message: String,
+pub struct CreditsStatusResponse {
+    pub balance_usdc_raw: i64,
+    pub balance_usdc: f64,
+    pub total_deposited_usdc_raw: i64,
+    pub total_spent_usdc_raw: i64,
+    pub last_topup_at: Option<String>,
+    pub quota: CreditsQuota,
+    pub intent: Option<CreditsIntentStatus>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct CreateCreditsIntentRequest {
+    pub amount_usdc_raw: i64,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct CreditsIntentResponse {
+    pub intent_id: String,
+    pub status: String,
+    pub requested_usdc_raw: i64,
+    pub requested_usdc: f64,
+    pub usdc_mint: String,
+    pub treasury_owner_pubkey: String,
+    pub treasury_usdc_ata: String,
+    pub reference_pubkey: String,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct SubmitCreditsPaymentRequest {
+    pub intent_id: String,
+    pub tx_sig: String,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct SubmitCreditsPaymentResponse {
+    pub intent_id: String,
+    pub status: String,
+    pub requested_usdc_raw: i64,
+    pub detected_usdc_raw: i64,
+    pub credited_usdc_raw: i64,
+    pub balance_usdc_raw: i64,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct CancelCreditsIntentRequest {
+    pub intent_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct CreditsCancelResponse {
+    pub intent_id: String,
+    pub status: String,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct PipeCreditsIntentResponse {
+    pub intent_id: String,
+    pub status: String,
+    pub requested_usdc_raw: i64,
+    pub requested_usdc: f64,
+    pub credited_usdc_raw: i64,
+    pub credited_usdc: f64,
+    pub pipe_price_usd: f64,
+    pub required_pipe_raw: i64,
+    pub required_pipe: f64,
+    pub pipe_mint: String,
+    pub treasury_owner_pubkey: String,
+    pub treasury_pipe_ata: String,
+    pub reference_pubkey: String,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct SubmitPipeCreditsPaymentResponse {
+    pub intent_id: String,
+    pub status: String,
+    pub requested_usdc_raw: i64,
+    pub credited_usdc_raw: i64,
+    pub required_pipe_raw: i64,
+    pub detected_pipe_raw: i64,
+    pub balance_usdc_raw: i64,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct PipeCreditsCancelResponse {
+    pub intent_id: String,
+    pub status: String,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct PipeCreditsIntentStatus {
+    pub intent_id: String,
+    pub status: String,
+    pub requested_usdc_raw: i64,
+    pub credited_usdc_raw: i64,
+    pub pipe_price_usd: f64,
+    pub required_pipe_raw: i64,
+    pub detected_pipe_raw: i64,
+    pub pipe_mint: String,
+    pub treasury_owner_pubkey: String,
+    pub treasury_pipe_ata: String,
+    pub reference_pubkey: String,
+    pub payment_tx_sig: Option<String>,
+    pub last_checked_at: Option<String>,
+    pub credited_at: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct PipeCreditsStatusResponse {
+    pub balance_usdc_raw: i64,
+    pub balance_usdc: f64,
+    pub intent: Option<PipeCreditsIntentStatus>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct ServiceConfigResponse {
+    pub solana_cluster: String,
+    pub usdc_treasury_pubkey: String,
+    pub usdc_treasury_ata: String,
+    pub lifetime_purchase_enabled: bool,
+    pub lifetime_price_usdc: i64,
+    pub usdc_mint: String,
+    pub lifetime_promo_title: Option<String>,
+    pub lifetime_promo_body: Option<String>,
+    pub lifetime_terms_url: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct LifetimeIntentResponse {
+    pub intent_id: String,
+    pub status: String,
+    pub required_usdc: i64,
+    pub required_usdc_raw: i64,
+    pub usdc_mint: String,
+    pub treasury_owner_pubkey: String,
+    pub treasury_usdc_ata: String,
+    pub reference_pubkey: String,
+    pub lifetime_promo_title: Option<String>,
+    pub lifetime_promo_body: Option<String>,
+    pub lifetime_terms_url: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct LifetimeIntentStatus {
+    pub intent_id: String,
+    pub status: String,
+    pub required_usdc_raw: i64,
+    pub detected_usdc_raw: i64,
+    pub remaining_usdc_raw: i64,
+    pub usdc_mint: String,
+    pub treasury_owner_pubkey: String,
+    pub treasury_usdc_ata: String,
+    pub reference_pubkey: String,
+    pub payment_tx_sig: Option<String>,
+    pub last_checked_at: Option<String>,
+    pub funds_detected_at: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct LifetimeStatusResponse {
+    pub lifetime_active: bool,
+    pub lifetime_activated_at: Option<String>,
+    pub intent: Option<LifetimeIntentStatus>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct SubmitLifetimePaymentRequest {
+    pub intent_id: String,
+    pub tx_sig: String,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct SubmitLifetimePaymentResponse {
+    pub intent_id: String,
+    pub status: String,
+    pub required_usdc_raw: i64,
+    pub detected_usdc_raw: i64,
+    pub remaining_usdc_raw: i64,
+}
+
+fn usdc_raw_to_ui(raw: i64) -> f64 {
+    raw as f64 / USDC_DECIMALS_FACTOR as f64
+}
+
+fn pipe_raw_to_ui(raw: i64) -> f64 {
+    raw as f64 / PIPE_DECIMALS_FACTOR as f64
+}
+
+fn format_pipe_ui(amount: f64) -> String {
+    format_amount_ui(amount, 9)
+}
+
+fn format_usdc_ui(amount: f64) -> String {
+    let s = format!("{:.6}", amount);
+    s.trim_end_matches('0').trim_end_matches('.').to_string()
+}
+
+fn parse_usdc_ui_to_raw(input: &str) -> Result<i64> {
+    let trimmed = input.trim().trim_start_matches('$');
+    if trimmed.is_empty() {
+        return Err(anyhow!("USDC amount is required"));
+    }
+
+    let (whole, frac) = match trimmed.split_once('.') {
+        Some((w, f)) => (w, Some(f)),
+        None => (trimmed, None),
+    };
+
+    if whole.is_empty() || !whole.chars().all(|c| c.is_ascii_digit()) {
+        return Err(anyhow!("Invalid USDC amount: {}", input));
+    }
+    let whole_i64: i64 = whole
+        .parse()
+        .map_err(|_| anyhow!("Invalid USDC amount: {}", input))?;
+
+    let frac_raw: i64 = match frac {
+        None => 0,
+        Some(f) if f.is_empty() => 0,
+        Some(f) => {
+            if f.len() > 6 || !f.chars().all(|c| c.is_ascii_digit()) {
+                return Err(anyhow!("Invalid USDC amount (max 6 decimals): {}", input));
+            }
+            let padded = format!("{:0<6}", f);
+            padded
+                .parse::<i64>()
+                .map_err(|_| anyhow!("Invalid USDC amount: {}", input))?
+        }
+    };
+
+    let whole_raw = whole_i64
+        .checked_mul(USDC_DECIMALS_FACTOR)
+        .ok_or_else(|| anyhow!("USDC amount too large: {}", input))?;
+    whole_raw
+        .checked_add(frac_raw)
+        .ok_or_else(|| anyhow!("USDC amount too large: {}", input))
+}
+
+fn parse_s3_query_args(args: &[String]) -> Result<HashMap<String, String>> {
+    let mut out = HashMap::new();
+    for raw in args {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return Err(anyhow!("Invalid --query value: empty"));
+        }
+
+        let (key_raw, value_raw) = match trimmed.split_once('=') {
+            Some((k, v)) => (k, v),
+            None => (trimmed, ""),
+        };
+        let key = key_raw.trim();
+        if key.is_empty() {
+            return Err(anyhow!("Invalid --query value: {}", raw));
+        }
+        out.insert(key.to_string(), value_raw.to_string());
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+mod s3_cli_tests {
+    use super::*;
+
+    #[test]
+    fn parse_s3_query_args_supports_key_only_and_key_value() {
+        let args = vec![
+            "uploads".to_string(),
+            "partNumber=1".to_string(),
+            "uploadId=abc".to_string(),
+        ];
+        let parsed = parse_s3_query_args(&args).unwrap();
+        assert_eq!(parsed.get("uploads").map(String::as_str), Some(""));
+        assert_eq!(parsed.get("partNumber").map(String::as_str), Some("1"));
+        assert_eq!(parsed.get("uploadId").map(String::as_str), Some("abc"));
+    }
+
+    #[test]
+    fn parse_s3_query_args_rejects_empty_key() {
+        assert!(parse_s3_query_args(&["".to_string()]).is_err());
+        assert!(parse_s3_query_args(&["=x".to_string()]).is_err());
+    }
+
+    #[test]
+    fn clap_parses_s3_keys_create_read_only() {
+        let cli = Cli::try_parse_from(["pipe", "s3", "keys", "create", "--read-only"]).unwrap();
+        match cli.command {
+            Commands::S3 {
+                command:
+                    S3Commands::Keys {
+                        command: S3KeysCommands::Create { read_only },
+                    },
+            } => assert!(read_only),
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn refresh_token_response_parses_csrf_token() {
+        let json =
+            r#"{"access_token":"a","token_type":"Bearer","expires_in":123,"csrf_token":"t"}"#;
+        let resp: RefreshTokenResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.csrf_token.as_deref(), Some("t"));
+    }
+
+    #[test]
+    fn auth_tokens_parse_set_password_response_shape() {
+        let json = r#"{"message":"ok","access_token":"a","refresh_token":"r","token_type":"Bearer","expires_in":900,"csrf_token":"c"}"#;
+        let resp: AuthTokens = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.csrf_token.as_deref(), Some("c"));
+    }
+}
+
+fn bytes_to_gb_decimal(bytes: u64) -> f64 {
+    bytes as f64 / 1_000_000_000.0
+}
+
+fn format_amount_ui(amount: f64, decimals: usize) -> String {
+    let s = format!("{:.*}", decimals, amount);
+    s.trim_end_matches('0').trim_end_matches('.').to_string()
+}
+
+fn format_spl_amount_raw(raw: i64, decimals: u32) -> String {
+    if decimals == 0 {
+        return raw.to_string();
+    }
+
+    let factor = match 10u64.checked_pow(decimals) {
+        Some(v) => v,
+        None => return raw.to_string(),
+    };
+
+    let negative = raw < 0;
+    let abs_u64 = match raw.checked_abs() {
+        Some(v) => v as u64,
+        None => (i64::MAX as u64) + 1,
+    };
+
+    let whole = abs_u64 / factor;
+    let frac = abs_u64 % factor;
+
+    let mut out = if frac == 0 {
+        whole.to_string()
+    } else {
+        let frac_str = format!("{:0width$}", frac, width = decimals as usize);
+        let trimmed = frac_str.trim_end_matches('0');
+        format!("{}.{}", whole, trimmed)
+    };
+
+    if negative {
+        out.insert(0, '-');
+    }
+    out
+}
+
+fn solana_pay_url_raw(
+    recipient_pubkey: &str,
+    amount_raw: i64,
+    spl_token_mint: &str,
+    reference: &str,
+    decimals: u32,
+) -> String {
+    format!(
+        "solana:{}?amount={}&spl-token={}&reference={}",
+        recipient_pubkey,
+        format_spl_amount_raw(amount_raw, decimals),
+        spl_token_mint,
+        reference
+    )
+}
+
+#[cfg(test)]
+mod spl_amount_format_tests {
+    use super::format_spl_amount_raw;
+
+    #[test]
+    fn formats_usdc_amounts_without_rounding() {
+        assert_eq!(format_spl_amount_raw(0, 6), "0");
+        assert_eq!(format_spl_amount_raw(1, 6), "0.000001");
+        assert_eq!(format_spl_amount_raw(1_000_000, 6), "1");
+        assert_eq!(format_spl_amount_raw(1_234_500, 6), "1.2345");
+    }
+
+    #[test]
+    fn formats_pipe_amounts_without_rounding() {
+        assert_eq!(format_spl_amount_raw(20_000_000_000, 9), "20");
+        assert_eq!(format_spl_amount_raw(100_000_000_001, 9), "100.000000001");
+    }
+}
+
+async fn fetch_credits_status(
+    client: &Client,
+    base_url: &str,
+    creds: &SavedCredentials,
+) -> Result<CreditsStatusResponse> {
+    for path in ["/api/credits/status", "/deposit/balance"] {
+        let mut request = client.get(format!("{}{}", base_url, path));
+        request = add_auth_headers(request, creds, false)?;
+
+        let resp = request.send().await?;
+        let status = resp.status();
+        let text_body = resp.text().await?;
+
+        if status.is_success() {
+            return Ok(serde_json::from_str::<CreditsStatusResponse>(&text_body)?);
+        }
+
+        if status.as_u16() == 404 {
+            continue;
+        }
+
+        return Err(anyhow!(
+            "Credits status request failed. Status = {}, Body = {}",
+            status,
+            text_body
+        ));
+    }
+
+    Err(anyhow!(
+        "This server does not support prepaid credits endpoints"
+    ))
+}
+
+fn print_credits_status(status: &CreditsStatusResponse) {
+    println!("╔══════════════════════════════════════════════════════════════╗");
+    println!("║                 💳 PREPAID CREDITS (USDC)                    ║");
+    println!("╚══════════════════════════════════════════════════════════════╝");
+    println!();
+    println!("💰 Balance: ${} USDC", format_usdc_ui(status.balance_usdc));
+    println!(
+        "📊 Total Deposited: ${} USDC",
+        format_usdc_ui(usdc_raw_to_ui(status.total_deposited_usdc_raw))
+    );
+    println!(
+        "📉 Total Spent:     ${} USDC",
+        format_usdc_ui(usdc_raw_to_ui(status.total_spent_usdc_raw))
+    );
+    if let Some(ts) = status.last_topup_at.as_deref() {
+        println!("🕒 Last Top-up:     {}", ts);
+    }
+
+    println!();
+    println!("📦 Available Storage:");
+    println!("┌──────────────┬────────────────┬──────────────┐");
+    println!("│ Tier         │ Available GB   │ USDC/GB       │");
+    println!("├──────────────┼────────────────┼──────────────┤");
+    for tier in &status.quota.tier_estimates {
+        println!(
+            "│ {:<12} │ {:>12.2} GB│ ${:>11} │",
+            tier.tier_name,
+            tier.available_gb,
+            format_usdc_ui(tier.cost_per_gb_usdc)
+        );
+    }
+    println!("└──────────────┴────────────────┴──────────────┘");
+
+    if let Some(intent) = status.intent.as_ref() {
+        println!();
+        println!("🧾 Pending Intent:");
+        println!("  Status:    {}", intent.status);
+        println!("  Intent ID: {}", intent.intent_id);
+        println!(
+            "  Requested: ${} USDC",
+            format_usdc_ui(usdc_raw_to_ui(intent.requested_usdc_raw))
+        );
+        if let Some(sig) = intent.payment_tx_sig.as_deref() {
+            println!("  Tx Sig:    {}", sig);
+        }
+        println!("  Reference: {}", intent.reference_pubkey);
+        if !intent.treasury_owner_pubkey.is_empty() {
+            println!("  Treasury:  {}", intent.treasury_owner_pubkey);
+            println!(
+                "  Solana Pay: {}",
+                solana_pay_url_raw(
+                    &intent.treasury_owner_pubkey,
+                    intent.requested_usdc_raw,
+                    &intent.usdc_mint,
+                    &intent.reference_pubkey,
+                    6
+                )
+            );
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -785,7 +1595,10 @@ impl ServiceDiscoveryCache {
     pub async fn get_best_endpoint(&self, client: &Client, discovery_url: &str) -> String {
         // Check if refresh needed
         let needs_refresh = {
-            let last = self.last_refresh.read().unwrap();
+            let last = self.last_refresh.read().unwrap_or_else(|poisoned| {
+                eprintln!("WARN: service discovery last_refresh lock poisoned; continuing");
+                poisoned.into_inner()
+            });
             last.elapsed() > self.refresh_interval
         };
 
@@ -796,7 +1609,10 @@ impl ServiceDiscoveryCache {
         }
 
         // Get best instance
-        let instances = self.instances.read().unwrap();
+        let instances = self.instances.read().unwrap_or_else(|poisoned| {
+            eprintln!("WARN: service discovery instances lock poisoned; continuing");
+            poisoned.into_inner()
+        });
         if let Some(best) = instances.first() {
             best.endpoint_url.clone()
         } else {
@@ -817,15 +1633,21 @@ impl ServiceDiscoveryCache {
             // Filter out localhost instances if we're not connecting to localhost
             if !discovery_url.contains("localhost") && !discovery_url.contains("127.0.0.1") {
                 discovery.instances.retain(|instance| {
-                    !instance.endpoint_url.contains("localhost") && 
-                    !instance.endpoint_url.contains("127.0.0.1")
+                    !instance.endpoint_url.contains("localhost")
+                        && !instance.endpoint_url.contains("127.0.0.1")
                 });
             }
 
-            let mut instances = self.instances.write().unwrap();
+            let mut instances = self.instances.write().unwrap_or_else(|poisoned| {
+                eprintln!("WARN: service discovery instances lock poisoned; continuing");
+                poisoned.into_inner()
+            });
             *instances = discovery.instances;
 
-            let mut last_refresh = self.last_refresh.write().unwrap();
+            let mut last_refresh = self.last_refresh.write().unwrap_or_else(|poisoned| {
+                eprintln!("WARN: service discovery last_refresh lock poisoned; continuing");
+                poisoned.into_inner()
+            });
             *last_refresh = Instant::now();
 
             eprintln!(
@@ -843,7 +1665,10 @@ impl ServiceDiscoveryCache {
         user_id: &str,
         file_name: &str,
     ) -> String {
-        let instances = self.instances.read().unwrap();
+        let instances = self.instances.read().unwrap_or_else(|poisoned| {
+            eprintln!("WARN: service discovery instances lock poisoned; continuing");
+            poisoned.into_inner()
+        });
 
         if instances.is_empty() {
             return self.fallback_endpoint.clone();
@@ -894,28 +1719,33 @@ async fn get_endpoint_for_operation(
     if let Ok(url) = reqwest::Url::parse(base_url) {
         if let Some(_port) = url.port() {
             // Non-standard port specified, bypass discovery
-            eprintln!("Using direct connection to {} (bypassing discovery)", base_url);
+            eprintln!(
+                "Using direct connection to {} (bypassing discovery)",
+                base_url
+            );
             return base_url.to_string();
         }
     }
-    
+
     // First try to refresh if needed
     let _ = service_cache.get_best_endpoint(client, base_url).await;
 
     // Then select based on operation
-    match operation {
-        "upload" | "download" | "delete" if file_name.is_some() => {
-            service_cache.select_endpoint_for_operation(operation, user_id, file_name.unwrap())
+    if matches!(operation, "upload" | "download" | "delete") {
+        if let Some(file_name) = file_name {
+            return service_cache.select_endpoint_for_operation(operation, user_id, file_name);
         }
-        _ => {
-            // For non-file operations, just get the best endpoint
-            let instances = service_cache.instances.read().unwrap();
-            if let Some(best) = instances.first() {
-                best.endpoint_url.clone()
-            } else {
-                base_url.to_string()
-            }
-        }
+    }
+
+    // For non-file operations, just get the best endpoint
+    let instances = service_cache.instances.read().unwrap_or_else(|poisoned| {
+        eprintln!("WARN: service discovery instances lock poisoned; continuing");
+        poisoned.into_inner()
+    });
+    if let Some(best) = instances.first() {
+        best.endpoint_url.clone()
+    } else {
+        base_url.to_string()
     }
 }
 
@@ -928,7 +1758,6 @@ pub fn get_credentials_file_path(custom_path: Option<&str>) -> PathBuf {
         PathBuf::from(".pipe-cli.json")
     }
 }
-
 
 // Helper function to load credentials with the current config
 pub fn load_creds_with_config(config_path: Option<&str>) -> Result<SavedCredentials> {
@@ -955,7 +1784,11 @@ pub fn load_credentials_from_file(custom_path: Option<&str>) -> Result<Option<Sa
     Ok(Some(creds))
 }
 
-pub fn save_credentials_to_file(user_id: &str, user_app_key: &str, config_path: Option<&str>) -> Result<()> {
+pub fn save_credentials_to_file(
+    user_id: &str,
+    user_app_key: &str,
+    config_path: Option<&str>,
+) -> Result<()> {
     // Try to preserve existing auth tokens if they exist
     let creds = if let Ok(Some(existing)) = load_credentials_from_file(config_path) {
         SavedCredentials {
@@ -963,6 +1796,10 @@ pub fn save_credentials_to_file(user_id: &str, user_app_key: &str, config_path: 
             user_app_key: user_app_key.to_owned(),
             auth_tokens: existing.auth_tokens,
             username: existing.username,
+            api_base_url: existing.api_base_url,
+            s3_endpoint: existing.s3_endpoint,
+            s3_region: existing.s3_region,
+            s3_virtual_hosted: existing.s3_virtual_hosted,
         }
     } else {
         SavedCredentials {
@@ -970,6 +1807,10 @@ pub fn save_credentials_to_file(user_id: &str, user_app_key: &str, config_path: 
             user_app_key: user_app_key.to_owned(),
             auth_tokens: None,
             username: None,
+            api_base_url: None,
+            s3_endpoint: None,
+            s3_region: None,
+            s3_virtual_hosted: None,
         }
     };
 
@@ -1019,18 +1860,26 @@ async fn ensure_valid_token(
 
             if resp.status().is_success() {
                 let refresh_response: RefreshTokenResponse = resp.json().await?;
+                let RefreshTokenResponse {
+                    access_token,
+                    expires_in,
+                    csrf_token,
+                    ..
+                } = refresh_response;
 
                 // Calculate new expires_at timestamp
                 let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
-                let expires_at =
-                    DateTime::<Utc>::from_timestamp(now + refresh_response.expires_in, 0)
-                        .ok_or_else(|| anyhow!("Invalid expiration timestamp"))?;
+                let expires_at = DateTime::<Utc>::from_timestamp(now + expires_in, 0)
+                    .ok_or_else(|| anyhow!("Invalid expiration timestamp"))?;
 
                 // Update auth tokens
                 if let Some(ref mut auth_tokens) = creds.auth_tokens {
-                    auth_tokens.access_token = refresh_response.access_token;
-                    auth_tokens.expires_in = refresh_response.expires_in;
+                    auth_tokens.access_token = access_token;
+                    auth_tokens.expires_in = expires_in;
                     auth_tokens.expires_at = Some(expires_at);
+                    if let Some(token) = csrf_token {
+                        auth_tokens.csrf_token = Some(token);
+                    }
                 }
 
                 // Save updated credentials
@@ -1045,6 +1894,25 @@ async fn ensure_valid_token(
         }
     }
     Ok(())
+}
+
+fn extract_user_id_from_jwt(access_token: &str) -> Result<String> {
+    let parts: Vec<&str> = access_token.split('.').collect();
+    if parts.len() != 3 {
+        return Err(anyhow!("Invalid JWT format"));
+    }
+
+    let payload = general_purpose::URL_SAFE_NO_PAD
+        .decode(parts[1])
+        .map_err(|e| anyhow!("Invalid JWT payload encoding: {e}"))?;
+
+    let json: serde_json::Value =
+        serde_json::from_slice(&payload).map_err(|e| anyhow!("Invalid JWT payload JSON: {e}"))?;
+
+    json.get("sub")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| anyhow!("JWT missing 'sub' claim"))
 }
 
 // Build a request with JWT auth header if available, otherwise use query params
@@ -1065,7 +1933,7 @@ fn build_authenticated_request(
             format!("Bearer {}", auth_tokens.access_token),
         );
     } else if include_legacy {
-        // Fall back to legacy auth via query params (already in URL)
+        // No-op: legacy auth is not supported in JWT-only deployments.
     }
 
     request
@@ -1076,28 +1944,26 @@ fn add_auth_headers(
     mut request: reqwest::RequestBuilder,
     creds: &SavedCredentials,
     is_state_changing: bool,
-) -> reqwest::RequestBuilder {
-    // Add JWT auth if available
-    if let Some(ref auth_tokens) = creds.auth_tokens {
-        request = request.header(
-            "Authorization",
-            format!("Bearer {}", auth_tokens.access_token),
-        );
+) -> Result<reqwest::RequestBuilder> {
+    let auth_tokens = creds.auth_tokens.as_ref().ok_or_else(|| {
+        anyhow!(
+            "JWT authentication required. Run `pipe login` (or `pipe set-password` for new accounts) first."
+        )
+    })?;
 
-        // Add CSRF token for state-changing requests
-        if is_state_changing {
-            if let Some(ref csrf_token) = auth_tokens.csrf_token {
-                request = request.header("X-CSRF-Token", csrf_token);
-            }
+    request = request.header(
+        "Authorization",
+        format!("Bearer {}", auth_tokens.access_token),
+    );
+
+    // Add CSRF token for state-changing requests
+    if is_state_changing {
+        if let Some(ref csrf_token) = auth_tokens.csrf_token {
+            request = request.header("X-CSRF-Token", csrf_token);
         }
-    } else {
-        // Legacy auth via headers
-        request = request
-            .header("X-User-Id", &creds.user_id)
-            .header("X-User-App-Key", &creds.user_app_key);
     }
 
-    request
+    Ok(request)
 }
 
 pub fn get_final_user_id_and_app_key(
@@ -1149,7 +2015,7 @@ pub async fn calculate_blake3(file_path: &Path) -> Result<String> {
     let mut hasher = blake3::Hasher::new();
     let mut file = tokio::fs::File::open(file_path).await?;
     let mut buffer = vec![0u8; 64 * 1024]; // 64KB buffer
-    
+
     loop {
         let n = file.read(&mut buffer).await?;
         if n == 0 {
@@ -1157,7 +2023,7 @@ pub async fn calculate_blake3(file_path: &Path) -> Result<String> {
         }
         hasher.update(&buffer[..n]);
     }
-    
+
     Ok(hasher.finalize().to_hex().to_string())
 }
 
@@ -1213,20 +2079,20 @@ pub fn read_upload_log_entries(log_path: Option<&str>) -> Result<Vec<UploadLogEn
         Some(p) => PathBuf::from(p),
         None => get_upload_log_path(),
     };
-    
+
     if !path.exists() {
         return Ok(Vec::new());
     }
-    
+
     let contents = fs::read_to_string(&path)?;
     let mut entries = Vec::new();
-    
+
     for line in contents.lines() {
         if let Ok(entry) = serde_json::from_str::<UploadLogEntry>(line) {
             entries.push(entry);
         }
     }
-    
+
     Ok(entries)
 }
 
@@ -1239,9 +2105,9 @@ pub fn filter_entries_for_download<'a>(
     entries
         .iter()
         .filter(|e| {
-            e.status == "SUCCESS" 
-            && e.remote_path.starts_with(remote_prefix)
-            && filter_regex.is_none_or(|re| re.is_match(&e.remote_path))
+            e.status == "SUCCESS"
+                && e.remote_path.starts_with(remote_prefix)
+                && filter_regex.is_none_or(|re| re.is_match(&e.remote_path))
         })
         .collect()
 }
@@ -1315,6 +2181,10 @@ async fn improved_download_file(
         user_app_key: user_app_key.to_owned(),
         auth_tokens: None,
         username: None,
+        api_base_url: None,
+        s3_endpoint: None,
+        s3_region: None,
+        s3_virtual_hosted: None,
     };
     improved_download_file_with_auth(client, base_url, &creds, file_name, output_path).await
 }
@@ -1326,7 +2196,15 @@ async fn improved_download_file_with_auth(
     file_name: &str,
     output_path: &str,
 ) -> Result<()> {
-    improved_download_file_with_auth_and_options(client, base_url, creds, file_name, output_path, false).await
+    improved_download_file_with_auth_and_options(
+        client,
+        base_url,
+        creds,
+        file_name,
+        output_path,
+        false,
+    )
+    .await
 }
 
 async fn improved_download_file_with_auth_and_options(
@@ -1339,11 +2217,14 @@ async fn improved_download_file_with_auth_and_options(
 ) -> Result<()> {
     // Handle directory case - append filename if output_path is a directory
     let output_path = if Path::new(output_path).is_dir() {
-        Path::new(output_path).join(file_name).to_string_lossy().to_string()
+        Path::new(output_path)
+            .join(file_name)
+            .to_string_lossy()
+            .to_string()
     } else {
         output_path.to_string()
     };
-    
+
     println!("Downloading '{}' to '{}'...", file_name, &output_path);
 
     // Build the URL - NO CREDENTIALS IN URL (security fix)
@@ -1366,26 +2247,45 @@ async fn improved_download_file_with_auth_and_options(
 
     // Build request with appropriate auth headers
     // Use query() method to properly encode parameters
-    let mut request = client.get(&endpoint)
-        .query(&[("file_name", file_name)]);
-    if let Some(ref auth_tokens) = creds.auth_tokens {
-        // JWT authentication
-        request = request.header(
-            "Authorization",
-            format!("Bearer {}", auth_tokens.access_token),
-        );
-    } else {
-        // Legacy authentication via headers (NOT URL params for security)
-        request = request
-            .header("X-User-Id", &creds.user_id)
-            .header("X-User-App-Key", &creds.user_app_key);
-    }
+    let mut request = client.get(&endpoint).query(&[("file_name", file_name)]);
+    request = add_auth_headers(request, creds, false)?;
 
     let resp = request.send().await?;
     let status = resp.status();
 
     if !status.is_success() {
         let error_text = resp.text().await?;
+        if status.as_u16() == 402 {
+            if let Ok(error_data) = serde_json::from_str::<serde_json::Value>(&error_text) {
+                if let Some(message) = error_data.get("message").and_then(|m| m.as_str()) {
+                    eprintln!("\n❌ Download failed: Insufficient prepaid credits (USDC)");
+                    eprintln!("{}", message);
+                    if let Some(required) = error_data
+                        .get("required_usdc")
+                        .and_then(|r| r.as_f64())
+                        .or_else(|| {
+                            error_data
+                                .get("estimated_cost_usdc")
+                                .and_then(|r| r.as_f64())
+                        })
+                    {
+                        eprintln!("\n💰 Credits:");
+                        eprintln!("   Required: ${} USDC", format_usdc_ui(required));
+                        if let Some(current) = error_data
+                            .get("credits_balance_usdc")
+                            .and_then(|c| c.as_f64())
+                        {
+                            let needed = (required - current).max(0.0);
+                            eprintln!("   Current:  ${} USDC", format_usdc_ui(current));
+                            eprintln!("   Needed:   ${} USDC", format_usdc_ui(needed));
+                        }
+                    }
+                    eprintln!("\n💡 Next steps:");
+                    eprintln!("   1) Run: pipe check-deposit");
+                    eprintln!("   2) Top up: pipe credits-intent 10");
+                }
+            }
+        }
         return Err(anyhow!(
             "Download failed with status {}: {}",
             status,
@@ -1393,10 +2293,17 @@ async fn improved_download_file_with_auth_and_options(
         ));
     }
 
+    let cost_charged = resp
+        .headers()
+        .get("X-Tokens-Charged")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|s| s.parse::<f64>().ok())
+        .unwrap_or(0.0);
+
     if use_legacy {
         // Legacy mode: Get the full response body and decode base64
         let body_bytes = resp.bytes().await?;
-        
+
         // The legacy /download endpoint returns base64-encoded content
         let final_bytes = match std::str::from_utf8(&body_bytes) {
             Ok(text_body) => {
@@ -1415,7 +2322,9 @@ async fn improved_download_file_with_auth_and_options(
             }
             Err(_) => {
                 // Not valid UTF-8, so can't be base64 - use original bytes
-                eprintln!("Warning: Response is not valid UTF-8, cannot be base64. Using raw response.");
+                eprintln!(
+                    "Warning: Response is not valid UTF-8, cannot be base64. Using raw response."
+                );
                 body_bytes.to_vec()
             }
         };
@@ -1424,6 +2333,12 @@ async fn improved_download_file_with_auth_and_options(
         tokio::fs::write(&output_path, &final_bytes).await?;
         progress.set_position(final_bytes.len() as u64);
         progress.finish_with_message("Download completed");
+        if cost_charged > 0.0 {
+            println!(
+                "💰 Cost: ${} USDC (prepaid credits)",
+                format_usdc_ui(cost_charged)
+            );
+        }
     } else {
         // Streaming mode: Get content length for progress bar
         let total_size = resp.content_length().unwrap_or(0);
@@ -1444,6 +2359,12 @@ async fn improved_download_file_with_auth_and_options(
 
         writer.flush().await?;
         progress.finish_with_message("Download completed");
+        if cost_charged > 0.0 {
+            println!(
+                "💰 Cost: ${} USDC (prepaid credits)",
+                format_usdc_ui(cost_charged)
+            );
+        }
     }
 
     println!("File downloaded successfully to: {}", output_path);
@@ -1504,28 +2425,32 @@ where
                 let error_str = e.to_string();
 
                 // Check if it's a retryable error
-                let is_rate_limit = error_str.contains("429") || error_str.contains("Too Many Requests");
+                let is_rate_limit =
+                    error_str.contains("429") || error_str.contains("Too Many Requests");
                 // Treat common upstream errors as transient (nginx/backends)
-                let is_5xx_gateway = error_str.contains("502") || error_str.contains("503") || error_str.contains("504")
-                    || error_str.contains("Bad Gateway") || error_str.contains("Service Unavailable") || error_str.contains("Gateway Timeout");
-                let is_transient_500 = error_str.contains("500") && (
-                    error_str.contains("Failed to flush buffer") ||
-                    error_str.contains("Failed to write to file") ||
-                    error_str.contains("Storage full") ||
-                    error_str.contains("Out of memory") ||
-                    error_str.contains("interrupted") ||
-                    error_str.contains("timed out") ||
-                    error_str.contains("broken")
-                );
+                let is_5xx_gateway = error_str.contains("502")
+                    || error_str.contains("503")
+                    || error_str.contains("504")
+                    || error_str.contains("Bad Gateway")
+                    || error_str.contains("Service Unavailable")
+                    || error_str.contains("Gateway Timeout");
+                let is_transient_500 = error_str.contains("500")
+                    && (error_str.contains("Failed to flush buffer")
+                        || error_str.contains("Failed to write to file")
+                        || error_str.contains("Storage full")
+                        || error_str.contains("Out of memory")
+                        || error_str.contains("interrupted")
+                        || error_str.contains("timed out")
+                        || error_str.contains("broken"));
                 let is_transient_error = is_5xx_gateway || is_transient_500;
-                
+
                 if is_rate_limit || is_transient_error {
                     if retry_count >= MAX_RETRIES {
                         eprintln!(
                             "❌ {} failed after {} retries: {}",
                             operation_name, MAX_RETRIES, e
                         );
-                        
+
                         // Provide helpful guidance for specific errors
                         if error_str.contains("Failed to flush buffer") {
                             eprintln!("\n💡 Suggestions:");
@@ -1536,7 +2461,7 @@ where
                             eprintln!("\n⚠️  The server appears to be out of disk space.");
                             eprintln!("   Please contact support or try again later.");
                         }
-                        
+
                         return Err(e);
                     }
 
@@ -1634,18 +2559,7 @@ async fn upload_file_with_auth(
         .header("Content-Length", file_size)
         .header("Content-Type", "application/octet-stream");
 
-    // Add auth headers - JWT takes precedence
-    if let Some(ref auth_tokens) = creds.auth_tokens {
-        request = request.header(
-            "Authorization",
-            format!("Bearer {}", auth_tokens.access_token),
-        );
-    } else {
-        // Legacy auth via headers
-        request = request
-            .header("X-User-Id", &creds.user_id)
-            .header("X-User-App-Key", &creds.user_app_key);
-    }
+    request = add_auth_headers(request, creds, true)?;
 
     let resp = request.body(body).send().await?;
 
@@ -1680,6 +2594,10 @@ async fn upload_file(
         user_app_key: String::new(),
         auth_tokens: None,
         username: None,
+        api_base_url: None,
+        s3_endpoint: None,
+        s3_region: None,
+        s3_virtual_hosted: None,
     };
     upload_file_with_auth(client, file_path, full_url, file_name_in_bucket, &creds).await
 }
@@ -1882,45 +2800,6 @@ async fn upload_file_priority_with_auth(
     }
 }
 
-/// Priority-download a file as a base64 string, then decode it.
-#[allow(dead_code)]
-async fn priority_download_single_file(
-    client: &Client,
-    base_url: &str,
-    user_id: &str,
-    user_app_key: &str,
-    file_name_in_bucket: &str,
-) -> Result<Vec<u8>> {
-    // Build URL without credentials (security fix)
-    let url = format!(
-        "{}/priorityDownload?file_name={}",
-        base_url, utf8_percent_encode(file_name_in_bucket, QUERY_ENCODE_SET)
-    );
-
-    // Add legacy auth headers
-    let resp = client
-        .get(&url)
-        .header("X-User-Id", user_id)
-        .header("X-User-App-Key", user_app_key)
-        .send()
-        .await?;
-    let status = resp.status();
-    let text_body = resp.text().await?;
-    if status.is_success() {
-        let decoded = general_purpose::STANDARD
-            .decode(&text_body)
-            .map_err(|e| anyhow!("Base64 decode error: {}", e))?;
-        Ok(decoded)
-    } else {
-        Err(anyhow!(
-            "Priority download of '{}' failed. Status={}, Body={}",
-            file_name_in_bucket,
-            status,
-            text_body
-        ))
-    }
-}
-
 /// Priority-download a file with JWT authentication support
 async fn priority_download_single_file_with_auth(
     client: &Client,
@@ -1931,24 +2810,12 @@ async fn priority_download_single_file_with_auth(
     // Build URL without credentials (security fix)
     let url = format!(
         "{}/priorityDownload?file_name={}",
-        base_url, utf8_percent_encode(file_name_in_bucket, QUERY_ENCODE_SET)
+        base_url,
+        utf8_percent_encode(file_name_in_bucket, QUERY_ENCODE_SET)
     );
 
     let mut request = client.get(&url);
-
-    // Add appropriate auth headers
-    if let Some(ref auth_tokens) = creds.auth_tokens {
-        // JWT authentication
-        request = request.header(
-            "Authorization",
-            format!("Bearer {}", auth_tokens.access_token),
-        );
-    } else {
-        // Legacy authentication via headers (NOT URL params for security)
-        request = request
-            .header("X-User-Id", &creds.user_id)
-            .header("X-User-App-Key", &creds.user_app_key);
-    }
+    request = add_auth_headers(request, creds, false)?;
 
     let resp = request.send().await?;
     let status = resp.status();
@@ -1986,7 +2853,17 @@ async fn download_file_with_quantum_decryption(
     decrypt_password: bool,
     password: Option<String>,
 ) -> Result<()> {
-    download_file_with_quantum_decryption_and_options(client, base_url, creds, file_name, output_path, decrypt_password, password, false).await
+    download_file_with_quantum_decryption_and_options(
+        client,
+        base_url,
+        creds,
+        file_name,
+        output_path,
+        decrypt_password,
+        password,
+        false,
+    )
+    .await
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2002,52 +2879,55 @@ async fn download_file_with_quantum_decryption_and_options(
 ) -> Result<()> {
     use crate::quantum::decrypt_and_verify;
     use crate::quantum_keyring::load_quantum_keypair;
-    
+
     println!("🔐 Downloading quantum-encrypted file...");
-    
+
     // Download the quantum-encrypted file
     let temp_path = format!("{}.qenc.tmp", output_path);
-    improved_download_file_with_auth_and_options(client, base_url, creds, file_name, &temp_path, use_legacy).await?;
-    
+    improved_download_file_with_auth_and_options(
+        client, base_url, creds, file_name, &temp_path, use_legacy,
+    )
+    .await?;
+
     // Read the downloaded file
     let quantum_encrypted_data = std::fs::read(&temp_path)?;
     println!("  Downloaded size: {} bytes", quantum_encrypted_data.len());
-    
+
     // Determine the original filename (remove .qenc extension if present)
     let original_filename = if let Some(stripped) = file_name.strip_suffix(".qenc") {
         stripped
     } else {
         file_name
     };
-    
+
     // Load quantum keys
     let quantum_keys = match load_quantum_keypair(original_filename) {
         Ok(keys) => keys,
         Err(e) => {
-            eprintln!("⚠️  Could not load quantum keys for {}: {}", original_filename, e);
+            eprintln!(
+                "⚠️  Could not load quantum keys for {}: {}",
+                original_filename, e
+            );
             eprintln!("    Make sure you have the quantum keys from when this file was uploaded.");
             let _ = std::fs::remove_file(&temp_path);
             return Err(anyhow!("Quantum keys not found"));
         }
     };
-    
+
     // Decrypt and verify using quantum crypto
     println!("  Decrypting with quantum-resistant algorithms...");
-    let signed_data = decrypt_and_verify(
-        &quantum_encrypted_data,
-        &quantum_keys.kyber_secret,
-    )?;
-    
+    let signed_data = decrypt_and_verify(&quantum_encrypted_data, &quantum_keys.kyber_secret)?;
+
     println!("  ✅ Signature verified");
     println!("  Decrypted size: {} bytes", signed_data.data.len());
-    
+
     // If password decryption is also needed
     let final_data = if decrypt_password {
         let password = match password {
             Some(p) => p,
             None => rpassword::prompt_password("Enter decryption password: ")?,
         };
-        
+
         // Extract nonce and encrypted data
         if signed_data.data.len() < 12 {
             return Err(anyhow!("Invalid encrypted data: too short"));
@@ -2055,7 +2935,7 @@ async fn download_file_with_quantum_decryption_and_options(
         let (nonce_bytes, encrypted_data) = signed_data.data.split_at(12);
         let mut nonce = [0u8; 12];
         nonce.copy_from_slice(nonce_bytes);
-        
+
         // Decrypt with password
         // Use a fixed salt for quantum context
         let quantum_salt = b"pipe-quantum-v1-salt-2024";
@@ -2064,14 +2944,17 @@ async fn download_file_with_quantum_decryption_and_options(
     } else {
         signed_data.data
     };
-    
+
     // Write the final decrypted file
     std::fs::write(output_path, &final_data)?;
-    
+
     // Clean up temp file
     let _ = std::fs::remove_file(&temp_path);
-    
-    println!("✅ Quantum-encrypted file downloaded and decrypted to: {}", output_path);
+
+    println!(
+        "✅ Quantum-encrypted file downloaded and decrypted to: {}",
+        output_path
+    );
     Ok(())
 }
 
@@ -2085,7 +2968,17 @@ async fn download_file_with_decryption(
     decrypt: bool,
     password: Option<String>,
 ) -> Result<()> {
-    download_file_with_decryption_and_options(client, base_url, creds, file_name, output_path, decrypt, password, false).await
+    download_file_with_decryption_and_options(
+        client,
+        base_url,
+        creds,
+        file_name,
+        output_path,
+        decrypt,
+        password,
+        false,
+    )
+    .await
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2108,8 +3001,15 @@ async fn download_file_with_decryption_and_options(
     if decrypt {
         // Download to temporary file first
         let temp_path = format!("{}.tmp", output_path);
-        improved_download_file_with_auth_and_options(client, base_url, creds, &actual_file_name, &temp_path, use_legacy)
-            .await?;
+        improved_download_file_with_auth_and_options(
+            client,
+            base_url,
+            creds,
+            &actual_file_name,
+            &temp_path,
+            use_legacy,
+        )
+        .await?;
 
         // Get password if not provided
         let password = match password {
@@ -2144,8 +3044,15 @@ async fn download_file_with_decryption_and_options(
         }
     } else {
         // Regular download without decryption
-        improved_download_file_with_auth_and_options(client, base_url, creds, &actual_file_name, output_path, use_legacy)
-            .await
+        improved_download_file_with_auth_and_options(
+            client,
+            base_url,
+            creds,
+            &actual_file_name,
+            output_path,
+            use_legacy,
+        )
+        .await
     }
 }
 
@@ -2169,22 +3076,23 @@ pub async fn download_directory(
     if entries.is_empty() {
         return Err(anyhow!("No upload log found. Have you uploaded any files?"));
     }
-    
+
     // 2. Compile filter regex if provided
     let filter_regex = match filter {
         Some(pattern) => Some(regex::Regex::new(&pattern)?),
         None => None,
     };
-    
+
     // 3. Filter entries
-    let matching_entries = filter_entries_for_download(&entries, remote_prefix, filter_regex.as_ref());
-    
+    let matching_entries =
+        filter_entries_for_download(&entries, remote_prefix, filter_regex.as_ref());
+
     if matching_entries.is_empty() {
         return Err(anyhow!("No files found with prefix '{}'", remote_prefix));
     }
-    
+
     println!("Found {} files to download", matching_entries.len());
-    
+
     // 4. Dry run - just show what would be downloaded
     if dry_run {
         println!("\nDry run - files that would be downloaded:");
@@ -2194,11 +3102,11 @@ pub async fn download_directory(
         }
         return Ok(());
     }
-    
+
     // 5. Calculate total size (if we had size in log)
     // For now, we'll show count-based progress
     let total_files = matching_entries.len();
-    
+
     // 6. Create progress bar
     let progress = Arc::new(ProgressBar::new(total_files as u64));
     progress.set_style(
@@ -2208,15 +3116,15 @@ pub async fn download_directory(
             .progress_chars("#>-"),
     );
     progress.set_message("Starting downloads...");
-    
+
     // 7. Create semaphore for concurrency control
     let semaphore = Arc::new(tokio::sync::Semaphore::new(parallel));
     let completed = Arc::new(AtomicUsize::new(0));
     let failed = Arc::new(AtomicUsize::new(0));
-    
+
     // 8. Create download tasks
     let mut handles = vec![];
-    
+
     for entry in matching_entries {
         let client = client.clone();
         let base_url = base_url.to_string();
@@ -2229,20 +3137,20 @@ pub async fn download_directory(
         let failed = failed.clone();
 
         let password = password.clone();
-        
+
         let handle = tokio::spawn(async move {
             // Acquire permit
             let _permit = semaphore.acquire().await?;
-            
+
             // Construct local path
             let local_path = Path::new(&output_dir).join(&remote_path);
-            
+
             // Create parent directories
             ensure_parent_dirs(&local_path).await?;
-            
+
             // Update progress
             progress.set_message(format!("Downloading: {}", remote_path));
-            
+
             // Download file
             let result = if decrypt {
                 download_file_with_decryption(
@@ -2253,7 +3161,8 @@ pub async fn download_directory(
                     &local_path.to_string_lossy(),
                     decrypt,
                     password,
-                ).await
+                )
+                .await
             } else {
                 improved_download_file_with_auth(
                     &client,
@@ -2261,9 +3170,10 @@ pub async fn download_directory(
                     &creds,
                     &remote_path,
                     &local_path.to_string_lossy(),
-                ).await
+                )
+                .await
             };
-            
+
             match result {
                 Ok(_) => {
                     completed.fetch_add(1, Ordering::Relaxed);
@@ -2275,29 +3185,29 @@ pub async fn download_directory(
                     progress.inc(1);
                 }
             }
-            
+
             Ok::<(), anyhow::Error>(())
         });
-        
+
         handles.push(handle);
     }
-    
+
     // 9. Wait for all downloads to complete
     for handle in handles {
         let _ = handle.await?;
     }
-    
+
     // 10. Final report
     progress.finish_with_message("Downloads complete");
-    
+
     let completed_count = completed.load(Ordering::Relaxed);
     let failed_count = failed.load(Ordering::Relaxed);
-    
+
     println!("\n=== Download Summary ===");
     println!("Successfully downloaded: {} files", completed_count);
     println!("Failed: {} files", failed_count);
     println!("Output directory: {}", output_dir);
-    
+
     Ok(())
 }
 
@@ -2306,7 +3216,7 @@ mod download_directory_tests {
     use super::*;
     use regex::Regex;
     use tempfile::TempDir;
-    
+
     /// Create a test upload log with sample entries
     fn create_test_upload_log(log_path: &Path) -> Result<()> {
         let entries = vec![
@@ -2362,7 +3272,7 @@ mod download_directory_tests {
             content.push_str(&serde_json::to_string(&entry)?);
             content.push('\n');
         }
-        
+
         fs::write(log_path, content)?;
         Ok(())
     }
@@ -2371,18 +3281,18 @@ mod download_directory_tests {
     fn test_read_upload_log_entries() {
         let temp_dir = TempDir::new().unwrap();
         let log_path = temp_dir.path().join("test-upload-log.json");
-        
+
         // Test empty log
         let entries = read_upload_log_entries(Some(log_path.to_str().unwrap())).unwrap();
         assert_eq!(entries.len(), 0);
-        
+
         // Create test log
         create_test_upload_log(&log_path).unwrap();
-        
+
         // Test reading log
         let entries = read_upload_log_entries(Some(log_path.to_str().unwrap())).unwrap();
         assert_eq!(entries.len(), 5);
-        
+
         // Verify entries
         assert_eq!(entries[0].remote_path, "vacation/beach.jpg");
         assert_eq!(entries[0].status, "SUCCESS");
@@ -2394,25 +3304,27 @@ mod download_directory_tests {
         let temp_dir = TempDir::new().unwrap();
         let log_path = temp_dir.path().join("test-upload-log.json");
         create_test_upload_log(&log_path).unwrap();
-        
+
         let entries = read_upload_log_entries(Some(log_path.to_str().unwrap())).unwrap();
-        
+
         // Test prefix filtering
         let filtered = filter_entries_for_download(&entries, "vacation", None);
         assert_eq!(filtered.len(), 2);
-        assert!(filtered.iter().all(|e| e.remote_path.starts_with("vacation")));
-        
+        assert!(filtered
+            .iter()
+            .all(|e| e.remote_path.starts_with("vacation")));
+
         // Test status filtering (only SUCCESS)
         let filtered = filter_entries_for_download(&entries, "docs", None);
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].remote_path, "docs/summary.pdf");
-        
+
         // Test with regex filter
         let regex = Regex::new(r".*\.jpg$").unwrap();
         let filtered = filter_entries_for_download(&entries, "", Some(&regex));
         assert_eq!(filtered.len(), 3);
         assert!(filtered.iter().all(|e| e.remote_path.ends_with(".jpg")));
-        
+
         // Test combined prefix and regex
         let regex = Regex::new(r".*beach.*").unwrap();
         let filtered = filter_entries_for_download(&entries, "vacation", Some(&regex));
@@ -2425,9 +3337,9 @@ mod download_directory_tests {
         let temp_dir = TempDir::new().unwrap();
         let log_path = temp_dir.path().join("test-upload-log.json");
         create_test_upload_log(&log_path).unwrap();
-        
+
         let entries = read_upload_log_entries(Some(log_path.to_str().unwrap())).unwrap();
-        
+
         // Empty prefix should match all SUCCESS entries
         let filtered = filter_entries_for_download(&entries, "", None);
         assert_eq!(filtered.len(), 4); // All SUCCESS entries
@@ -2437,7 +3349,7 @@ mod download_directory_tests {
     fn test_malformed_log_entries() {
         let temp_dir = TempDir::new().unwrap();
         let log_path = temp_dir.path().join("test-upload-log.json");
-        
+
         // Create log with some malformed entries
         let content = r#"{"local_path":"good.txt","remote_path":"good.txt","status":"SUCCESS","message":"ok"}
 {this is not valid json}
@@ -2445,7 +3357,7 @@ mod download_directory_tests {
 {"partial":true
 "#;
         fs::write(&log_path, content).unwrap();
-        
+
         // Should skip malformed entries
         let entries = read_upload_log_entries(Some(log_path.to_str().unwrap())).unwrap();
         assert_eq!(entries.len(), 2); // Only valid entries
@@ -2456,9 +3368,9 @@ mod download_directory_tests {
         let temp_dir = TempDir::new().unwrap();
         let log_path = temp_dir.path().join("test-upload-log.json");
         let output_dir = temp_dir.path().join("output");
-        
+
         create_test_upload_log(&log_path).unwrap();
-        
+
         // Mock client and credentials
         let client = reqwest::Client::new();
         let creds = SavedCredentials {
@@ -2466,8 +3378,12 @@ mod download_directory_tests {
             user_app_key: "test-key".to_string(),
             auth_tokens: None,
             username: Some("testuser".to_string()),
+            api_base_url: None,
+            s3_endpoint: None,
+            s3_region: None,
+            s3_virtual_hosted: None,
         };
-        
+
         // Test dry run - should not create any files
         let result = download_directory(
             &client,
@@ -2481,8 +3397,9 @@ mod download_directory_tests {
             None,
             None,
             Some(log_path.to_str().unwrap()),
-        ).await;
-        
+        )
+        .await;
+
         assert!(result.is_ok());
         assert!(!output_dir.exists()); // No files should be created in dry run
     }
@@ -2491,13 +3408,13 @@ mod download_directory_tests {
     fn test_ensure_parent_dirs() {
         let temp_dir = TempDir::new().unwrap();
         let file_path = temp_dir.path().join("deep/nested/path/file.txt");
-        
+
         // Test with tokio runtime
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             ensure_parent_dirs(&file_path).await.unwrap();
         });
-        
+
         assert!(file_path.parent().unwrap().exists());
     }
 
@@ -2523,13 +3440,13 @@ mod download_directory_tests {
                 timestamp: None,
             },
         ];
-        
+
         // Case sensitive regex
         let regex = Regex::new(r"test\.txt").unwrap();
         let filtered = filter_entries_for_download(&entries, "", Some(&regex));
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].remote_path, "test.txt");
-        
+
         // Case insensitive regex
         let regex = Regex::new(r"(?i)test\.txt").unwrap();
         let filtered = filter_entries_for_download(&entries, "", Some(&regex));
@@ -2551,16 +3468,16 @@ async fn upload_file_with_quantum_encryption(
 ) -> Result<(String, f64)> {
     use crate::quantum::sign_and_encrypt;
     use crate::quantum_keyring::{generate_quantum_keypair, save_quantum_keypair};
-    
+
     println!("🔐 Using quantum-resistant encryption (Kyber + Dilithium)...");
-    
+
     // Generate quantum keypair
     let quantum_keys = generate_quantum_keypair(file_name_in_bucket)?;
-    
+
     // Read the file
     let file_data = std::fs::read(file_path)?;
     println!("  Original file size: {} bytes", file_data.len());
-    
+
     // If password encryption is also requested, encrypt with password first
     let data_to_quantum_encrypt = if encrypt {
         let password = match password {
@@ -2574,13 +3491,13 @@ async fn upload_file_with_quantum_encryption(
                 password
             }
         };
-        
+
         // Encrypt with password first
         // Use a fixed salt for quantum context
         let quantum_salt = b"pipe-quantum-v1-salt-2024";
         let encryption_key = crate::encryption::derive_key_from_password(&password, quantum_salt)?;
         let (encrypted, nonce) = crate::encryption::encrypt_data(&file_data, &encryption_key)?;
-        
+
         // Combine nonce and encrypted data
         let mut combined = nonce.to_vec();
         combined.extend_from_slice(&encrypted);
@@ -2588,7 +3505,7 @@ async fn upload_file_with_quantum_encryption(
     } else {
         file_data
     };
-    
+
     // Apply quantum encryption (sign-then-encrypt)
     let quantum_encrypted = sign_and_encrypt(
         &data_to_quantum_encrypt,
@@ -2596,20 +3513,23 @@ async fn upload_file_with_quantum_encryption(
         &quantum_keys.dilithium_public,
         &quantum_keys.kyber_public,
     )?;
-    
-    println!("  Quantum encrypted size: {} bytes", quantum_encrypted.len());
-    
+
+    println!(
+        "  Quantum encrypted size: {} bytes",
+        quantum_encrypted.len()
+    );
+
     // Save the quantum keys
     save_quantum_keypair(&quantum_keys)?;
-    
+
     // Create temporary file for upload
     let temp_path = file_path.with_extension("qenc.tmp");
     std::fs::write(&temp_path, &quantum_encrypted)?;
-    
+
     // Update filename to indicate quantum encryption
     let quantum_filename = format!("{}.qenc", file_name_in_bucket);
     let full_url_quantum = full_url.replace(file_name_in_bucket, &quantum_filename);
-    
+
     // Upload the quantum-encrypted file
     let result = upload_file_with_shared_progress(
         client,
@@ -2618,12 +3538,13 @@ async fn upload_file_with_quantum_encryption(
         &quantum_filename,
         creds,
         None,
+        None,
     )
     .await;
-    
+
     // Clean up temp file
     let _ = std::fs::remove_file(&temp_path);
-    
+
     match result {
         Ok((filename, cost)) => {
             println!("✅ Quantum-encrypted file uploaded: {}", filename);
@@ -2645,6 +3566,7 @@ async fn upload_file_with_encryption(
     encrypt: bool,
     password: Option<String>,
     shared_progress: Option<DirectoryUploadProgress>,
+    upload_id: Option<&str>,
 ) -> Result<(String, f64)> {
     if encrypt {
         // Get password if not provided
@@ -2681,6 +3603,7 @@ async fn upload_file_with_encryption(
             &remote_name,
             creds,
             shared_progress,
+            upload_id,
         )
         .await;
 
@@ -2697,6 +3620,7 @@ async fn upload_file_with_encryption(
             file_name_in_bucket,
             creds,
             shared_progress,
+            upload_id,
         )
         .await
     }
@@ -2710,6 +3634,7 @@ async fn upload_file_with_shared_progress(
     file_name_in_bucket: &str,
     creds: &SavedCredentials,
     shared_progress: Option<DirectoryUploadProgress>,
+    upload_id: Option<&str>,
 ) -> Result<(String, f64)> {
     let f = TokioFile::open(file_path)
         .await
@@ -2795,26 +3720,18 @@ async fn upload_file_with_shared_progress(
         .header("Content-Length", file_size)
         .header("Content-Type", "application/octet-stream");
 
-    // Add appropriate auth headers
-    if let Some(ref auth_tokens) = creds.auth_tokens {
-        // JWT authentication
-        request = request.header(
-            "Authorization",
-            format!("Bearer {}", auth_tokens.access_token),
-        );
-    } else {
-        // Legacy authentication via headers (NOT URL params for security)
-        request = request
-            .header("X-User-Id", &creds.user_id)
-            .header("X-User-App-Key", &creds.user_app_key);
+    if let Some(upload_id) = upload_id {
+        request = request.header("X-Upload-Id", upload_id);
     }
+
+    request = add_auth_headers(request, creds, true)?;
 
     let resp = request.body(body).send().await?;
 
     let status = resp.status();
 
-    // Extract token cost from headers
-    let tokens_charged = resp
+    // Extract cost from headers (USDC credits in current pipe-store)
+    let cost_charged = resp
         .headers()
         .get("X-Tokens-Charged")
         .and_then(|h| h.to_str().ok())
@@ -2826,35 +3743,55 @@ async fn upload_file_with_shared_progress(
         if !is_shared {
             progress.finish_with_message("Upload completed successfully");
             println!("Server response: {}", text_body);
-            if tokens_charged > 0.0 {
-                println!("💰 Cost: {} PIPE tokens", tokens_charged);
+            if cost_charged > 0.0 {
+                println!(
+                    "💰 Cost: ${} USDC (prepaid credits)",
+                    format_usdc_ui(cost_charged)
+                );
             }
         }
-        Ok((file_name_in_bucket.to_string(), tokens_charged))
+        Ok((file_name_in_bucket.to_string(), cost_charged))
     } else {
         if !is_shared {
             progress.finish_and_clear();
         }
 
-        // Check for insufficient tokens error
+        // Check for insufficient prepaid credits error
         if status == 402 {
             // Try to parse JSON response for detailed error
             if let Ok(error_data) = serde_json::from_str::<serde_json::Value>(&text_body) {
                 if let Some(message) = error_data.get("message").and_then(|m| m.as_str()) {
-                    eprintln!("\n❌ Upload failed: Insufficient tokens");
+                    eprintln!("\n❌ Upload failed: Insufficient prepaid credits (USDC)");
                     eprintln!("{}", message);
-                    if let Some(required) = error_data.get("required").and_then(|r| r.as_f64()) {
-                        if let Some(current) = error_data.get("current").and_then(|c| c.as_f64()) {
-                            eprintln!("\n💰 Token balance:");
-                            eprintln!("   Required: {} PIPE tokens", required);
-                            eprintln!("   Current:  {} PIPE tokens", current);
-                            eprintln!("   Needed:   {} PIPE tokens", required - current);
+                    if let Some(required) = error_data
+                        .get("required_usdc")
+                        .and_then(|r| r.as_f64())
+                        .or_else(|| {
+                            error_data
+                                .get("estimated_cost_usdc")
+                                .and_then(|r| r.as_f64())
+                        })
+                    {
+                        eprintln!("\n💰 Credits:");
+                        eprintln!("   Required: ${} USDC", format_usdc_ui(required));
+                        if let Some(current) = error_data
+                            .get("credits_balance_usdc")
+                            .and_then(|c| c.as_f64())
+                        {
+                            let needed = (required - current).max(0.0);
+                            eprintln!("   Current:  ${} USDC", format_usdc_ui(current));
+                            eprintln!("   Needed:   ${} USDC", format_usdc_ui(needed));
                         }
                     }
+                    eprintln!("\n💡 Next steps:");
+                    eprintln!("   1) Run: pipe check-deposit");
+                    eprintln!("   2) Top up: pipe credits-intent 10");
                     return Err(anyhow!("Upload failed: {}", message));
                 }
             }
-            return Err(anyhow!("Upload failed: Insufficient tokens. Please contact support or add more PIPE tokens to your account."));
+            return Err(anyhow!(
+                "Upload failed: Insufficient prepaid credits. Run `pipe check-deposit` and top up USDC credits."
+            ));
         }
 
         // Provide more user-friendly error messages for common server errors
@@ -2864,7 +3801,10 @@ async fn upload_file_with_shared_progress(
                     format!("Upload of '{}' failed: Server temporarily unable to save file. This is usually a transient issue.", file_path.display())
                 }
                 "Storage full - no space left on device" => {
-                    format!("Upload of '{}' failed: Server storage is full. Please contact support.", file_path.display())
+                    format!(
+                        "Upload of '{}' failed: Server storage is full. Please contact support.",
+                        file_path.display()
+                    )
                 }
                 "Out of memory during upload" => {
                     format!("Upload of '{}' failed: Server out of memory. Try uploading a smaller file or wait and retry.", file_path.display())
@@ -2873,7 +3813,10 @@ async fn upload_file_with_shared_progress(
                     format!("Upload of '{}' failed: Server file permission error. Please contact support.", file_path.display())
                 }
                 "Upload interrupted - please retry" | "Write interrupted - please retry" => {
-                    format!("Upload of '{}' was interrupted. Please try again.", file_path.display())
+                    format!(
+                        "Upload of '{}' was interrupted. Please try again.",
+                        file_path.display()
+                    )
                 }
                 "Connection broken during upload" => {
                     format!("Upload of '{}' failed: Connection lost. Check your internet connection and try again.", file_path.display())
@@ -2882,13 +3825,23 @@ async fn upload_file_with_shared_progress(
                     format!("Upload of '{}' timed out. The file may be too large or the connection too slow.", file_path.display())
                 }
                 _ => {
-                    format!("Upload of '{}' failed with server error. Status={}, Body={}", file_path.display(), status, text_body)
+                    format!(
+                        "Upload of '{}' failed with server error. Status={}, Body={}",
+                        file_path.display(),
+                        status,
+                        text_body
+                    )
                 }
             }
         } else {
-            format!("Upload of '{}' failed. Status={}, Body={}", file_path.display(), status, text_body)
+            format!(
+                "Upload of '{}' failed. Status={}, Body={}",
+                file_path.display(),
+                status,
+                text_body
+            )
         };
-        
+
         Err(anyhow!(error_msg))
     }
 }
@@ -2901,6 +3854,7 @@ async fn upload_file_priority_with_shared_progress(
     file_name_in_bucket: &str,
     creds: &SavedCredentials,
     shared_progress: Option<DirectoryUploadProgress>,
+    upload_id: Option<&str>,
 ) -> Result<(String, f64)> {
     let f = TokioFile::open(file_path)
         .await
@@ -2986,26 +3940,18 @@ async fn upload_file_priority_with_shared_progress(
         .header("Content-Length", file_size)
         .header("Content-Type", "application/octet-stream");
 
-    // Add appropriate auth headers
-    if let Some(ref auth_tokens) = creds.auth_tokens {
-        // JWT authentication
-        request = request.header(
-            "Authorization",
-            format!("Bearer {}", auth_tokens.access_token),
-        );
-    } else {
-        // Legacy authentication via headers (NOT URL params for security)
-        request = request
-            .header("X-User-Id", &creds.user_id)
-            .header("X-User-App-Key", &creds.user_app_key);
+    if let Some(upload_id) = upload_id {
+        request = request.header("X-Upload-Id", upload_id);
     }
+
+    request = add_auth_headers(request, creds, true)?;
 
     let resp = request.body(body).send().await?;
 
     let status = resp.status();
 
-    // Extract token cost from headers
-    let tokens_charged = resp
+    // Extract cost from headers (USDC credits in current pipe-store)
+    let cost_charged = resp
         .headers()
         .get("X-Tokens-Charged")
         .and_then(|h| h.to_str().ok())
@@ -3028,58 +3974,84 @@ async fn upload_file_priority_with_shared_progress(
                     if !is_shared {
                         progress.finish_with_message("Background upload started by server");
                         println!("Server response: {}", text_body);
-                        if tokens_charged > 0.0 {
+                        if cost_charged > 0.0 {
                             println!(
-                                "💰 Cost: {} PIPE tokens (priority rate: {} tokens/GB)",
-                                tokens_charged, priority_fee
+                                "💰 Cost: ${} USDC (priority multiplier: {}x)",
+                                format_usdc_ui(cost_charged),
+                                priority_fee
                             );
                         }
                     }
-                    return Ok((file_name_in_bucket.to_string(), tokens_charged));
+                    return Ok((file_name_in_bucket.to_string(), cost_charged));
                 }
             }
         }
         if !is_shared {
             progress.finish_with_message("Priority upload finished successfully");
             println!("Server says: {}", text_body);
-            if tokens_charged > 0.0 {
+            if cost_charged > 0.0 {
                 println!(
-                    "💰 Cost: {} PIPE tokens (priority rate: {} tokens/GB)",
-                    tokens_charged, priority_fee
+                    "💰 Cost: ${} USDC (priority multiplier: {}x)",
+                    format_usdc_ui(cost_charged),
+                    priority_fee
                 );
             }
         }
-        Ok((file_name_in_bucket.to_string(), tokens_charged))
+        Ok((file_name_in_bucket.to_string(), cost_charged))
     } else {
         if !is_shared {
             progress.finish_and_clear();
         }
 
-        // Check for insufficient tokens error
+        // Check for insufficient prepaid credits error
         if status == 402 {
             // Try to parse JSON response for detailed error
             if let Ok(error_data) = serde_json::from_str::<serde_json::Value>(&text_body) {
                 if let Some(message) = error_data.get("message").and_then(|m| m.as_str()) {
-                    eprintln!("\n❌ Priority upload failed: Insufficient tokens");
+                    eprintln!("\n❌ Priority upload failed: Insufficient prepaid credits (USDC)");
                     eprintln!("{}", message);
-                    if let Some(required) = error_data.get("required").and_then(|r| r.as_f64()) {
-                        if let Some(current) = error_data.get("current").and_then(|c| c.as_f64()) {
-                            eprintln!("\n💰 Token balance:");
-                            eprintln!("   Required: {} PIPE tokens", required);
-                            eprintln!("   Current:  {} PIPE tokens", current);
-                            eprintln!("   Needed:   {} PIPE tokens", required - current);
+                    if let Some(required) = error_data
+                        .get("required_usdc")
+                        .and_then(|r| r.as_f64())
+                        .or_else(|| {
+                            error_data
+                                .get("estimated_cost_usdc")
+                                .and_then(|r| r.as_f64())
+                        })
+                    {
+                        eprintln!("\n💰 Credits:");
+                        eprintln!("   Required: ${} USDC", format_usdc_ui(required));
+                        if let Some(current) = error_data
+                            .get("credits_balance_usdc")
+                            .and_then(|c| c.as_f64())
+                        {
+                            let needed = (required - current).max(0.0);
+                            eprintln!("   Current:  ${} USDC", format_usdc_ui(current));
+                            eprintln!("   Needed:   ${} USDC", format_usdc_ui(needed));
                         }
                     }
-                    if let Some(priority_fee) = error_data
+                    if let Some(priority_multiplier) = error_data
                         .get("priority_fee_per_gb")
                         .and_then(|p| p.as_f64())
+                        .or_else(|| {
+                            if priority_fee > 0.0 {
+                                Some(priority_fee)
+                            } else {
+                                None
+                            }
+                        })
                     {
-                        eprintln!("\n📈 Priority upload rate: {} tokens/GB", priority_fee);
+                        eprintln!("\n📈 Priority multiplier: {}x", priority_multiplier);
                     }
+                    eprintln!("\n💡 Next steps:");
+                    eprintln!("   1) Run: pipe check-deposit");
+                    eprintln!("   2) Top up: pipe credits-intent 10");
                     return Err(anyhow!("Priority upload failed: {}", message));
                 }
             }
-            return Err(anyhow!("Priority upload failed: Insufficient tokens. Please contact support or add more PIPE tokens to your account."));
+            return Err(anyhow!(
+                "Priority upload failed: Insufficient prepaid credits. Run `pipe check-deposit` and top up USDC credits."
+            ));
         }
 
         // Provide more user-friendly error messages for common server errors
@@ -3098,7 +4070,10 @@ async fn upload_file_priority_with_shared_progress(
                     format!("Priority upload of '{}' failed: Server file permission error. Please contact support.", file_path.display())
                 }
                 "Upload interrupted - please retry" | "Write interrupted - please retry" => {
-                    format!("Priority upload of '{}' was interrupted. Please try again.", file_path.display())
+                    format!(
+                        "Priority upload of '{}' was interrupted. Please try again.",
+                        file_path.display()
+                    )
                 }
                 "Connection broken during upload" => {
                     format!("Priority upload of '{}' failed: Connection lost. Check your internet connection and try again.", file_path.display())
@@ -3107,13 +4082,23 @@ async fn upload_file_priority_with_shared_progress(
                     format!("Priority upload of '{}' timed out. The file may be too large or the connection too slow.", file_path.display())
                 }
                 _ => {
-                    format!("Priority upload of '{}' failed with server error. Status={}, Body={}", file_path.display(), status, text_body)
+                    format!(
+                        "Priority upload of '{}' failed with server error. Status={}, Body={}",
+                        file_path.display(),
+                        status,
+                        text_body
+                    )
                 }
             }
         } else {
-            format!("Priority upload of '{}' failed. Status={}, Body={}", file_path.display(), status, text_body)
+            format!(
+                "Priority upload of '{}' failed. Status={}, Body={}",
+                file_path.display(),
+                status,
+                text_body
+            )
         };
-        
+
         Err(anyhow!(error_msg))
     }
 }
@@ -3128,21 +4113,19 @@ mod tests {
         // Test that valid base64 encoded text is properly decoded
         let original_text = "Hello, this is a test file!";
         let base64_encoded = general_purpose::STANDARD.encode(original_text);
-        
+
         // Simulate what the server sends
         let server_response = base64_encoded.as_bytes();
-        
+
         // Test the decoding logic
         match std::str::from_utf8(server_response) {
-            Ok(text_body) => {
-                match general_purpose::STANDARD.decode(text_body.trim()) {
-                    Ok(decoded) => {
-                        let decoded_str = std::str::from_utf8(&decoded).unwrap();
-                        assert_eq!(decoded_str, original_text);
-                    }
-                    Err(_) => panic!("Base64 decode should succeed"),
+            Ok(text_body) => match general_purpose::STANDARD.decode(text_body.trim()) {
+                Ok(decoded) => {
+                    let decoded_str = std::str::from_utf8(&decoded).unwrap();
+                    assert_eq!(decoded_str, original_text);
                 }
-            }
+                Err(_) => panic!("Base64 decode should succeed"),
+            },
             Err(_) => panic!("Should be valid UTF-8"),
         }
     }
@@ -3152,20 +4135,18 @@ mod tests {
         // Test that binary data encoded as base64 is properly decoded
         let original_binary = vec![0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10]; // JPEG header
         let base64_encoded = general_purpose::STANDARD.encode(&original_binary);
-        
+
         // Simulate what the server sends
         let server_response = base64_encoded.as_bytes();
-        
+
         // Test the decoding logic
         match std::str::from_utf8(server_response) {
-            Ok(text_body) => {
-                match general_purpose::STANDARD.decode(text_body.trim()) {
-                    Ok(decoded) => {
-                        assert_eq!(decoded, original_binary);
-                    }
-                    Err(_) => panic!("Base64 decode should succeed"),
+            Ok(text_body) => match general_purpose::STANDARD.decode(text_body.trim()) {
+                Ok(decoded) => {
+                    assert_eq!(decoded, original_binary);
                 }
-            }
+                Err(_) => panic!("Base64 decode should succeed"),
+            },
             Err(_) => panic!("Should be valid UTF-8"),
         }
     }
@@ -3176,21 +4157,19 @@ mod tests {
         let original_text = "Testing whitespace handling";
         let base64_encoded = general_purpose::STANDARD.encode(original_text);
         let base64_with_whitespace = format!("  {}  \n", base64_encoded);
-        
+
         // Simulate what the server sends
         let server_response = base64_with_whitespace.as_bytes();
-        
+
         // Test the decoding logic
         match std::str::from_utf8(server_response) {
-            Ok(text_body) => {
-                match general_purpose::STANDARD.decode(text_body.trim()) {
-                    Ok(decoded) => {
-                        let decoded_str = std::str::from_utf8(&decoded).unwrap();
-                        assert_eq!(decoded_str, original_text);
-                    }
-                    Err(_) => panic!("Base64 decode should succeed after trimming"),
+            Ok(text_body) => match general_purpose::STANDARD.decode(text_body.trim()) {
+                Ok(decoded) => {
+                    let decoded_str = std::str::from_utf8(&decoded).unwrap();
+                    assert_eq!(decoded_str, original_text);
                 }
-            }
+                Err(_) => panic!("Base64 decode should succeed after trimming"),
+            },
             Err(_) => panic!("Should be valid UTF-8"),
         }
     }
@@ -3199,7 +4178,7 @@ mod tests {
     fn test_fallback_for_non_base64() {
         // Test that non-base64 content falls back to raw bytes
         let non_base64 = b"This is not base64!!!";
-        
+
         // Test the decoding logic
         match std::str::from_utf8(non_base64) {
             Ok(text_body) => {
@@ -3219,7 +4198,7 @@ mod tests {
     fn test_fallback_for_non_utf8() {
         // Test that non-UTF8 content falls back to raw bytes
         let non_utf8_bytes = vec![0xFF, 0xFE, 0xFD, 0xFC];
-        
+
         // Test the decoding logic
         match std::str::from_utf8(&non_utf8_bytes) {
             Ok(_) => panic!("Should not be valid UTF-8"),
@@ -3235,21 +4214,19 @@ mod tests {
         // Test with larger content to ensure it handles real file sizes
         let large_content = vec![b'A'; 10000]; // 10KB of 'A's
         let base64_encoded = general_purpose::STANDARD.encode(&large_content);
-        
+
         // Simulate what the server sends
         let server_response = base64_encoded.as_bytes();
-        
+
         // Test the decoding logic
         match std::str::from_utf8(server_response) {
-            Ok(text_body) => {
-                match general_purpose::STANDARD.decode(text_body.trim()) {
-                    Ok(decoded) => {
-                        assert_eq!(decoded.len(), large_content.len());
-                        assert_eq!(decoded, large_content);
-                    }
-                    Err(_) => panic!("Base64 decode should succeed"),
+            Ok(text_body) => match general_purpose::STANDARD.decode(text_body.trim()) {
+                Ok(decoded) => {
+                    assert_eq!(decoded.len(), large_content.len());
+                    assert_eq!(decoded, large_content);
                 }
-            }
+                Err(_) => panic!("Base64 decode should succeed"),
+            },
             Err(_) => panic!("Should be valid UTF-8"),
         }
     }
@@ -3258,7 +4235,7 @@ mod tests {
     fn test_empty_response() {
         // Test that empty responses are handled
         let empty_response = b"";
-        
+
         // Test the decoding logic
         match std::str::from_utf8(empty_response) {
             Ok(text_body) => {
@@ -3274,14 +4251,16 @@ mod tests {
 
 #[cfg(test)]
 mod quantum_integration_tests {
-    use crate::quantum::{sign_and_encrypt, decrypt_and_verify};
-    use crate::quantum_keyring::{generate_quantum_keypair, save_quantum_keypair, load_quantum_keypair};
+    use crate::quantum::{decrypt_and_verify, sign_and_encrypt};
+    use crate::quantum_keyring::{
+        generate_quantum_keypair, load_quantum_keypair, save_quantum_keypair,
+    };
 
     #[test]
     fn test_quantum_keyring_operations() {
         // Test quantum key generation and storage
         let file_id = "test_file.txt";
-        
+
         // Generate keys
         let keypair = generate_quantum_keypair(file_id).unwrap();
         assert_eq!(keypair.file_id, file_id);
@@ -3289,16 +4268,16 @@ mod quantum_integration_tests {
         assert!(!keypair.kyber_secret.is_empty());
         assert!(!keypair.dilithium_public.is_empty());
         assert!(!keypair.dilithium_secret.is_empty());
-        
+
         // Save and load keys
         save_quantum_keypair(&keypair).unwrap();
         let loaded_keypair = load_quantum_keypair(file_id).unwrap();
-        
+
         assert_eq!(keypair.kyber_public, loaded_keypair.kyber_public);
         assert_eq!(keypair.kyber_secret, loaded_keypair.kyber_secret);
         assert_eq!(keypair.dilithium_public, loaded_keypair.dilithium_public);
         assert_eq!(keypair.dilithium_secret, loaded_keypair.dilithium_secret);
-        
+
         // Clean up
         let _ = crate::quantum_keyring::delete_quantum_keypair(file_id);
     }
@@ -3308,27 +4287,25 @@ mod quantum_integration_tests {
         // Test the full quantum encryption workflow
         let test_data = b"This is a test file for quantum encryption!";
         let file_id = "quantum_test.txt";
-        
+
         // Generate quantum keys
         let keypair = generate_quantum_keypair(file_id).unwrap();
-        
+
         // Encrypt with quantum crypto
         let encrypted = sign_and_encrypt(
             test_data,
             &keypair.dilithium_secret,
             &keypair.dilithium_public,
             &keypair.kyber_public,
-        ).unwrap();
-        
+        )
+        .unwrap();
+
         // Verify encryption increased size significantly
         assert!(encrypted.len() > test_data.len() + 1000); // Quantum crypto adds overhead
-        
+
         // Decrypt and verify
-        let decrypted = decrypt_and_verify(
-            &encrypted,
-            &keypair.kyber_secret,
-        ).unwrap();
-        
+        let decrypted = decrypt_and_verify(&encrypted, &keypair.kyber_secret).unwrap();
+
         assert_eq!(decrypted.data, test_data);
         assert_eq!(decrypted.signer_public_key, keypair.dilithium_public);
     }
@@ -3339,44 +4316,43 @@ mod quantum_integration_tests {
         let test_data = b"Secret data with both quantum and password encryption";
         let password = "test_password";
         let file_id = "double_encrypted.txt";
-        
+
         // Generate quantum keys
         let keypair = generate_quantum_keypair(file_id).unwrap();
-        
+
         // First encrypt with password
         let quantum_salt = b"pipe-quantum-v1-salt-2024";
-        let encryption_key = crate::encryption::derive_key_from_password(password, quantum_salt).unwrap();
-        let (password_encrypted, nonce) = crate::encryption::encrypt_data(test_data, &encryption_key).unwrap();
-        
+        let encryption_key =
+            crate::encryption::derive_key_from_password(password, quantum_salt).unwrap();
+        let (password_encrypted, nonce) =
+            crate::encryption::encrypt_data(test_data, &encryption_key).unwrap();
+
         // Combine nonce and encrypted data
         let mut combined = nonce.to_vec();
         combined.extend_from_slice(&password_encrypted);
-        
+
         // Then encrypt with quantum
         let quantum_encrypted = sign_and_encrypt(
             &combined,
             &keypair.dilithium_secret,
             &keypair.dilithium_public,
             &keypair.kyber_public,
-        ).unwrap();
-        
+        )
+        .unwrap();
+
         // Decrypt quantum layer
-        let quantum_decrypted = decrypt_and_verify(
-            &quantum_encrypted,
-            &keypair.kyber_secret,
-        ).unwrap();
-        
+        let quantum_decrypted =
+            decrypt_and_verify(&quantum_encrypted, &keypair.kyber_secret).unwrap();
+
         // Extract nonce and decrypt password layer
         let (nonce_bytes, encrypted_data) = quantum_decrypted.data.split_at(12);
         let mut nonce_recovered = [0u8; 12];
         nonce_recovered.copy_from_slice(nonce_bytes);
-        
-        let final_decrypted = crate::encryption::decrypt_data(
-            encrypted_data,
-            &encryption_key,
-            &nonce_recovered,
-        ).unwrap();
-        
+
+        let final_decrypted =
+            crate::encryption::decrypt_data(encrypted_data, &encryption_key, &nonce_recovered)
+                .unwrap();
+
         assert_eq!(final_decrypted, test_data);
     }
 
@@ -3385,23 +4361,157 @@ mod quantum_integration_tests {
         // Test that .qenc extension is handled correctly
         let filename = "document.pdf";
         let quantum_filename = format!("{}.qenc", filename);
-        
+
         assert!(quantum_filename.ends_with(".qenc"));
-        
+
         // Test extraction of original filename
         let original = if quantum_filename.ends_with(".qenc") {
             &quantum_filename[..quantum_filename.len() - 5]
         } else {
             &quantum_filename
         };
-        
+
         assert_eq!(original, filename);
     }
 }
 
+fn normalize_http_url_without_path(raw: &str, label: &str) -> Result<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(anyhow!("{label} must not be empty"));
+    }
+
+    let url = reqwest::Url::parse(trimmed)
+        .map_err(|_| anyhow!("{label} must be a valid URL (expected http/https)"))?;
+    let scheme = url.scheme();
+    if scheme != "http" && scheme != "https" {
+        return Err(anyhow!("{label} scheme must be http or https"));
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err(anyhow!("{label} must not include username/password"));
+    }
+    if url.query().is_some() || url.fragment().is_some() {
+        return Err(anyhow!("{label} must not include query/fragment"));
+    }
+    if url.path() != "/" && !url.path().is_empty() {
+        return Err(anyhow!("{label} must not include a path"));
+    }
+
+    let host = url
+        .host_str()
+        .ok_or_else(|| anyhow!("{label} must include a host"))?
+        .to_ascii_lowercase();
+
+    let port = match (scheme, url.port()) {
+        ("http", Some(80)) | ("https", Some(443)) => None,
+        (_, p) => p,
+    };
+
+    Ok(match port {
+        Some(p) => format!("{scheme}://{host}:{p}"),
+        None => format!("{scheme}://{host}"),
+    })
+}
+
+fn bucket_name_for_user_id(user_id: &str) -> String {
+    format!("pipe-{user_id}")
+}
+
+fn split_comma_newline_list(raw: &[String]) -> Vec<String> {
+    raw.iter()
+        .flat_map(|s| s.split(['\n', ',']))
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+fn parse_s3_key_mode(mode: &str) -> Result<bool> {
+    let normalized = mode.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "read-only" | "readonly" | "ro" => Ok(true),
+        "read-write" | "readwrite" | "rw" => Ok(false),
+        _ => Err(anyhow!(
+            "Invalid --mode. Expected \"read-only\" or \"read-write\"."
+        )),
+    }
+}
+
+#[cfg(test)]
+mod cli_s3_config_tests {
+    use super::*;
+
+    #[test]
+    fn normalize_http_url_without_path_rejects_paths() {
+        assert!(normalize_http_url_without_path("https://example.com/path", "API").is_err());
+    }
+
+    #[test]
+    fn normalize_http_url_without_path_strips_default_ports() {
+        assert_eq!(
+            normalize_http_url_without_path("https://Example.com:443", "API").unwrap(),
+            "https://example.com"
+        );
+        assert_eq!(
+            normalize_http_url_without_path("http://Example.com:80", "API").unwrap(),
+            "http://example.com"
+        );
+    }
+
+    #[test]
+    fn split_comma_newline_list_splits_and_trims() {
+        let v = split_comma_newline_list(&vec![" a,b\nc ".to_string(), "d".to_string()]);
+        assert_eq!(v, vec!["a", "b", "c", "d"]);
+    }
+
+    #[test]
+    fn parse_s3_key_mode_accepts_aliases() {
+        assert!(parse_s3_key_mode("read-only").unwrap());
+        assert!(parse_s3_key_mode("ro").unwrap());
+        assert!(!parse_s3_key_mode("read-write").unwrap());
+        assert!(!parse_s3_key_mode("rw").unwrap());
+    }
+
+    #[test]
+    fn save_credentials_preserves_cli_config_fields() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("creds.json");
+        let path_str = path.to_str().unwrap();
+
+        let initial = SavedCredentials {
+            user_id: "u1".to_string(),
+            user_app_key: "k1".to_string(),
+            auth_tokens: None,
+            username: None,
+            api_base_url: Some("https://api.example.com".to_string()),
+            s3_endpoint: Some("https://s3.example.com".to_string()),
+            s3_region: Some("us-east-1".to_string()),
+            s3_virtual_hosted: Some(true),
+        };
+        save_full_credentials(&initial, Some(path_str)).unwrap();
+
+        save_credentials_to_file("u2", "k2", Some(path_str)).unwrap();
+        let loaded = load_credentials_from_file(Some(path_str)).unwrap().unwrap();
+
+        assert_eq!(loaded.user_id, "u2");
+        assert_eq!(loaded.user_app_key, "k2");
+        assert_eq!(
+            loaded.api_base_url.as_deref(),
+            Some("https://api.example.com")
+        );
+        assert_eq!(
+            loaded.s3_endpoint.as_deref(),
+            Some("https://s3.example.com")
+        );
+        assert_eq!(loaded.s3_region.as_deref(), Some("us-east-1"));
+        assert_eq!(loaded.s3_virtual_hosted, Some(true));
+    }
+}
+
 pub async fn run_cli() -> Result<()> {
-    let cli = Cli::parse();
-    
+    let matches = Cli::command().get_matches();
+    let api_source = matches.value_source("api");
+    let cli = Cli::from_arg_matches(&matches).map_err(|e| anyhow!(e.to_string()))?;
+
     // Get config path from CLI or use default
     let config_path = cli.config.as_deref();
 
@@ -3412,10 +4522,21 @@ pub async fn run_cli() -> Result<()> {
         .timeout(std::time::Duration::from_secs(7200)) // 2 hour timeout for very large files (95GB+)
         .build()?;
 
-    let base_url = cli.api.trim_end_matches('/');
+    let mut base_url_string = cli.api.trim_end_matches('/').to_string();
+    if api_source == Some(clap::parser::ValueSource::DefaultValue) {
+        if let Ok(Some(creds)) = load_credentials_from_file(config_path) {
+            if let Some(saved) = creds.api_base_url.as_deref() {
+                let trimmed = saved.trim().trim_end_matches('/');
+                if !trimmed.is_empty() {
+                    base_url_string = trimmed.to_string();
+                }
+            }
+        }
+    }
+    let base_url = base_url_string.as_str();
 
     // Initialize service discovery cache
-    let service_cache = Arc::new(ServiceDiscoveryCache::new(base_url.to_string()));
+    let service_cache = Arc::new(ServiceDiscoveryCache::new(base_url_string.clone()));
 
     // Version check completely disabled - nobody wants to see this
     /*
@@ -3457,6 +4578,141 @@ pub async fn run_cli() -> Result<()> {
     */
 
     match cli.command {
+        Commands::Config { command } => {
+            let config_file = get_credentials_file_path(config_path);
+
+            match command {
+                ConfigCommands::Show => {
+                    println!("Config file: {:?}", config_file);
+                    println!("Effective API base URL (this run): {}", base_url);
+
+                    let Some(creds) = load_credentials_from_file(config_path)? else {
+                        println!("No config/credentials found yet.");
+                        println!("Run `pipe new-user` or `pipe login` first, then re-run `pipe config show`.");
+                        return Ok(());
+                    };
+
+                    if let Some(u) = creds.username.as_deref() {
+                        println!("Username: {}", u);
+                    }
+                    if !creds.user_id.is_empty() {
+                        println!("User ID: {}", creds.user_id);
+                        println!("Bucket: {}", bucket_name_for_user_id(&creds.user_id));
+                    }
+
+                    println!(
+                        "Saved API base URL: {}",
+                        creds.api_base_url.as_deref().unwrap_or("(not set)")
+                    );
+                    println!(
+                        "Saved S3 endpoint: {}",
+                        creds.s3_endpoint.as_deref().unwrap_or("(not set)")
+                    );
+                    println!(
+                        "Saved S3 region: {}",
+                        creds.s3_region.as_deref().unwrap_or("(not set)")
+                    );
+                    println!(
+                        "Saved S3 virtual-hosted-style: {}",
+                        creds
+                            .s3_virtual_hosted
+                            .map(|v| if v { "true" } else { "false" })
+                            .unwrap_or("(not set)")
+                    );
+                }
+                ConfigCommands::SetApi { url } => {
+                    let mut creds = load_credentials_from_file(config_path)?.ok_or_else(|| {
+                        anyhow!(
+                            "No config/credentials file found. Run `pipe new-user` or `pipe login` first."
+                        )
+                    })?;
+                    let normalized = normalize_http_url_without_path(&url, "API base URL")?;
+                    creds.api_base_url = Some(normalized.clone());
+                    save_full_credentials(&creds, config_path)?;
+                    println!("✓ Saved API base URL: {}", normalized);
+                }
+                ConfigCommands::ClearApi => {
+                    let mut creds = load_credentials_from_file(config_path)?.ok_or_else(|| {
+                        anyhow!(
+                            "No config/credentials file found. Run `pipe new-user` or `pipe login` first."
+                        )
+                    })?;
+                    creds.api_base_url = None;
+                    save_full_credentials(&creds, config_path)?;
+                    println!("✓ Cleared saved API base URL");
+                }
+                ConfigCommands::SetS3Endpoint { endpoint } => {
+                    let mut creds = load_credentials_from_file(config_path)?.ok_or_else(|| {
+                        anyhow!(
+                            "No config/credentials file found. Run `pipe new-user` or `pipe login` first."
+                        )
+                    })?;
+                    let normalized = normalize_http_url_without_path(&endpoint, "S3 endpoint")?;
+                    creds.s3_endpoint = Some(normalized.clone());
+                    save_full_credentials(&creds, config_path)?;
+                    println!("✓ Saved S3 endpoint: {}", normalized);
+                }
+                ConfigCommands::ClearS3Endpoint => {
+                    let mut creds = load_credentials_from_file(config_path)?.ok_or_else(|| {
+                        anyhow!(
+                            "No config/credentials file found. Run `pipe new-user` or `pipe login` first."
+                        )
+                    })?;
+                    creds.s3_endpoint = None;
+                    save_full_credentials(&creds, config_path)?;
+                    println!("✓ Cleared saved S3 endpoint");
+                }
+                ConfigCommands::SetS3Region { region } => {
+                    let mut creds = load_credentials_from_file(config_path)?.ok_or_else(|| {
+                        anyhow!(
+                            "No config/credentials file found. Run `pipe new-user` or `pipe login` first."
+                        )
+                    })?;
+                    let trimmed = region.trim();
+                    if trimmed.is_empty() {
+                        return Err(anyhow!("S3 region must not be empty"));
+                    }
+                    creds.s3_region = Some(trimmed.to_string());
+                    save_full_credentials(&creds, config_path)?;
+                    println!("✓ Saved S3 region: {}", trimmed);
+                }
+                ConfigCommands::ClearS3Region => {
+                    let mut creds = load_credentials_from_file(config_path)?.ok_or_else(|| {
+                        anyhow!(
+                            "No config/credentials file found. Run `pipe new-user` or `pipe login` first."
+                        )
+                    })?;
+                    creds.s3_region = None;
+                    save_full_credentials(&creds, config_path)?;
+                    println!("✓ Cleared saved S3 region");
+                }
+                ConfigCommands::SetS3VirtualHosted { enabled } => {
+                    let mut creds = load_credentials_from_file(config_path)?.ok_or_else(|| {
+                        anyhow!(
+                            "No config/credentials file found. Run `pipe new-user` or `pipe login` first."
+                        )
+                    })?;
+                    creds.s3_virtual_hosted = Some(enabled);
+                    save_full_credentials(&creds, config_path)?;
+                    println!(
+                        "✓ Saved S3 virtual-hosted-style default: {}",
+                        if enabled { "true" } else { "false" }
+                    );
+                }
+                ConfigCommands::ClearS3VirtualHosted => {
+                    let mut creds = load_credentials_from_file(config_path)?.ok_or_else(|| {
+                        anyhow!(
+                            "No config/credentials file found. Run `pipe new-user` or `pipe login` first."
+                        )
+                    })?;
+                    creds.s3_virtual_hosted = None;
+                    save_full_credentials(&creds, config_path)?;
+                    println!("✓ Cleared saved S3 virtual-hosted-style default");
+                }
+            }
+
+            return Ok(());
+        }
         Commands::NewUser { username } => {
             let req_body = CreateUserRequest {
                 username: username.clone(),
@@ -3478,12 +4734,29 @@ pub async fn run_cli() -> Result<()> {
                     json.user_id, json.user_app_key, json.solana_pubkey
                 );
 
-                // Save basic credentials first
-                save_credentials_to_file(&json.user_id, &json.user_app_key, config_path)?;
+                // Save basic credentials (and persist CLI config defaults like `api_base_url`).
+                let existing_cfg = load_credentials_from_file(config_path).ok().flatten();
+                let api_base_url = existing_cfg
+                    .as_ref()
+                    .and_then(|c| c.api_base_url.clone())
+                    .or_else(|| Some(base_url.to_string()));
+                let s3_endpoint = existing_cfg.as_ref().and_then(|c| c.s3_endpoint.clone());
+                let s3_region = existing_cfg.as_ref().and_then(|c| c.s3_region.clone());
+                let s3_virtual_hosted = existing_cfg.as_ref().and_then(|c| c.s3_virtual_hosted);
+                let creds = SavedCredentials {
+                    user_id: json.user_id.clone(),
+                    user_app_key: json.user_app_key.clone(),
+                    auth_tokens: None,
+                    username: Some(username.clone()),
+                    api_base_url,
+                    s3_endpoint,
+                    s3_region,
+                    s3_virtual_hosted,
+                };
+                save_full_credentials(&creds, config_path)?;
 
-                // Prompt for optional password
-                println!("\nSet a password for secure access (or press Enter to skip):");
-                println!("Note: Password is optional. You can use pipe without it.");
+                // Prompt for password (required for JWT-only deployments)
+                println!("\nSet a password for secure access (required):");
 
                 let password = rpassword::prompt_password("Password: ").unwrap_or_default();
 
@@ -3533,7 +4806,10 @@ pub async fn run_cli() -> Result<()> {
                                     .and_then(|v| v.as_i64())
                                     .unwrap_or(900),
                                 expires_at: None, // Will be set below
-                                csrf_token: None, // Will be populated on first state-changing request
+                                csrf_token: response_data
+                                    .get("csrf_token")
+                                    .and_then(|v| v.as_str())
+                                    .map(|s| s.to_string()),
                             };
 
                             // Calculate expires_at timestamp
@@ -3546,23 +4822,46 @@ pub async fn run_cli() -> Result<()> {
                             let mut auth_tokens = auth_tokens;
                             auth_tokens.expires_at = Some(expires_at);
 
+                            // Preserve optional CLI config fields when writing credentials.
+                            let existing_cfg =
+                                load_credentials_from_file(config_path).ok().flatten();
+                            let api_base_url = existing_cfg
+                                .as_ref()
+                                .and_then(|c| c.api_base_url.clone())
+                                .or_else(|| Some(base_url.to_string()));
+                            let s3_endpoint =
+                                existing_cfg.as_ref().and_then(|c| c.s3_endpoint.clone());
+                            let s3_region = existing_cfg.as_ref().and_then(|c| c.s3_region.clone());
+                            let s3_virtual_hosted =
+                                existing_cfg.as_ref().and_then(|c| c.s3_virtual_hosted);
+
                             // Save full credentials with JWT tokens
                             let creds = SavedCredentials {
                                 user_id: json.user_id.clone(),
                                 user_app_key: json.user_app_key.clone(),
                                 auth_tokens: Some(auth_tokens),
                                 username: Some(username.clone()),
+                                api_base_url,
+                                s3_endpoint,
+                                s3_region,
+                                s3_virtual_hosted,
                             };
                             save_full_credentials(&creds, config_path)?;
 
                             println!("\n✓ Password set successfully!");
                             println!("✓ You are now logged in with secure JWT authentication!");
-                            println!("✓ Credentials saved to {:?}", get_credentials_file_path(config_path));
+                            println!(
+                                "✓ Credentials saved to {:?}",
+                                get_credentials_file_path(config_path)
+                            );
                             println!("\nYou can now use all pipe commands securely!");
                         } else {
                             println!("\n✓ Password set successfully!");
                             println!("✓ Account created!");
-                            println!("✓ Credentials saved to {:?}", get_credentials_file_path(config_path));
+                            println!(
+                                "✓ Credentials saved to {:?}",
+                                get_credentials_file_path(config_path)
+                            );
                             println!("\nNote: You may need to login to get JWT tokens.");
                         }
                     } else {
@@ -3571,17 +4870,20 @@ pub async fn run_cli() -> Result<()> {
                         );
                         eprintln!("  ./pipe set-password");
                         eprintln!("\n✓ Account created successfully!");
-                        eprintln!("✓ Credentials saved to {:?}", get_credentials_file_path(config_path));
-                        eprintln!("\nYou can use all pipe commands with your app key.");
+                        eprintln!(
+                            "✓ Credentials saved to {:?}",
+                            get_credentials_file_path(config_path)
+                        );
+                        eprintln!("\nNote: This deployment requires JWT. Set a password to start using pipe commands.");
                     }
                 } else {
                     // User skipped password
                     println!("\n✓ Account created successfully!");
-                    println!("✓ Credentials saved to {:?}", get_credentials_file_path(config_path));
-                    println!("\nYou can now use all pipe commands!");
                     println!(
-                        "\nNote: Password-based login is optional. Set a password later with:"
+                        "✓ Credentials saved to {:?}",
+                        get_credentials_file_path(config_path)
                     );
+                    println!("\nNote: This deployment requires JWT. Set a password now with:");
                     println!("  ./pipe set-password");
                 }
             } else {
@@ -3594,8 +4896,11 @@ pub async fn run_cli() -> Result<()> {
         }
 
         Commands::Login { username, password } => {
-            let password =
-                password.unwrap_or_else(|| rpassword::prompt_password("Enter password: ").unwrap());
+            let password = match password {
+                Some(p) => p,
+                None => rpassword::prompt_password("Enter password: ")
+                    .map_err(|e| anyhow!("Failed to read password: {e}"))?,
+            };
 
             let req_body = LoginRequest {
                 username: username.clone(),
@@ -3629,19 +4934,39 @@ pub async fn run_cli() -> Result<()> {
                 );
 
                 // Try to load existing credentials to get user_id/user_app_key
-                // If not found, we'll need to find another way to get these
-                if let Ok(Some(existing_creds)) = load_credentials_from_file(config_path) {
-                    let creds = SavedCredentials {
-                        user_id: existing_creds.user_id,
-                        user_app_key: existing_creds.user_app_key,
-                        auth_tokens: Some(auth_tokens),
-                        username: Some(username),
-                    };
-                    save_full_credentials(&creds, config_path)?;
-                } else {
-                    println!("Note: You'll need to have existing legacy credentials to use JWT auth with this user.");
-                    println!("Please make sure you have a valid ~/.pipe-cli.json file with user_id and user_app_key.");
-                }
+                let existing = load_credentials_from_file(config_path).ok().flatten();
+                let user_app_key = existing
+                    .as_ref()
+                    .map(|c| c.user_app_key.clone())
+                    .unwrap_or_default();
+
+                let user_id =
+                    extract_user_id_from_jwt(&auth_tokens.access_token).unwrap_or_else(|_| {
+                        existing
+                            .as_ref()
+                            .map(|c| c.user_id.clone())
+                            .unwrap_or_default()
+                    });
+
+                let api_base_url = existing
+                    .as_ref()
+                    .and_then(|c| c.api_base_url.clone())
+                    .or_else(|| Some(base_url.to_string()));
+                let s3_endpoint = existing.as_ref().and_then(|c| c.s3_endpoint.clone());
+                let s3_region = existing.as_ref().and_then(|c| c.s3_region.clone());
+                let s3_virtual_hosted = existing.as_ref().and_then(|c| c.s3_virtual_hosted);
+
+                let creds = SavedCredentials {
+                    user_id,
+                    user_app_key,
+                    auth_tokens: Some(auth_tokens),
+                    username: Some(username),
+                    api_base_url,
+                    s3_endpoint,
+                    s3_region,
+                    s3_virtual_hosted,
+                };
+                save_full_credentials(&creds, config_path)?;
             } else if status == StatusCode::TOO_MANY_REQUESTS {
                 // Handle rate limiting
                 let retry_after = headers
@@ -3709,14 +5034,18 @@ pub async fn run_cli() -> Result<()> {
             let (user_id_final, user_app_key_final) =
                 get_final_user_id_and_app_key(user_id, user_app_key, config_path)?;
 
-            let new_password = password.unwrap_or_else(|| {
-                println!("Password requirements:");
-                println!("  - Minimum 8 characters");
-                println!("  - Maximum 128 characters");
-                println!("  - Cannot be a common weak password (e.g., 'password', '12345678', 'password123', etc.)");
-                println!();
-                rpassword::prompt_password("Enter new password: ").unwrap()
-            });
+            let new_password = match password {
+                Some(p) => p,
+                None => {
+                    println!("Password requirements:");
+                    println!("  - Minimum 8 characters");
+                    println!("  - Maximum 128 characters");
+                    println!("  - Cannot be a common weak password (e.g., 'password', '12345678', 'password123', etc.)");
+                    println!();
+                    rpassword::prompt_password("Enter new password: ")
+                        .map_err(|e| anyhow!("Failed to read password: {e}"))?
+                }
+            };
 
             let req_body = SetPasswordRequest {
                 user_id: user_id_final.clone(),
@@ -3748,11 +5077,24 @@ pub async fn run_cli() -> Result<()> {
                             .ok_or_else(|| anyhow!("Invalid expiration timestamp"))?;
                     auth_tokens.expires_at = Some(expires_at);
 
+                    let existing_cfg = load_credentials_from_file(config_path).ok().flatten();
+                    let api_base_url = existing_cfg
+                        .as_ref()
+                        .and_then(|c| c.api_base_url.clone())
+                        .or_else(|| Some(base_url.to_string()));
+                    let s3_endpoint = existing_cfg.as_ref().and_then(|c| c.s3_endpoint.clone());
+                    let s3_region = existing_cfg.as_ref().and_then(|c| c.s3_region.clone());
+                    let s3_virtual_hosted = existing_cfg.as_ref().and_then(|c| c.s3_virtual_hosted);
+
                     let creds = SavedCredentials {
                         user_id: user_id_final,
                         user_app_key: user_app_key_final,
                         auth_tokens: Some(auth_tokens),
                         username: None,
+                        api_base_url,
+                        s3_endpoint,
+                        s3_region,
+                        s3_virtual_hosted,
                     };
                     save_full_credentials(&creds, config_path)?;
 
@@ -3769,6 +5111,12 @@ pub async fn run_cli() -> Result<()> {
                     }
                 }
             } else {
+                if status == StatusCode::CONFLICT {
+                    return Err(anyhow!(
+                        "Password already set. Use `pipe change-password` instead."
+                    ));
+                }
+
                 // Try to provide more helpful error message
                 let error_message = if text_body.contains("too weak")
                     || text_body.contains("Password")
@@ -3784,6 +5132,78 @@ pub async fn run_cli() -> Result<()> {
                     )
                 };
                 return Err(anyhow!(error_message));
+            }
+        }
+
+        Commands::ChangePassword {
+            current_password,
+            new_password,
+        } => {
+            let mut creds = load_credentials_from_file(config_path)?
+                .ok_or_else(|| anyhow!("No credentials found. Please login first."))?;
+
+            ensure_valid_token(&client, base_url, &mut creds, config_path).await?;
+
+            let current_password = current_password.unwrap_or_else(|| {
+                rpassword::prompt_password("Current password: ").unwrap_or_default()
+            });
+
+            let new_password = match new_password {
+                Some(p) => p,
+                None => {
+                    println!("Password requirements:");
+                    println!("  - Minimum 8 characters");
+                    println!("  - Maximum 128 characters");
+                    println!("  - Cannot be a common weak password (e.g., 'password', '12345678', 'password123', etc.)");
+                    println!();
+
+                    let p1 = rpassword::prompt_password("New password: ").unwrap_or_default();
+                    let p2 =
+                        rpassword::prompt_password("Confirm new password: ").unwrap_or_default();
+                    if p1 != p2 {
+                        return Err(anyhow!("New passwords do not match"));
+                    }
+                    p1
+                }
+            };
+
+            let req_body = ChangePasswordRequest {
+                current_password,
+                new_password,
+            };
+
+            let mut request = client.post(format!("{}/auth/change-password", base_url));
+            request = add_auth_headers(request, &creds, true)?;
+            request = request.json(&req_body);
+
+            let resp = request.send().await?;
+            let status = resp.status();
+            let text_body = resp.text().await?;
+
+            if status.is_success() {
+                let mut auth_tokens: AuthTokens = serde_json::from_str(&text_body)?;
+
+                // Calculate expires_at timestamp
+                let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
+                let expires_at = DateTime::<Utc>::from_timestamp(now + auth_tokens.expires_in, 0)
+                    .ok_or_else(|| anyhow!("Invalid expiration timestamp"))?;
+                auth_tokens.expires_at = Some(expires_at);
+
+                let mut updated_creds = creds.clone();
+                updated_creds.auth_tokens = Some(auth_tokens);
+                save_full_credentials(&updated_creds, config_path)?;
+
+                println!("Password changed successfully (all other sessions revoked).");
+                println!(
+                    "Token expires at: {}",
+                    expires_at.format("%Y-%m-%d %H:%M:%S UTC")
+                );
+            } else {
+                return Err(anyhow!(
+                    "Change password failed. Status = {}, Body = {}",
+                    status,
+                    text_body
+                ));
             }
         }
 
@@ -3813,12 +5233,17 @@ pub async fn run_cli() -> Result<()> {
 
             if status.is_success() {
                 let refresh_response: RefreshTokenResponse = serde_json::from_str(&text_body)?;
+                let RefreshTokenResponse {
+                    access_token,
+                    expires_in,
+                    csrf_token,
+                    ..
+                } = refresh_response;
 
                 // Calculate new expires_at timestamp
                 let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
-                let expires_at =
-                    DateTime::<Utc>::from_timestamp(now + refresh_response.expires_in, 0)
-                        .ok_or_else(|| anyhow!("Invalid expiration timestamp"))?;
+                let expires_at = DateTime::<Utc>::from_timestamp(now + expires_in, 0)
+                    .ok_or_else(|| anyhow!("Invalid expiration timestamp"))?;
 
                 println!("Token refreshed successfully!");
                 println!(
@@ -3829,9 +5254,12 @@ pub async fn run_cli() -> Result<()> {
                 // Update credentials with new access token
                 let mut updated_creds = creds.clone();
                 if let Some(ref mut auth_tokens) = updated_creds.auth_tokens {
-                    auth_tokens.access_token = refresh_response.access_token;
-                    auth_tokens.expires_in = refresh_response.expires_in;
+                    auth_tokens.access_token = access_token;
+                    auth_tokens.expires_in = expires_in;
                     auth_tokens.expires_at = Some(expires_at);
+                    if let Some(token) = csrf_token {
+                        auth_tokens.csrf_token = Some(token);
+                    }
                 }
                 save_full_credentials(&updated_creds, config_path)?;
             } else {
@@ -3855,31 +5283,18 @@ pub async fn run_cli() -> Result<()> {
             // Ensure we have valid JWT token if available
             ensure_valid_token(&client, base_url, &mut creds, config_path).await?;
 
-            // Override with command-line args if provided (only for legacy auth)
-            if let Some(uid) = user_id {
-                creds.user_id = uid;
-            }
-            if let Some(key) = old_app_key {
-                creds.user_app_key = key;
+            if user_id.is_some() || old_app_key.is_some() {
+                eprintln!(
+                    "Note: --user-id/--old-app-key are ignored; rotate-app-key uses JWT identity."
+                );
             }
 
             let mut request = client.post(format!("{}/rotateAppKey", base_url));
 
             // Use add_auth_headers for consistent authentication
-            request = add_auth_headers(request, &creds, true);
+            request = add_auth_headers(request, &creds, true)?;
 
-            // For JWT auth, send empty body. For legacy auth, credentials are already in headers
-            if creds.auth_tokens.is_some() {
-                let req_body = serde_json::json!({});
-                request = request.json(&req_body);
-            } else {
-                // For legacy auth, we still need to send credentials in body for this endpoint
-                let req_body = RotateAppKeyRequest {
-                    user_id: creds.user_id.clone(),
-                    user_app_key: creds.user_app_key.clone(),
-                };
-                request = request.json(&req_body);
-            }
+            request = request.json(&serde_json::json!({}));
 
             let resp = request.send().await?;
             let status = resp.status();
@@ -3921,12 +5336,10 @@ pub async fn run_cli() -> Result<()> {
             // Ensure we have valid JWT token if available
             ensure_valid_token(&client, base_url, &mut creds, config_path).await?;
 
-            // Override with command-line args if provided
-            if let Some(uid) = user_id {
-                creds.user_id = uid;
-            }
-            if let Some(key) = user_app_key {
-                creds.user_app_key = key;
+            if user_id.is_some() || user_app_key.is_some() {
+                eprintln!(
+                    "Note: --user-id/--user-app-key are ignored; this deployment requires JWT."
+                );
             }
 
             let local_path = Path::new(&file_path);
@@ -3939,76 +5352,78 @@ pub async fn run_cli() -> Result<()> {
             // Handle dry-run: calculate and show cost estimate
             if dry_run {
                 let file_size = std::fs::metadata(local_path)?.len();
-                let file_size_gb = file_size as f64 / 1_000_000_000.0;
-                
-                // Get tier pricing
-                let fee_url = format!("{}/getTierPricing", base_url);
-                let fee_resp = match client.get(&fee_url).send().await {
-                    Ok(resp) if resp.status().is_success() => {
-                        resp.json::<GetTierPricingResponse>().await?
-                    }
-                    _ => {
-                        // Use default pricing if API call fails
-                        GetTierPricingResponse {
-                            normal_fee_per_gb: 100.0,
-                            priority_fee_per_gb: 125.0,
-                            premium_fee_per_gb: 175.0,
-                            ultra_fee_per_gb: 300.0,
-                            enterprise_fee_per_gb: 1000.0,
+                let file_size_gb = bytes_to_gb_decimal(file_size);
+                let tier_key = tier.as_deref().unwrap_or("normal");
+
+                let (cost_per_gb_usdc, balance_usdc_opt, available_gb_opt) =
+                    match fetch_credits_status(&client, base_url, &creds).await {
+                        Ok(status) => {
+                            let tier_est = status
+                                .quota
+                                .tier_estimates
+                                .iter()
+                                .find(|t| t.tier_name.eq_ignore_ascii_case(tier_key));
+                            (
+                                tier_est.map(|t| t.cost_per_gb_usdc).unwrap_or(0.0),
+                                Some(status.balance_usdc),
+                                tier_est.map(|t| t.available_gb),
+                            )
                         }
-                    }
-                };
+                        Err(_) => {
+                            let cost = match tier_key.to_lowercase().as_str() {
+                                "priority" => 0.0625,
+                                "premium" => 0.125,
+                                "ultra" => 0.25,
+                                "enterprise" => 0.625,
+                                _ => 0.025,
+                            };
+                            (cost, None, None)
+                        }
+                    };
 
-                // Determine cost based on tier
-                let (tier_name, cost_per_gb) = match tier.as_deref() {
-                    Some("priority") => ("Priority", fee_resp.priority_fee_per_gb),
-                    Some("premium") => ("Premium", fee_resp.premium_fee_per_gb),
-                    Some("ultra") => ("Ultra", fee_resp.ultra_fee_per_gb),
-                    Some("enterprise") => ("Enterprise", fee_resp.enterprise_fee_per_gb),
-                    _ => ("Normal", fee_resp.normal_fee_per_gb),
-                };
+                let estimated_cost_usdc = file_size_gb * cost_per_gb_usdc;
 
-                let estimated_cost = file_size_gb * cost_per_gb;
-
-                println!("\n📊 Upload Cost Estimate:");
+                println!("\n📊 Upload Cost Estimate (prepaid credits):");
                 println!("  📁 File: {}", file_name);
-                println!("  📏 Size: {:.2} MB ({:.4} GB)", file_size as f64 / 1_048_576.0, file_size_gb);
-                println!("  📈 Tier: {}", tier_name);
-                println!("  💵 Rate: {} PIPE tokens/GB", cost_per_gb);
-                println!("  💰 Estimated cost: {:.4} PIPE tokens", estimated_cost);
+                println!(
+                    "  📏 Size: {:.2} MB ({:.4} GB)",
+                    file_size as f64 / 1_048_576.0,
+                    file_size_gb
+                );
+                println!("  📈 Tier: {}", tier_key);
+                println!("  💵 Rate: ${} USDC/GB", format_usdc_ui(cost_per_gb_usdc));
+                println!(
+                    "  💰 Estimated cost: ${} USDC",
+                    format_usdc_ui(estimated_cost_usdc)
+                );
                 println!("  📅 Storage duration: {} month(s)", epochs_final);
 
-                // Optionally check user balance
-                let balance_url = format!("{}/checkCustomToken", base_url);
-                let balance_body = if creds.auth_tokens.is_some() {
-                    CheckCustomTokenRequest {
-                        user_id: None,
-                        user_app_key: None,
+                if let Some(balance_usdc) = balance_usdc_opt {
+                    println!(
+                        "\n💳 Credits balance: ${} USDC",
+                        format_usdc_ui(balance_usdc)
+                    );
+                    if let Some(available_gb) = available_gb_opt {
+                        println!(
+                            "📦 Available storage ({}): {:.2} GB",
+                            tier_key, available_gb
+                        );
+                    }
+                    if balance_usdc + 1e-9 < estimated_cost_usdc {
+                        println!("⚠️  Insufficient prepaid credits.");
+                        println!(
+                            "   Need ${} more USDC",
+                            format_usdc_ui((estimated_cost_usdc - balance_usdc).max(0.0))
+                        );
+                        println!("\n💡 Top up:");
+                        println!("   pipe credits-intent 10");
+                    } else {
+                        println!("✅ Sufficient credits for upload");
+                        let remaining = (balance_usdc - estimated_cost_usdc).max(0.0);
+                        println!("   After upload: ${} USDC", format_usdc_ui(remaining));
                     }
                 } else {
-                    CheckCustomTokenRequest {
-                        user_id: Some(creds.user_id.clone()),
-                        user_app_key: Some(creds.user_app_key.clone()),
-                    }
-                };
-
-                let mut balance_req = client.post(&balance_url);
-                balance_req = add_auth_headers(balance_req, &creds, false);
-                balance_req = balance_req.json(&balance_body);
-
-                if let Ok(resp) = balance_req.send().await {
-                    if let Ok(balance_resp) = resp.json::<CheckCustomTokenResponse>().await {
-                        let current_balance = balance_resp.ui_amount;
-                        println!("\n💳 Your balance: {:.4} PIPE tokens", current_balance);
-                        
-                        if current_balance < estimated_cost {
-                            println!("⚠️  Insufficient balance!");
-                            println!("   Need {:.4} more PIPE tokens", estimated_cost - current_balance);
-                            println!("\n   Please contact support to add more PIPE tokens to your account.");
-                        } else {
-                            println!("✅ Sufficient balance for upload");
-                        }
-                    }
+                    println!("\n⚠️  Could not fetch credits status to verify balance.");
                 }
 
                 println!("\nThis is a dry run - no upload performed.");
@@ -4040,8 +5455,9 @@ pub async fn run_cli() -> Result<()> {
 
             let mut url = format!(
                 "{}/{}?file_name={}&epochs={}",
-                selected_endpoint, endpoint, 
-                utf8_percent_encode(&file_name, QUERY_ENCODE_SET), 
+                selected_endpoint,
+                endpoint,
+                utf8_percent_encode(&file_name, QUERY_ENCODE_SET),
                 epochs_final
             );
             if let Some(tier_name) = tier {
@@ -4053,9 +5469,11 @@ pub async fn run_cli() -> Result<()> {
             let blake3_hash = calculate_blake3(local_path).await?;
             println!("Blake3 hash: {}", &blake3_hash[..16]); // Show first 16 chars
             let file_size = std::fs::metadata(local_path)?.len();
+            let upload_id = Uuid::new_v4().to_string();
 
             // Use retry wrapper for single file upload
-            let upload_result = if false { // quantum feature was removed
+            let upload_result = if false {
+                // quantum feature was removed
                 // Quantum encryption upload
                 upload_with_retry(&format!("quantum upload of {}", file_path), || {
                     upload_file_with_quantum_encryption(
@@ -4082,16 +5500,20 @@ pub async fn run_cli() -> Result<()> {
                         encrypt,
                         password.clone(),
                         None,
+                        Some(upload_id.as_str()),
                     )
                 })
                 .await
             };
 
             match upload_result {
-                Ok((uploaded_filename, token_cost)) => {
+                Ok((uploaded_filename, cost_usdc)) => {
                     println!("File uploaded successfully: {}", uploaded_filename);
-                    if token_cost > 0.0 {
-                        println!("💰 Cost: {} PIPE tokens", token_cost);
+                    if cost_usdc > 0.0 {
+                        println!(
+                            "💰 Cost: ${} USDC (prepaid credits)",
+                            format_usdc_ui(cost_usdc)
+                        );
                     }
                     append_to_upload_log_with_hash(
                         &file_path,
@@ -4131,12 +5553,10 @@ pub async fn run_cli() -> Result<()> {
             // Ensure we have valid JWT token if available
             ensure_valid_token(&client, base_url, &mut creds, config_path).await?;
 
-            // Override with command-line args if provided
-            if let Some(uid) = user_id {
-                creds.user_id = uid;
-            }
-            if let Some(key) = user_app_key {
-                creds.user_app_key = key;
+            if user_id.is_some() || user_app_key.is_some() {
+                eprintln!(
+                    "Note: --user-id/--user-app-key are ignored; this deployment requires JWT."
+                );
             }
 
             // Get the best endpoint for this download
@@ -4152,7 +5572,7 @@ pub async fn run_cli() -> Result<()> {
 
             // Check if this might be a quantum-encrypted file
             let is_quantum_file = file_name.ends_with(".qenc") || quantum;
-            
+
             if is_quantum_file {
                 download_file_with_quantum_decryption_and_options(
                     &client,
@@ -4194,13 +5614,13 @@ pub async fn run_cli() -> Result<()> {
             let mut creds = load_credentials_from_file(config_path)?.ok_or_else(|| {
                 anyhow!("No credentials found. Please create a user or login first.")
             })?;
-            
+
             // Ensure valid JWT token
             ensure_valid_token(&client, base_url, &mut creds, config_path).await?;
-            
+
             // Get service discovery cache
             let service_cache = Arc::new(ServiceDiscoveryCache::new(base_url.to_string()));
-            
+
             // Get best endpoint for downloads
             let selected_endpoint = get_endpoint_for_operation(
                 &service_cache,
@@ -4211,12 +5631,15 @@ pub async fn run_cli() -> Result<()> {
                 Some(&remote_prefix),
             )
             .await;
-            
-            println!("Downloading directory '{}' to '{}'", remote_prefix, output_directory);
+
+            println!(
+                "Downloading directory '{}' to '{}'",
+                remote_prefix, output_directory
+            );
             if parallel > 1 {
                 println!("Using {} parallel downloads", parallel);
             }
-            
+
             // Perform directory download
             download_directory(
                 &client,
@@ -4248,12 +5671,10 @@ pub async fn run_cli() -> Result<()> {
             // Ensure we have valid JWT token if available
             ensure_valid_token(&client, base_url, &mut creds, config_path).await?;
 
-            // Override with command-line args if provided (only for legacy auth)
-            if let Some(uid) = user_id {
-                creds.user_id = uid;
-            }
-            if let Some(key) = user_app_key {
-                creds.user_app_key = key;
+            if user_id.is_some() || user_app_key.is_some() {
+                eprintln!(
+                    "Note: --user-id/--user-app-key are ignored; this deployment requires JWT."
+                );
             }
 
             // Get endpoint for delete operation
@@ -4270,24 +5691,9 @@ pub async fn run_cli() -> Result<()> {
             let mut request = client.post(format!("{}/deleteFile", selected_endpoint));
 
             // Add auth headers including CSRF token for this state-changing operation
-            request = add_auth_headers(request, &creds, true);
+            request = add_auth_headers(request, &creds, true)?;
 
-            // Use JWT auth if available, otherwise fall back to legacy
-            if let Some(ref _auth_tokens) = creds.auth_tokens {
-                // With JWT, send only file name - server will get user info from token
-                let req_body = serde_json::json!({
-                    "file_name": file_name
-                });
-                request = request.json(&req_body);
-            } else {
-                // Legacy auth via request body
-                let req_body = DeleteFileRequest {
-                    user_id: creds.user_id.clone(),
-                    user_app_key: creds.user_app_key.clone(),
-                    file_name: file_name.clone(),
-                };
-                request = request.json(&req_body);
-            }
+            request = request.json(&serde_json::json!({ "file_name": file_name }));
 
             let resp = request.send().await?;
             let status = resp.status();
@@ -4352,18 +5758,16 @@ pub async fn run_cli() -> Result<()> {
             // Ensure we have valid JWT token if available
             ensure_valid_token(&client, base_url, &mut creds, config_path).await?;
 
-            // Override with command-line args if provided (only for legacy auth)
-            if let Some(uid) = user_id {
-                creds.user_id = uid;
-            }
-            if let Some(key) = user_app_key {
-                creds.user_app_key = key;
+            if user_id.is_some() || user_app_key.is_some() {
+                eprintln!(
+                    "Note: --user-id/--user-app-key are ignored; this deployment requires JWT."
+                );
             }
 
             let mut request = client.post(format!("{}/checkCustomToken", base_url));
 
             // Use add_auth_headers for consistent authentication
-            request = add_auth_headers(request, &creds, false);
+            request = add_auth_headers(request, &creds, false)?;
 
             // Always send empty body - auth is in headers
             let req_body = CheckCustomTokenRequest {
@@ -4407,43 +5811,27 @@ pub async fn run_cli() -> Result<()> {
             // Ensure we have valid JWT token if available
             ensure_valid_token(&client, base_url, &mut creds, config_path).await?;
 
-            // Override with command-line args if provided (only for legacy auth)
-            if let Some(uid) = user_id {
-                creds.user_id = uid;
-            }
-            if let Some(key) = user_app_key {
-                creds.user_app_key = key;
+            if user_id.is_some() || user_app_key.is_some() {
+                eprintln!(
+                    "Note: --user-id/--user-app-key are ignored; this deployment requires JWT."
+                );
             }
 
             let mut request = client.post(format!("{}/createPublicLink", base_url));
 
             // Add auth headers including CSRF token for this state-changing operation
-            request = add_auth_headers(request, &creds, true);
+            request = add_auth_headers(request, &creds, true)?;
 
-            // Use JWT auth if available, otherwise fall back to legacy
-            if let Some(ref _auth_tokens) = creds.auth_tokens {
-                // With JWT, send only file name - server will get user info from token
-                let mut req_body = serde_json::json!({
-                    "file_name": file_name
-                });
-                if let Some(ref t) = title {
-                    req_body["custom_title"] = serde_json::json!(t);
-                }
-                if let Some(ref d) = description {
-                    req_body["custom_description"] = serde_json::json!(d);
-                }
-                request = request.json(&req_body);
-            } else {
-                // Legacy auth via request body
-                let req_body = CreatePublicLinkRequest {
-                    user_id: creds.user_id.clone(),
-                    user_app_key: creds.user_app_key.clone(),
-                    file_name,
-                    custom_title: title,
-                    custom_description: description,
-                };
-                request = request.json(&req_body);
+            let mut req_body = serde_json::json!({
+                "file_name": file_name
+            });
+            if let Some(ref t) = title {
+                req_body["custom_title"] = serde_json::json!(t);
             }
+            if let Some(ref d) = description {
+                req_body["custom_description"] = serde_json::json!(d);
+            }
+            request = request.json(&req_body);
 
             let resp = request.send().await?;
             let status = resp.status();
@@ -4456,7 +5844,10 @@ pub async fn run_cli() -> Result<()> {
                 println!("  {}/publicDownload?hash={}", base_url, json.link_hash);
                 println!();
                 println!("Social media link (for sharing):");
-                println!("  {}/publicDownload?hash={}&preview=true", base_url, json.link_hash);
+                println!(
+                    "  {}/publicDownload?hash={}&preview=true",
+                    base_url, json.link_hash
+                );
                 println!(
                     "Use `publicDownload?hash={}` to download the file without auth.",
                     json.link_hash
@@ -4483,35 +5874,18 @@ pub async fn run_cli() -> Result<()> {
             // Ensure we have valid JWT token if available
             ensure_valid_token(&client, base_url, &mut creds, config_path).await?;
 
-            // Override with command-line args if provided (only for legacy auth)
-            if let Some(uid) = user_id {
-                creds.user_id = uid;
-            }
-            if let Some(key) = user_app_key {
-                creds.user_app_key = key;
+            if user_id.is_some() || user_app_key.is_some() {
+                eprintln!(
+                    "Note: --user-id/--user-app-key are ignored; this deployment requires JWT."
+                );
             }
 
             let mut request = client.post(format!("{}/deletePublicLink", base_url));
 
             // Add auth headers including CSRF token for this state-changing operation
-            request = add_auth_headers(request, &creds, true);
+            request = add_auth_headers(request, &creds, true)?;
 
-            // Use JWT auth if available, otherwise fall back to legacy
-            if let Some(ref _auth_tokens) = creds.auth_tokens {
-                // With JWT, send only link hash - server will get user info from token
-                let req_body = serde_json::json!({
-                    "link_hash": link_hash
-                });
-                request = request.json(&req_body);
-            } else {
-                // Legacy auth via request body
-                let req_body = DeletePublicLinkRequest {
-                    user_id: Some(creds.user_id.clone()),
-                    user_app_key: Some(creds.user_app_key.clone()),
-                    link_hash,
-                };
-                request = request.json(&req_body);
-            }
+            request = request.json(&serde_json::json!({ "link_hash": link_hash }));
 
             let resp = request.send().await?;
             let status = resp.status();
@@ -4569,12 +5943,10 @@ pub async fn run_cli() -> Result<()> {
             // Ensure we have valid JWT token if available
             ensure_valid_token(&client, base_url, &mut creds, config_path).await?;
 
-            // Override with command-line args if provided (only for legacy auth)
-            if let Some(uid) = user_id {
-                creds.user_id = uid;
-            }
-            if let Some(key) = user_app_key {
-                creds.user_app_key = key;
+            if user_id.is_some() || user_app_key.is_some() {
+                eprintln!(
+                    "Note: --user-id/--user-app-key are ignored; this deployment requires JWT."
+                );
             }
 
             let dir = Path::new(&directory_path);
@@ -4682,17 +6054,8 @@ pub async fn run_cli() -> Result<()> {
                 } else {
                     // For priority tiers, we need to fetch the actual pricing
                     let fee_url = format!("{}/getTierPricing", base_url);
-                    let fee_req = if let Some(ref auth_tokens) = creds.auth_tokens {
-                        client.get(&fee_url).header(
-                            "Authorization",
-                            format!("Bearer {}", auth_tokens.access_token),
-                        )
-                    } else {
-                        client
-                            .get(&fee_url)
-                            .header("X-User-Id", &creds.user_id)
-                            .header("X-User-App-Key", &creds.user_app_key)
-                    };
+                    let mut fee_req = client.get(&fee_url);
+                    fee_req = add_auth_headers(fee_req, &creds, false)?;
 
                     match fee_req.send().await {
                         Ok(resp) if resp.status().is_success() => {
@@ -4718,95 +6081,44 @@ pub async fn run_cli() -> Result<()> {
                     }
                 };
 
-            let total_cost_estimate = (total_size as f64 / 1_000_000_000.0) * fee_per_gb;
+            let cost_per_gb_usdc = 0.025 * fee_per_gb;
+            let total_cost_estimate_usdc = bytes_to_gb_decimal(total_size) * cost_per_gb_usdc;
 
-            // Get current token balance
-            let balance_url = format!("{}/checkCustomToken", base_url);
-
-            let balance_body = if creds.auth_tokens.is_some() {
-                // For JWT auth, send empty body (server gets user from token)
-                CheckCustomTokenRequest {
-                    user_id: None,
-                    user_app_key: None,
-                }
-            } else {
-                // For legacy auth, include credentials in body
-                CheckCustomTokenRequest {
-                    user_id: Some(creds.user_id.clone()),
-                    user_app_key: Some(creds.user_app_key.clone()),
-                }
-            };
-
-            let mut balance_req = client.post(&balance_url);
-            balance_req = add_auth_headers(balance_req, &creds, false); // false = not state-changing
-            balance_req = balance_req.json(&balance_body);
-
-            match balance_req.send().await {
-                Ok(resp) => {
-                    let status = resp.status();
-                    if status.is_success() {
-                        match resp.json::<CheckCustomTokenResponse>().await {
-                            Ok(balance_resp) => {
-                                let current_balance = balance_resp.ui_amount;
-                                if current_balance < total_cost_estimate {
-                                    eprintln!("\n❌ Insufficient tokens for directory upload");
-                                    eprintln!(
-                                        "Total cost: {:.4} PIPE tokens (at {} tokens/GB)",
-                                        total_cost_estimate, fee_per_gb
-                                    );
-                                    eprintln!("Your balance: {:.4} PIPE tokens", current_balance);
-                                    eprintln!(
-                                        "Needed: {:.4} PIPE tokens",
-                                        total_cost_estimate - current_balance
-                                    );
-                                    eprintln!("\nPlease contact support to add more PIPE tokens to your account. You need approximately {:.1} PIPE tokens.", 
-                                    (total_cost_estimate - current_balance) / 10.0 + 0.1);
-                                    return Ok(());
-                                }
-                                println!("💰 Estimated cost: {:.4} PIPE tokens at {} tokens/GB (current balance: {:.4} PIPE)", 
-                                total_cost_estimate, fee_per_gb, current_balance);
-                            }
-                            Err(e) => {
-                                eprintln!("⚠️  Failed to parse balance response: {}", e);
-                                eprintln!(
-                                    "Estimated cost: {:.4} PIPE tokens at {} tokens/GB",
-                                    total_cost_estimate, fee_per_gb
-                                );
-                                eprintln!("\nProceed with caution - could not verify if you have enough tokens.");
-                                eprintln!(
-                                    "Consider checking your balance with 'pipe check-token' first."
-                                );
-                            }
-                        }
-                    } else {
-                        let error_text = resp
-                            .text()
-                            .await
-                            .unwrap_or_else(|_| "Unknown error".to_string());
+            match fetch_credits_status(&client, base_url, &creds).await {
+                Ok(credits) => {
+                    let current_balance = credits.balance_usdc;
+                    if current_balance + 1e-9 < total_cost_estimate_usdc {
+                        eprintln!("\n❌ Insufficient prepaid credits for directory upload");
                         eprintln!(
-                            "⚠️  Failed to check token balance: {} - {}",
-                            status, error_text
+                            "Total cost: ${} USDC (at ${} USDC/GB)",
+                            format_usdc_ui(total_cost_estimate_usdc),
+                            format_usdc_ui(cost_per_gb_usdc)
                         );
+                        eprintln!("Your balance: ${} USDC", format_usdc_ui(current_balance));
                         eprintln!(
-                            "Estimated cost: {:.4} PIPE tokens at {} tokens/GB",
-                            total_cost_estimate, fee_per_gb
+                            "Needed: ${} USDC",
+                            format_usdc_ui((total_cost_estimate_usdc - current_balance).max(0.0))
                         );
-                        eprintln!(
-                            "\nProceed with caution - could not verify if you have enough tokens."
-                        );
-                        eprintln!("Consider checking your balance with 'pipe check-token' first.");
+                        eprintln!("\nTop up credits with: pipe credits-intent 10");
+                        return Ok(());
                     }
+                    println!(
+                        "💰 Estimated cost: ${} USDC at ${} USDC/GB (balance: ${} USDC)",
+                        format_usdc_ui(total_cost_estimate_usdc),
+                        format_usdc_ui(cost_per_gb_usdc),
+                        format_usdc_ui(current_balance)
+                    );
                 }
                 Err(e) => {
-                    eprintln!("⚠️  Could not connect to check token balance: {}", e);
+                    eprintln!("⚠️  Could not fetch credits status: {}", e);
                     eprintln!(
-                        "Estimated cost: {:.4} PIPE tokens at {} tokens/GB",
-                        total_cost_estimate, fee_per_gb
+                        "Estimated cost: ${} USDC at ${} USDC/GB",
+                        format_usdc_ui(total_cost_estimate_usdc),
+                        format_usdc_ui(cost_per_gb_usdc)
                     );
                     eprintln!(
-                        "\nProceed with caution - could not verify if you have enough tokens."
+                        "\nProceed with caution - could not verify if you have enough credits."
                     );
-                    eprintln!("Consider checking your balance with 'pipe check-token' first.");
                 }
             }
 
@@ -4867,7 +6179,13 @@ pub async fn run_cli() -> Result<()> {
                 let password_clone = encryption_password.clone();
 
                 let handle = tokio::spawn(async move {
-                    let _permit = sem_clone.acquire_owned().await.unwrap();
+                    let _permit = match sem_clone.acquire_owned().await {
+                        Ok(p) => p,
+                        Err(_) => {
+                            eprintln!("Upload semaphore closed; aborting task for {}", rel_path);
+                            return;
+                        }
+                    };
 
                     // Get endpoint for this specific file upload
                     let user_id_owned = {
@@ -4896,14 +6214,18 @@ pub async fn run_cli() -> Result<()> {
                         "upload" // Default to normal upload if no tier specified
                     };
 
-                    let mut url =
-                        format!("{}/{}?file_name={}", selected_endpoint, endpoint, 
-                            utf8_percent_encode(&rel_path, QUERY_ENCODE_SET));
+                    let mut url = format!(
+                        "{}/{}?file_name={}",
+                        selected_endpoint,
+                        endpoint,
+                        utf8_percent_encode(&rel_path, QUERY_ENCODE_SET)
+                    );
                     if let Some(tier_name) = &tier_clone {
                         url = format!("{}&tier={}", url, tier_name);
                     }
 
                     // Use retry wrapper for directory uploads
+                    let upload_id = Uuid::new_v4().to_string();
                     let upload_result =
                         upload_with_retry(&format!("upload of {}", rel_path), || {
                             let client_inner = client_clone.clone();
@@ -4914,10 +6236,17 @@ pub async fn run_cli() -> Result<()> {
                             let rel_inner = rel_path.clone();
                             let shared_prog_inner = shared_progress_clone.clone();
                             let pwd_inner = password_clone.clone();
+                            let upload_id_inner = upload_id.clone();
                             async move {
                                 // Ensure token valid preflight
                                 let mut creds_guard = shared_creds_inner.lock().await;
-                                let _ = ensure_valid_token(&client_inner, &base_url_inner, &mut creds_guard, None).await;
+                                let _ = ensure_valid_token(
+                                    &client_inner,
+                                    &base_url_inner,
+                                    &mut creds_guard,
+                                    None,
+                                )
+                                .await;
                                 let creds_snapshot = creds_guard.clone();
                                 drop(creds_guard);
 
@@ -4931,14 +6260,26 @@ pub async fn run_cli() -> Result<()> {
                                     encrypt_clone,
                                     pwd_inner.clone(),
                                     Some(shared_prog_inner.clone()),
-                                ).await {
+                                    Some(upload_id_inner.as_str()),
+                                )
+                                .await
+                                {
                                     Ok(ok) => Ok(ok),
                                     Err(e) => {
                                         let es = e.to_string();
-                                        if es.contains("401") || es.contains("Unauthorized") || es.contains("Authentication required") {
+                                        if es.contains("401")
+                                            || es.contains("Unauthorized")
+                                            || es.contains("Authentication required")
+                                        {
                                             // Refresh and retry once
                                             let mut creds_guard2 = shared_creds_inner.lock().await;
-                                            let _ = ensure_valid_token(&client_inner, &base_url_inner, &mut creds_guard2, None).await;
+                                            let _ = ensure_valid_token(
+                                                &client_inner,
+                                                &base_url_inner,
+                                                &mut creds_guard2,
+                                                None,
+                                            )
+                                            .await;
                                             let creds_snapshot2 = creds_guard2.clone();
                                             drop(creds_guard2);
                                             upload_file_with_encryption(
@@ -4950,7 +6291,9 @@ pub async fn run_cli() -> Result<()> {
                                                 encrypt_clone,
                                                 pwd_inner.clone(),
                                                 Some(shared_prog_inner.clone()),
-                                            ).await
+                                                Some(upload_id_inner.as_str()),
+                                            )
+                                            .await
                                         } else {
                                             Err(e)
                                         }
@@ -5016,7 +6359,7 @@ pub async fn run_cli() -> Result<()> {
                 println!("  📈 Upload tier: {}", t);
             }
             if final_cost > 0.0 {
-                println!("  💰 Total cost: {:.4} PIPE tokens", final_cost);
+                println!("  💰 Total cost: ${} USDC", format_usdc_ui(final_cost));
             }
             println!(
                 "\nCheck the log file for details:\n  {}",
@@ -5039,12 +6382,10 @@ pub async fn run_cli() -> Result<()> {
             // Ensure we have valid JWT token if available
             ensure_valid_token(&client, base_url, &mut creds, config_path).await?;
 
-            // Override with command-line args if provided (only for legacy auth)
-            if let Some(uid) = user_id {
-                creds.user_id = uid;
-            }
-            if let Some(key) = user_app_key {
-                creds.user_app_key = key;
+            if user_id.is_some() || user_app_key.is_some() {
+                eprintln!(
+                    "Note: --user-id/--user-app-key are ignored; this deployment requires JWT."
+                );
             }
 
             let dir = Path::new(&directory_path);
@@ -5060,8 +6401,9 @@ pub async fn run_cli() -> Result<()> {
             let resp = client.get(&url).send().await?;
             let fee_resp: PriorityFeeResponse = resp.json().await?;
             println!(
-                "Current priority fee: {} tokens/GB",
-                fee_resp.priority_fee_per_gb
+                "Current priority multiplier: {}x (~${} USDC/GB)",
+                fee_resp.priority_fee_per_gb,
+                format_usdc_ui(0.025 * fee_resp.priority_fee_per_gb)
             );
             println!("Starting priority upload of directory...");
 
@@ -5126,100 +6468,54 @@ pub async fn run_cli() -> Result<()> {
                 total_size as f64 / 1_048_576.0
             );
 
-            // Check if user has enough tokens for the entire priority upload
-            let total_cost_estimate =
-                (total_size as f64 / 1_000_000_000.0) * fee_resp.priority_fee_per_gb;
-
-            // Get current token balance
-            let balance_url = format!("{}/checkCustomToken", base_url);
-
-            let balance_body = if creds.auth_tokens.is_some() {
-                // For JWT auth, send empty body (server gets user from token)
-                CheckCustomTokenRequest {
-                    user_id: None,
-                    user_app_key: None,
-                }
-            } else {
-                // For legacy auth, include credentials in body
-                CheckCustomTokenRequest {
-                    user_id: Some(creds.user_id.clone()),
-                    user_app_key: Some(creds.user_app_key.clone()),
-                }
-            };
-
-            let mut balance_req = client.post(&balance_url);
-            balance_req = add_auth_headers(balance_req, &creds, false); // false = not state-changing
-            balance_req = balance_req.json(&balance_body);
-
-            match balance_req.send().await {
-                Ok(resp) => {
-                    let status = resp.status();
-                    if status.is_success() {
-                        match resp.json::<CheckCustomTokenResponse>().await {
-                            Ok(balance_resp) => {
-                                let current_balance = balance_resp.ui_amount;
-                                if current_balance < total_cost_estimate {
-                                    eprintln!(
-                                        "\n❌ Insufficient tokens for priority directory upload"
-                                    );
-                                    eprintln!(
-                                        "Total cost: {:.4} PIPE tokens (at {} tokens/GB)",
-                                        total_cost_estimate, fee_resp.priority_fee_per_gb
-                                    );
-                                    eprintln!("Your balance: {:.4} PIPE tokens", current_balance);
-                                    eprintln!(
-                                        "Needed: {:.4} PIPE tokens",
-                                        total_cost_estimate - current_balance
-                                    );
-                                    eprintln!("\nPlease contact support to add more PIPE tokens to your account. You need approximately {:.1} PIPE tokens.", 
-                                        (total_cost_estimate - current_balance) / 10.0 + 0.1);
-                                    return Ok(());
-                                }
-                                println!("💰 Estimated cost: {:.4} PIPE tokens at {} tokens/GB (current balance: {:.4} PIPE)", 
-                                    total_cost_estimate, fee_resp.priority_fee_per_gb, current_balance);
-                            }
-                            Err(e) => {
-                                eprintln!("⚠️  Failed to parse balance response: {}", e);
-                                eprintln!(
-                                    "Estimated cost: {:.4} PIPE tokens at {} tokens/GB",
-                                    total_cost_estimate, fee_resp.priority_fee_per_gb
-                                );
-                                eprintln!("\nProceed with caution - could not verify if you have enough tokens.");
-                                eprintln!(
-                                    "Consider checking your balance with 'pipe check-token' first."
-                                );
-                            }
-                        }
-                    } else {
-                        let error_text = resp
-                            .text()
-                            .await
-                            .unwrap_or_else(|_| "Unknown error".to_string());
-                        eprintln!(
-                            "⚠️  Failed to check token balance: {} - {}",
-                            status, error_text
-                        );
-                        eprintln!(
-                            "Estimated cost: {:.4} PIPE tokens at {} tokens/GB",
-                            total_cost_estimate, fee_resp.priority_fee_per_gb
-                        );
-                        eprintln!(
-                            "\nProceed with caution - could not verify if you have enough tokens."
-                        );
-                        eprintln!("Consider checking your balance with 'pipe check-token' first.");
+            let (cost_per_gb_usdc, balance_usdc_opt) =
+                match fetch_credits_status(&client, base_url, &creds).await {
+                    Ok(status) => {
+                        let tier_est = status
+                            .quota
+                            .tier_estimates
+                            .iter()
+                            .find(|t| t.tier_name.eq_ignore_ascii_case("priority"));
+                        (
+                            tier_est.map(|t| t.cost_per_gb_usdc).unwrap_or(0.025),
+                            Some(status.balance_usdc),
+                        )
                     }
-                }
-                Err(e) => {
-                    eprintln!("⚠️  Could not connect to check token balance: {}", e);
+                    Err(_) => (0.025, None),
+                };
+
+            let total_cost_estimate_usdc = bytes_to_gb_decimal(total_size) * cost_per_gb_usdc;
+
+            if let Some(balance_usdc) = balance_usdc_opt {
+                if balance_usdc + 1e-9 < total_cost_estimate_usdc {
+                    eprintln!("\n❌ Insufficient prepaid credits for priority directory upload");
                     eprintln!(
-                        "Estimated cost: {:.4} PIPE tokens at {} tokens/GB",
-                        total_cost_estimate, fee_resp.priority_fee_per_gb
+                        "Total cost: ${} USDC (at ${} USDC/GB)",
+                        format_usdc_ui(total_cost_estimate_usdc),
+                        format_usdc_ui(cost_per_gb_usdc)
                     );
+                    eprintln!("Your balance: ${} USDC", format_usdc_ui(balance_usdc));
                     eprintln!(
-                        "\nProceed with caution - could not verify if you have enough tokens."
+                        "Needed: ${} USDC",
+                        format_usdc_ui((total_cost_estimate_usdc - balance_usdc).max(0.0))
                     );
-                    eprintln!("Consider checking your balance with 'pipe check-token' first.");
+                    eprintln!("\nTop up credits with: pipe credits-intent 10");
+                    return Ok(());
                 }
+
+                println!(
+                    "💰 Estimated cost: ${} USDC at ${} USDC/GB (balance: ${} USDC)",
+                    format_usdc_ui(total_cost_estimate_usdc),
+                    format_usdc_ui(cost_per_gb_usdc),
+                    format_usdc_ui(balance_usdc)
+                );
+            } else {
+                eprintln!("⚠️  Could not fetch credits status to verify balance.");
+                eprintln!(
+                    "Estimated cost: ${} USDC at ${} USDC/GB",
+                    format_usdc_ui(total_cost_estimate_usdc),
+                    format_usdc_ui(cost_per_gb_usdc)
+                );
             }
 
             // Create shared progress bar (bytes-based, not file count)
@@ -5269,7 +6565,13 @@ pub async fn run_cli() -> Result<()> {
                 };
 
                 let handle = tokio::spawn(async move {
-                    let _permit = sem_clone.acquire_owned().await.unwrap();
+                    let _permit = match sem_clone.acquire_owned().await {
+                        Ok(p) => p,
+                        Err(_) => {
+                            eprintln!("Upload semaphore closed; aborting task for {}", rel_path);
+                            return;
+                        }
+                    };
 
                     // Get endpoint for this specific file upload
                     let user_id_owned = {
@@ -5289,10 +6591,12 @@ pub async fn run_cli() -> Result<()> {
                     // Build URL without credentials (security fix)
                     let url = format!(
                         "{}/priorityUpload?file_name={}",
-                        selected_endpoint, utf8_percent_encode(&rel_path, QUERY_ENCODE_SET)
+                        selected_endpoint,
+                        utf8_percent_encode(&rel_path, QUERY_ENCODE_SET)
                     );
 
                     // Use retry wrapper for priority directory uploads
+                    let upload_id = Uuid::new_v4().to_string();
                     let upload_result =
                         upload_with_retry(&format!("priority upload of {}", rel_path), || {
                             let client_inner = client_clone.clone();
@@ -5302,10 +6606,17 @@ pub async fn run_cli() -> Result<()> {
                             let url_inner = url.clone();
                             let rel_inner = rel_path.clone();
                             let shared_prog_inner = shared_progress_clone.clone();
+                            let upload_id_inner = upload_id.clone();
                             async move {
                                 // Preflight refresh
                                 let mut creds_guard = shared_creds_inner.lock().await;
-                                let _ = ensure_valid_token(&client_inner, &base_url_inner, &mut creds_guard, None).await;
+                                let _ = ensure_valid_token(
+                                    &client_inner,
+                                    &base_url_inner,
+                                    &mut creds_guard,
+                                    None,
+                                )
+                                .await;
                                 let creds_snapshot = creds_guard.clone();
                                 drop(creds_guard);
                                 match upload_file_priority_with_shared_progress(
@@ -5315,13 +6626,25 @@ pub async fn run_cli() -> Result<()> {
                                     &rel_inner,
                                     &creds_snapshot,
                                     Some(shared_prog_inner.clone()),
-                                ).await {
+                                    Some(upload_id_inner.as_str()),
+                                )
+                                .await
+                                {
                                     Ok(ok) => Ok(ok),
                                     Err(e) => {
                                         let es = e.to_string();
-                                        if es.contains("401") || es.contains("Unauthorized") || es.contains("Authentication required") {
+                                        if es.contains("401")
+                                            || es.contains("Unauthorized")
+                                            || es.contains("Authentication required")
+                                        {
                                             let mut creds_guard2 = shared_creds_inner.lock().await;
-                                            let _ = ensure_valid_token(&client_inner, &base_url_inner, &mut creds_guard2, None).await;
+                                            let _ = ensure_valid_token(
+                                                &client_inner,
+                                                &base_url_inner,
+                                                &mut creds_guard2,
+                                                None,
+                                            )
+                                            .await;
                                             let creds_snapshot2 = creds_guard2.clone();
                                             drop(creds_guard2);
                                             upload_file_priority_with_shared_progress(
@@ -5331,7 +6654,9 @@ pub async fn run_cli() -> Result<()> {
                                                 &rel_inner,
                                                 &creds_snapshot2,
                                                 Some(shared_prog_inner.clone()),
-                                            ).await
+                                                Some(upload_id_inner.as_str()),
+                                            )
+                                            .await
                                         } else {
                                             Err(e)
                                         }
@@ -5394,10 +6719,7 @@ pub async fn run_cli() -> Result<()> {
             }
             println!("  📁 Total size: {:.2} MB", total_size as f64 / 1_048_576.0);
             if final_cost > 0.0 {
-                println!(
-                    "  💰 Total cost: {:.4} PIPE tokens (priority rate: {} tokens/GB)",
-                    final_cost, fee_resp.priority_fee_per_gb
-                );
+                println!("  💰 Total cost: ${} USDC", format_usdc_ui(final_cost));
             }
             println!(
                 "\nCheck the log file for details:\n  {}",
@@ -5414,11 +6736,15 @@ pub async fn run_cli() -> Result<()> {
 
             if status.is_success() {
                 let parsed = serde_json::from_str::<PriorityFeeResponse>(&text_body)?;
-                // For demonstration, a placeholder for normal fees:
-                let normal_fee_per_gb = 1.0;
-                println!("Normal (non-priority) fee per GB: {}", normal_fee_per_gb);
+                let normal_multiplier = 1.0;
                 println!(
-                    "Estimated priority fee per GB if you start now: {} tokens/GB",
+                    "Normal: ${} USDC/GB ({}x)",
+                    format_usdc_ui(0.025 * normal_multiplier),
+                    normal_multiplier
+                );
+                println!(
+                    "Priority: ${} USDC/GB ({}x)",
+                    format_usdc_ui(0.025 * parsed.priority_fee_per_gb),
                     parsed.priority_fee_per_gb
                 );
             } else {
@@ -5451,7 +6777,7 @@ pub async fn run_cli() -> Result<()> {
 
                 println!("\n📊 Upload Tier Pricing:");
                 println!("╔═══════════════╦═══════╦═══════════╦═════════════╦══════════╦═══════════════╦═══════════╗");
-                println!("║ Tier          ║ $/GB  ║ Current   ║ Concurrency ║ Active   ║ MP Concurrent ║ Chunk MB  ║");
+                println!("║ Tier          ║ Base x║ Current x  ║ Concurrency ║ Active   ║ MP Concurrent ║ Chunk MB  ║");
                 println!("╠═══════════════╬═══════╬═══════════╬═════════════╬══════════╬═══════════════╬═══════════╣");
                 for tier in pricing {
                     println!(
@@ -5466,9 +6792,7 @@ pub async fn run_cli() -> Result<()> {
                     );
                 }
                 println!("╚═══════════════╩═══════╩═══════════╩═════════════╩══════════╩═══════════════╩═══════════╝");
-                println!(
-                    "\nNote: Current price adjusts based on demand for Priority and Premium tiers."
-                );
+                println!("\nNote: Multipliers apply to a $0.025 USDC/GB baseline.");
             } else {
                 return Err(anyhow!(
                     "Failed to get tier pricing. Status={}, Body={}",
@@ -5494,12 +6818,10 @@ pub async fn run_cli() -> Result<()> {
             // Ensure we have valid JWT token if available
             ensure_valid_token(&client, base_url, &mut creds, config_path).await?;
 
-            // Override with command-line args if provided (only for legacy auth)
-            if let Some(uid) = user_id {
-                creds.user_id = uid;
-            }
-            if let Some(key) = user_app_key {
-                creds.user_app_key = key;
+            if user_id.is_some() || user_app_key.is_some() {
+                eprintln!(
+                    "Note: --user-id/--user-app-key are ignored; this deployment requires JWT."
+                );
             }
 
             let local_path = Path::new(&file_path);
@@ -5512,68 +6834,65 @@ pub async fn run_cli() -> Result<()> {
             // Handle dry-run: calculate and show cost estimate
             if dry_run {
                 let file_size = std::fs::metadata(local_path)?.len();
-                let file_size_gb = file_size as f64 / 1_000_000_000.0;
-                
-                // Get tier pricing
-                let fee_url = format!("{}/getTierPricing", base_url);
-                let fee_resp = match client.get(&fee_url).send().await {
-                    Ok(resp) if resp.status().is_success() => {
-                        resp.json::<GetTierPricingResponse>().await?
-                    }
-                    _ => {
-                        // Use default pricing if API call fails
-                        GetTierPricingResponse {
-                            normal_fee_per_gb: 100.0,
-                            priority_fee_per_gb: 125.0,
-                            premium_fee_per_gb: 175.0,
-                            ultra_fee_per_gb: 300.0,
-                            enterprise_fee_per_gb: 1000.0,
+                let file_size_gb = bytes_to_gb_decimal(file_size);
+
+                let (cost_per_gb_usdc, balance_usdc_opt, available_gb_opt) =
+                    match fetch_credits_status(&client, base_url, &creds).await {
+                        Ok(status) => {
+                            let tier_est = status
+                                .quota
+                                .tier_estimates
+                                .iter()
+                                .find(|t| t.tier_name.eq_ignore_ascii_case("priority"));
+                            (
+                                tier_est.map(|t| t.cost_per_gb_usdc).unwrap_or(0.025),
+                                Some(status.balance_usdc),
+                                tier_est.map(|t| t.available_gb),
+                            )
                         }
-                    }
-                };
+                        Err(_) => (0.025, None, None),
+                    };
 
-                let cost_per_gb = fee_resp.priority_fee_per_gb;
-                let estimated_cost = file_size_gb * cost_per_gb;
+                let estimated_cost_usdc = file_size_gb * cost_per_gb_usdc;
 
-                println!("\n📊 Priority Upload Cost Estimate:");
+                println!("\n📊 Priority Upload Cost Estimate (prepaid credits):");
                 println!("  📁 File: {}", file_name);
-                println!("  📏 Size: {:.2} MB ({:.4} GB)", file_size as f64 / 1_048_576.0, file_size_gb);
-                println!("  📈 Tier: Priority");
-                println!("  💵 Rate: {} PIPE tokens/GB", cost_per_gb);
-                println!("  💰 Estimated cost: {:.4} PIPE tokens", estimated_cost);
+                println!(
+                    "  📏 Size: {:.2} MB ({:.4} GB)",
+                    file_size as f64 / 1_048_576.0,
+                    file_size_gb
+                );
+                println!("  📈 Tier: priority");
+                println!("  💵 Rate: ${} USDC/GB", format_usdc_ui(cost_per_gb_usdc));
+                println!(
+                    "  💰 Estimated cost: ${} USDC",
+                    format_usdc_ui(estimated_cost_usdc)
+                );
                 println!("  📅 Storage duration: {} month(s)", epochs_final);
 
-                // Optionally check user balance
-                let balance_url = format!("{}/checkCustomToken", base_url);
-                let balance_body = if creds.auth_tokens.is_some() {
-                    CheckCustomTokenRequest {
-                        user_id: None,
-                        user_app_key: None,
+                if let Some(balance_usdc) = balance_usdc_opt {
+                    println!(
+                        "\n💳 Credits balance: ${} USDC",
+                        format_usdc_ui(balance_usdc)
+                    );
+                    if let Some(available_gb) = available_gb_opt {
+                        println!("📦 Available storage (priority): {:.2} GB", available_gb);
+                    }
+                    if balance_usdc + 1e-9 < estimated_cost_usdc {
+                        println!("⚠️  Insufficient prepaid credits.");
+                        println!(
+                            "   Need ${} more USDC",
+                            format_usdc_ui((estimated_cost_usdc - balance_usdc).max(0.0))
+                        );
+                        println!("\n💡 Top up:");
+                        println!("   pipe credits-intent 10");
+                    } else {
+                        println!("✅ Sufficient credits for upload");
+                        let remaining = (balance_usdc - estimated_cost_usdc).max(0.0);
+                        println!("   After upload: ${} USDC", format_usdc_ui(remaining));
                     }
                 } else {
-                    CheckCustomTokenRequest {
-                        user_id: Some(creds.user_id.clone()),
-                        user_app_key: Some(creds.user_app_key.clone()),
-                    }
-                };
-
-                let mut balance_req = client.post(&balance_url);
-                balance_req = add_auth_headers(balance_req, &creds, false);
-                balance_req = balance_req.json(&balance_body);
-
-                if let Ok(resp) = balance_req.send().await {
-                    if let Ok(balance_resp) = resp.json::<CheckCustomTokenResponse>().await {
-                        let current_balance = balance_resp.ui_amount;
-                        println!("\n💳 Your balance: {:.4} PIPE tokens", current_balance);
-                        
-                        if current_balance < estimated_cost {
-                            println!("⚠️  Insufficient balance!");
-                            println!("   Need {:.4} more PIPE tokens", estimated_cost - current_balance);
-                            println!("\n   Please contact support to add more PIPE tokens to your account.");
-                        } else {
-                            println!("✅ Sufficient balance for upload");
-                        }
-                    }
+                    println!("\n⚠️  Could not fetch credits status to verify balance.");
                 }
 
                 println!("\nThis is a dry run - no upload performed.");
@@ -5585,30 +6904,42 @@ pub async fn run_cli() -> Result<()> {
             let blake3_hash = calculate_blake3(local_path).await?;
             println!("Blake3 hash: {}", &blake3_hash[..16]); // Show first 16 chars
             let file_size = std::fs::metadata(local_path)?.len();
+            let upload_id = Uuid::new_v4().to_string();
 
             // Build URL without credentials (security fix)
             let url = format!(
                 "{}/priorityUpload?file_name={}&epochs={}",
-                base_url, utf8_percent_encode(&file_name, QUERY_ENCODE_SET), epochs_final
+                base_url,
+                utf8_percent_encode(&file_name, QUERY_ENCODE_SET),
+                epochs_final
             );
 
             // Use retry wrapper for priority single file upload
             let upload_result =
                 upload_with_retry(&format!("priority upload of {}", file_path), || {
                     upload_file_priority_with_shared_progress(
-                        &client, local_path, &url, &file_name, &creds, None,
+                        &client,
+                        local_path,
+                        &url,
+                        &file_name,
+                        &creds,
+                        None,
+                        Some(upload_id.as_str()),
                     )
                 })
                 .await;
 
             match upload_result {
-                Ok((uploaded_filename, token_cost)) => {
+                Ok((uploaded_filename, cost_usdc)) => {
                     println!(
                         "Priority file uploaded (or backgrounded): {}",
                         uploaded_filename
                     );
-                    if token_cost > 0.0 {
-                        println!("💰 Cost: {} PIPE tokens", token_cost);
+                    if cost_usdc > 0.0 {
+                        println!(
+                            "💰 Cost: ${} USDC (prepaid credits)",
+                            format_usdc_ui(cost_usdc)
+                        );
                     }
                     append_to_upload_log_with_hash(
                         &file_path,
@@ -5642,12 +6973,10 @@ pub async fn run_cli() -> Result<()> {
             // Ensure we have valid JWT token if available
             ensure_valid_token(&client, base_url, &mut creds, config_path).await?;
 
-            // Override with command-line args if provided (only for legacy auth)
-            if let Some(uid) = user_id {
-                creds.user_id = uid;
-            }
-            if let Some(key) = user_app_key {
-                creds.user_app_key = key;
+            if user_id.is_some() || user_app_key.is_some() {
+                eprintln!(
+                    "Note: --user-id/--user-app-key are ignored; this deployment requires JWT."
+                );
             }
 
             match priority_download_single_file_with_auth(&client, base_url, &creds, &file_name)
@@ -5700,37 +7029,22 @@ pub async fn run_cli() -> Result<()> {
             // Ensure we have valid JWT token if available
             ensure_valid_token(&client, base_url, &mut creds, config_path).await?;
 
-            // Override with command-line args if provided (only for legacy auth)
-            if let Some(uid) = user_id {
-                creds.user_id = uid;
-            }
-            if let Some(key) = user_app_key {
-                creds.user_app_key = key;
+            if user_id.is_some() || user_app_key.is_some() {
+                eprintln!(
+                    "Note: --user-id/--user-app-key are ignored; this deployment requires JWT."
+                );
             }
 
             let url = format!("{}/extendStorage", base_url);
             let mut request = client.post(url);
 
             // Use add_auth_headers for consistent authentication
-            request = add_auth_headers(request, &creds, true);
+            request = add_auth_headers(request, &creds, true)?;
 
-            // For JWT auth, send only file name and months. For legacy auth, also need credentials in body
-            if creds.auth_tokens.is_some() {
-                let req_body = serde_json::json!({
-                    "file_name": file_name,
-                    "additional_months": additional_months
-                });
-                request = request.json(&req_body);
-            } else {
-                // Legacy auth still needs credentials in body for this endpoint
-                let req_body = ExtendStorageRequest {
-                    user_id: creds.user_id.clone(),
-                    user_app_key: creds.user_app_key.clone(),
-                    file_name,
-                    additional_months,
-                };
-                request = request.json(&req_body);
-            }
+            request = request.json(&serde_json::json!({
+                "file_name": file_name,
+                "additional_months": additional_months
+            }));
 
             let resp = request.send().await?;
             let status = resp.status();
@@ -5766,27 +7080,23 @@ pub async fn run_cli() -> Result<()> {
                 anyhow!("No credentials found. Please create a user or login first.")
             })?;
             ensure_valid_token(&client, base_url, &mut creds, config_path).await?;
-            
+
             if let Some(uid) = user_id {
                 creds.user_id = uid;
             }
             if let Some(key) = user_app_key {
                 creds.user_app_key = key;
             }
-            
+
             println!("Verifying file integrity...");
             println!("Feature not fully implemented yet - requires server-side support");
             // TODO: Call server API to get file hash and verify
         }
         */
-        
-        Commands::FindUpload {
-            query,
-            by_hash,
-        } => {
+        Commands::FindUpload { query, by_hash } => {
             let entries = read_upload_log_entries(None)?;
             let mut found = Vec::new();
-            
+
             for entry in entries {
                 if by_hash {
                     if let Some(ref hash) = entry.blake3_hash {
@@ -5801,7 +7111,7 @@ pub async fn run_cli() -> Result<()> {
                     }
                 }
             }
-            
+
             if found.is_empty() {
                 println!("No uploads found matching '{}'", query);
             } else {
@@ -5822,15 +7132,15 @@ pub async fn run_cli() -> Result<()> {
                 }
             }
         }
-        
+
         Commands::RehashUploads { verbose } => {
             let mut entries = read_upload_log_entries(None)?;
             let total = entries.len();
             let mut updated = 0;
             let mut failed = 0;
-            
+
             println!("Rehashing {} upload entries...", total);
-            
+
             for entry in &mut entries {
                 if entry.blake3_hash.is_none() {
                     let path = Path::new(&entry.local_path);
@@ -5859,7 +7169,7 @@ pub async fn run_cli() -> Result<()> {
                     }
                 }
             }
-            
+
             // Rewrite the upload log
             if updated > 0 {
                 let log_path = get_upload_log_path();
@@ -5868,12 +7178,12 @@ pub async fn run_cli() -> Result<()> {
                     .truncate(true)
                     .write(true)
                     .open(&log_path)?;
-                    
+
                 for entry in entries {
                     let json_line = serde_json::to_string(&entry)?;
                     writeln!(file, "{}", json_line)?;
                 }
-                
+
                 println!("\n✅ Rehashing complete!");
                 println!("  Updated: {} entries", updated);
                 println!("  Failed: {} entries", failed);
@@ -5882,7 +7192,7 @@ pub async fn run_cli() -> Result<()> {
                 println!("\nNo entries needed updating.");
             }
         }
-        
+
         Commands::Sync {
             path,
             destination,
@@ -5903,8 +7213,8 @@ pub async fn run_cli() -> Result<()> {
             ensure_valid_token(&client, base_url, &mut creds, config_path).await?;
 
             // Parse conflict strategy
-            let conflict_strategy = sync::ConflictStrategy::from_str(&conflict)
-                .map_err(|e| anyhow!("{}", e))?;
+            let conflict_strategy =
+                sync::ConflictStrategy::from_str(&conflict).map_err(|e| anyhow!("{}", e))?;
 
             // Execute sync
             sync::sync_command(
@@ -5918,7 +7228,46 @@ pub async fn run_cli() -> Result<()> {
             )
             .await?;
         }
-        
+
+        Commands::ServiceConfig => {
+            let url = format!("{}/api/service-config", base_url);
+            let resp = client.get(&url).send().await?;
+            let status = resp.status();
+            let text_body = resp.text().await?;
+
+            if !status.is_success() {
+                return Err(anyhow!(
+                    "Service config request failed. Status = {}, Body = {}",
+                    status,
+                    text_body
+                ));
+            }
+
+            let cfg = serde_json::from_str::<ServiceConfigResponse>(&text_body)?;
+            println!("🌐 Solana cluster: {}", cfg.solana_cluster);
+            println!("💳 USDC mint: {}", cfg.usdc_mint);
+            println!("🏦 Treasury pubkey: {}", cfg.usdc_treasury_pubkey);
+            println!("🏦 Treasury ATA: {}", cfg.usdc_treasury_ata);
+            println!(
+                "♾️  Lifetime purchase enabled: {}",
+                if cfg.lifetime_purchase_enabled {
+                    "yes"
+                } else {
+                    "no"
+                }
+            );
+            println!("♾️  Lifetime price: {} USDC", cfg.lifetime_price_usdc);
+            if let Some(title) = cfg.lifetime_promo_title.as_deref() {
+                println!("🪧 Promo title: {}", title);
+            }
+            if let Some(body) = cfg.lifetime_promo_body.as_deref() {
+                println!("📝 Promo body: {}", body);
+            }
+            if let Some(url) = cfg.lifetime_terms_url.as_deref() {
+                println!("📄 Terms: {}", url);
+            }
+        }
+
         Commands::CheckDeposit { user_id } => {
             // Load credentials and check for JWT
             let mut creds = load_credentials_from_file(config_path)?.ok_or_else(|| {
@@ -5933,67 +7282,553 @@ pub async fn run_cli() -> Result<()> {
                 creds.user_id = uid;
             }
 
-            let mut request = client.get(format!("{}/deposit/balance", base_url));
-            request = add_auth_headers(request, &creds, false);
+            let status = fetch_credits_status(&client, base_url, &creds).await?;
+            print_credits_status(&status);
+        }
+
+        Commands::CreditsStatus { user_id } => {
+            let mut creds = load_credentials_from_file(config_path)?.ok_or_else(|| {
+                anyhow!("No credentials found. Please create a user or login first.")
+            })?;
+            ensure_valid_token(&client, base_url, &mut creds, config_path).await?;
+
+            if let Some(uid) = user_id {
+                creds.user_id = uid;
+            }
+
+            let status = fetch_credits_status(&client, base_url, &creds).await?;
+            print_credits_status(&status);
+        }
+
+        Commands::CreditsIntent { amount, user_id } => {
+            let mut creds = load_credentials_from_file(config_path)?.ok_or_else(|| {
+                anyhow!("No credentials found. Please create a user or login first.")
+            })?;
+            ensure_valid_token(&client, base_url, &mut creds, config_path).await?;
+
+            if let Some(uid) = user_id {
+                creds.user_id = uid;
+            }
+
+            let amount_usdc_raw = parse_usdc_ui_to_raw(&amount)?;
+
+            let mut request = client.post(format!("{}/api/credits/intent", base_url));
+            request = add_auth_headers(request, &creds, true)?;
+            request = request.json(&CreateCreditsIntentRequest { amount_usdc_raw });
 
             let resp = request.send().await?;
             let status = resp.status();
             let text_body = resp.text().await?;
-
-            if status.is_success() {
-                let json = serde_json::from_str::<DepositBalanceResponse>(&text_body)?;
-                
-                println!("╔══════════════════════════════════════════════════════════════╗");
-                println!("║                  💰 DEPOSIT BALANCE                          ║");
-                println!("╚══════════════════════════════════════════════════════════════╝");
-                println!();
-                println!("User: {}", json.user_id);
-                println!("Wallet Address: {}", json.wallet_address);
-                println!();
-                println!("💵 Deposit Balance: {:.4} PIPE (${:.2} USD)", 
-                    json.deposit_balance_pipe,
-                    json.deposit_balance_pipe * json.storage_quota.pipe_price_usd);
-                println!("📊 PIPE Price: ${:.6} USD", json.storage_quota.pipe_price_usd);
-                println!();
-                println!("📦 Available Storage:");
-                println!("┌──────────────┬────────────────┬──────────────┬──────────────┐");
-                println!("│ Tier         │ Available GB   │ PIPE/GB      │ USD/GB       │");
-                println!("├──────────────┼────────────────┼──────────────┼──────────────┤");
-                
-                for tier in &json.storage_quota.tier_estimates {
-                    println!("│ {:<12} │ {:>12.2} GB│ {:>10.4} │ ${:>11.4} │",
-                        tier.tier_name,
-                        tier.available_gb,
-                        tier.cost_per_gb_pipe,
-                        tier.cost_per_gb_usd
-                    );
-                }
-                
-                println!("└──────────────┴────────────────┴──────────────┴──────────────┘");
-                println!();
-                println!("📊 Statistics:");
-                println!("  Total Deposited: {:.4} PIPE", json.total_deposited as f64 / 1e9);
-                println!("  Total Burned:    {:.4} PIPE", json.total_burned as f64 / 1e9);
-                
-                if let Some(last_deposit) = json.last_deposit_at {
-                    println!("  Last Deposit:    {}", last_deposit);
-                }
-                
-                println!();
-                println!("💡 To deposit more PIPE:");
-                println!("   Send PIPE tokens to: {}", json.wallet_address);
-                println!("   Then run: pipe sync-deposits");
-                
-            } else {
+            if !status.is_success() {
                 return Err(anyhow!(
-                    "Check deposit failed. Status = {}, Body = {}",
+                    "Credits intent failed. Status = {}, Body = {}",
                     status,
                     text_body
                 ));
             }
+
+            let intent = serde_json::from_str::<CreditsIntentResponse>(&text_body)?;
+            println!("✅ Credits intent created");
+            println!("Status: {}", intent.status);
+            println!("Intent ID: {}", intent.intent_id);
+            println!(
+                "Amount: ${} USDC",
+                format_usdc_ui(usdc_raw_to_ui(intent.requested_usdc_raw))
+            );
+            println!("USDC mint: {}", intent.usdc_mint);
+            println!("Treasury: {}", intent.treasury_owner_pubkey);
+            println!("Reference: {}", intent.reference_pubkey);
+            println!();
+            println!(
+                "Solana Pay: {}",
+                solana_pay_url_raw(
+                    &intent.treasury_owner_pubkey,
+                    intent.requested_usdc_raw,
+                    &intent.usdc_mint,
+                    &intent.reference_pubkey,
+                    6
+                )
+            );
+            println!();
+            println!("Next:");
+            println!("  1) Pay the Solana Pay link in your wallet");
+            println!(
+                "  2) Submit the tx: pipe credits-submit {} <tx_sig>",
+                intent.intent_id
+            );
         }
-        
-        Commands::EstimateCost { file_path, tier, user_id } => {
+
+        Commands::CreditsSubmit {
+            intent_id,
+            tx_sig,
+            user_id,
+        } => {
+            let mut creds = load_credentials_from_file(config_path)?.ok_or_else(|| {
+                anyhow!("No credentials found. Please create a user or login first.")
+            })?;
+            ensure_valid_token(&client, base_url, &mut creds, config_path).await?;
+
+            if let Some(uid) = user_id {
+                creds.user_id = uid;
+            }
+
+            let mut request = client.post(format!("{}/api/credits/submit", base_url));
+            request = add_auth_headers(request, &creds, true)?;
+            request = request.json(&SubmitCreditsPaymentRequest { intent_id, tx_sig });
+
+            let resp = request.send().await?;
+            let status = resp.status();
+            let text_body = resp.text().await?;
+            if !status.is_success() {
+                return Err(anyhow!(
+                    "Credits submit failed. Status = {}, Body = {}",
+                    status,
+                    text_body
+                ));
+            }
+
+            let result = serde_json::from_str::<SubmitCreditsPaymentResponse>(&text_body)?;
+            println!("✅ Credits updated");
+            println!("Intent: {}", result.intent_id);
+            println!("Status: {}", result.status);
+            println!(
+                "Detected: ${} USDC",
+                format_usdc_ui(usdc_raw_to_ui(result.detected_usdc_raw))
+            );
+            println!(
+                "Credited: ${} USDC",
+                format_usdc_ui(usdc_raw_to_ui(result.credited_usdc_raw))
+            );
+            println!(
+                "Balance:  ${} USDC",
+                format_usdc_ui(usdc_raw_to_ui(result.balance_usdc_raw))
+            );
+        }
+
+        Commands::CreditsCancel { intent_id, user_id } => {
+            let mut creds = load_credentials_from_file(config_path)?.ok_or_else(|| {
+                anyhow!("No credentials found. Please create a user or login first.")
+            })?;
+            ensure_valid_token(&client, base_url, &mut creds, config_path).await?;
+
+            if let Some(uid) = user_id {
+                creds.user_id = uid;
+            }
+
+            let mut request = client.post(format!("{}/api/credits/cancel", base_url));
+            request = add_auth_headers(request, &creds, true)?;
+            request = request.json(&CancelCreditsIntentRequest { intent_id });
+
+            let resp = request.send().await?;
+            let status = resp.status();
+            let text_body = resp.text().await?;
+            if !status.is_success() {
+                return Err(anyhow!(
+                    "Credits cancel failed. Status = {}, Body = {}",
+                    status,
+                    text_body
+                ));
+            }
+
+            let result = serde_json::from_str::<CreditsCancelResponse>(&text_body)?;
+            println!(
+                "✅ Intent cancelled: {} ({})",
+                result.intent_id, result.status
+            );
+        }
+
+        Commands::PipeCreditsStatus { user_id } => {
+            let mut creds = load_credentials_from_file(config_path)?.ok_or_else(|| {
+                anyhow!("No credentials found. Please create a user or login first.")
+            })?;
+            ensure_valid_token(&client, base_url, &mut creds, config_path).await?;
+
+            if let Some(uid) = user_id {
+                creds.user_id = uid;
+            }
+
+            let mut request = client.get(format!("{}/api/pipe-credits/status", base_url));
+            request = add_auth_headers(request, &creds, false)?;
+
+            let resp = request.send().await?;
+            let status = resp.status();
+            let text_body = resp.text().await?;
+            if !status.is_success() {
+                return Err(anyhow!(
+                    "Pipe credits status failed. Status = {}, Body = {}",
+                    status,
+                    text_body
+                ));
+            }
+
+            let status_resp = serde_json::from_str::<PipeCreditsStatusResponse>(&text_body)?;
+            println!(
+                "💳 Credits balance: ${} USDC",
+                format_usdc_ui(usdc_raw_to_ui(status_resp.balance_usdc_raw))
+            );
+
+            if let Some(intent) = status_resp.intent.as_ref() {
+                println!();
+                println!("🧾 Pending PIPE top-up:");
+                println!("  Status:    {}", intent.status);
+                println!("  Intent ID: {}", intent.intent_id);
+                println!(
+                    "  Buy:       ${} USDC",
+                    format_usdc_ui(usdc_raw_to_ui(intent.requested_usdc_raw))
+                );
+                println!(
+                    "  Credit:    ${} USDC (bonus)",
+                    format_usdc_ui(usdc_raw_to_ui(intent.credited_usdc_raw))
+                );
+                println!(
+                    "  Required:  {} PIPE",
+                    format_pipe_ui(pipe_raw_to_ui(intent.required_pipe_raw))
+                );
+                if intent.detected_pipe_raw > 0 {
+                    println!(
+                        "  Detected:  {} PIPE",
+                        format_pipe_ui(pipe_raw_to_ui(intent.detected_pipe_raw))
+                    );
+                }
+                if let Some(sig) = intent.payment_tx_sig.as_deref() {
+                    println!("  Tx Sig:    {}", sig);
+                }
+                println!("  Reference: {}", intent.reference_pubkey);
+                if !intent.treasury_owner_pubkey.is_empty() {
+                    println!("  Treasury:  {}", intent.treasury_owner_pubkey);
+                    println!(
+                        "  Solana Pay: {}",
+                        solana_pay_url_raw(
+                            &intent.treasury_owner_pubkey,
+                            intent.required_pipe_raw,
+                            &intent.pipe_mint,
+                            &intent.reference_pubkey,
+                            9
+                        )
+                    );
+                }
+            }
+        }
+
+        Commands::PipeCreditsIntent { amount, user_id } => {
+            let mut creds = load_credentials_from_file(config_path)?.ok_or_else(|| {
+                anyhow!("No credentials found. Please create a user or login first.")
+            })?;
+            ensure_valid_token(&client, base_url, &mut creds, config_path).await?;
+
+            if let Some(uid) = user_id {
+                creds.user_id = uid;
+            }
+
+            let amount_usdc_raw = parse_usdc_ui_to_raw(&amount)?;
+
+            let mut request = client.post(format!("{}/api/pipe-credits/intent", base_url));
+            request = add_auth_headers(request, &creds, true)?;
+            request = request.json(&CreateCreditsIntentRequest { amount_usdc_raw });
+
+            let resp = request.send().await?;
+            let status = resp.status();
+            let text_body = resp.text().await?;
+            if !status.is_success() {
+                return Err(anyhow!(
+                    "Pipe credits intent failed. Status = {}, Body = {}",
+                    status,
+                    text_body
+                ));
+            }
+
+            let intent = serde_json::from_str::<PipeCreditsIntentResponse>(&text_body)?;
+            println!("✅ PIPE top-up intent created");
+            println!("Status: {}", intent.status);
+            println!("Intent ID: {}", intent.intent_id);
+            println!(
+                "Buy: ${} USDC",
+                format_usdc_ui(usdc_raw_to_ui(intent.requested_usdc_raw))
+            );
+            println!(
+                "Credits after bonus: ${} USDC",
+                format_usdc_ui(usdc_raw_to_ui(intent.credited_usdc_raw))
+            );
+            println!("PIPE price (quote): ${:.6}", intent.pipe_price_usd);
+            println!(
+                "Pay: {} PIPE",
+                format_pipe_ui(pipe_raw_to_ui(intent.required_pipe_raw))
+            );
+            println!("PIPE mint: {}", intent.pipe_mint);
+            println!("Treasury: {}", intent.treasury_owner_pubkey);
+            println!("Reference: {}", intent.reference_pubkey);
+            println!();
+            println!(
+                "Solana Pay: {}",
+                solana_pay_url_raw(
+                    &intent.treasury_owner_pubkey,
+                    intent.required_pipe_raw,
+                    &intent.pipe_mint,
+                    &intent.reference_pubkey,
+                    9
+                )
+            );
+            println!();
+            println!("Next:");
+            println!("  1) Pay the Solana Pay link in your wallet");
+            println!(
+                "  2) Submit the tx: pipe pipe-credits-submit {} <tx_sig>",
+                intent.intent_id
+            );
+        }
+
+        Commands::PipeCreditsSubmit {
+            intent_id,
+            tx_sig,
+            user_id,
+        } => {
+            let mut creds = load_credentials_from_file(config_path)?.ok_or_else(|| {
+                anyhow!("No credentials found. Please create a user or login first.")
+            })?;
+            ensure_valid_token(&client, base_url, &mut creds, config_path).await?;
+
+            if let Some(uid) = user_id {
+                creds.user_id = uid;
+            }
+
+            let mut request = client.post(format!("{}/api/pipe-credits/submit", base_url));
+            request = add_auth_headers(request, &creds, true)?;
+            request = request.json(&SubmitCreditsPaymentRequest { intent_id, tx_sig });
+
+            let resp = request.send().await?;
+            let status = resp.status();
+            let text_body = resp.text().await?;
+            if !status.is_success() {
+                return Err(anyhow!(
+                    "Pipe credits submit failed. Status = {}, Body = {}",
+                    status,
+                    text_body
+                ));
+            }
+
+            let result = serde_json::from_str::<SubmitPipeCreditsPaymentResponse>(&text_body)?;
+            println!("✅ Credits updated");
+            println!("Intent: {}", result.intent_id);
+            println!("Status: {}", result.status);
+            println!(
+                "Detected: {} PIPE",
+                format_pipe_ui(pipe_raw_to_ui(result.detected_pipe_raw))
+            );
+            println!(
+                "Credited: ${} USDC",
+                format_usdc_ui(usdc_raw_to_ui(result.credited_usdc_raw))
+            );
+            println!(
+                "Balance:  ${} USDC",
+                format_usdc_ui(usdc_raw_to_ui(result.balance_usdc_raw))
+            );
+        }
+
+        Commands::PipeCreditsCancel { intent_id, user_id } => {
+            let mut creds = load_credentials_from_file(config_path)?.ok_or_else(|| {
+                anyhow!("No credentials found. Please create a user or login first.")
+            })?;
+            ensure_valid_token(&client, base_url, &mut creds, config_path).await?;
+
+            if let Some(uid) = user_id {
+                creds.user_id = uid;
+            }
+
+            let mut request = client.post(format!("{}/api/pipe-credits/cancel", base_url));
+            request = add_auth_headers(request, &creds, true)?;
+            request = request.json(&CancelCreditsIntentRequest { intent_id });
+
+            let resp = request.send().await?;
+            let status = resp.status();
+            let text_body = resp.text().await?;
+            if !status.is_success() {
+                return Err(anyhow!(
+                    "Pipe credits cancel failed. Status = {}, Body = {}",
+                    status,
+                    text_body
+                ));
+            }
+
+            let result = serde_json::from_str::<PipeCreditsCancelResponse>(&text_body)?;
+            println!(
+                "✅ Intent cancelled: {} ({})",
+                result.intent_id, result.status
+            );
+        }
+
+        Commands::LifetimeStatus { user_id } => {
+            let mut creds = load_credentials_from_file(config_path)?.ok_or_else(|| {
+                anyhow!("No credentials found. Please create a user or login first.")
+            })?;
+            ensure_valid_token(&client, base_url, &mut creds, config_path).await?;
+
+            if let Some(uid) = user_id {
+                creds.user_id = uid;
+            }
+
+            let mut request = client.get(format!("{}/api/subscription/lifetime/status", base_url));
+            request = add_auth_headers(request, &creds, false)?;
+
+            let resp = request.send().await?;
+            let status = resp.status();
+            let text_body = resp.text().await?;
+            if !status.is_success() {
+                return Err(anyhow!(
+                    "Lifetime status failed. Status = {}, Body = {}",
+                    status,
+                    text_body
+                ));
+            }
+
+            let lifetime = serde_json::from_str::<LifetimeStatusResponse>(&text_body)?;
+            println!(
+                "♾️  Lifetime active: {}",
+                if lifetime.lifetime_active {
+                    "yes"
+                } else {
+                    "no"
+                }
+            );
+            if let Some(ts) = lifetime.lifetime_activated_at.as_deref() {
+                println!("🕒 Activated at: {}", ts);
+            }
+            if let Some(intent) = lifetime.intent.as_ref() {
+                println!();
+                println!("🧾 Intent:");
+                println!("  Status:    {}", intent.status);
+                println!("  Intent ID: {}", intent.intent_id);
+                println!(
+                    "  Required:  ${} USDC",
+                    format_usdc_ui(usdc_raw_to_ui(intent.required_usdc_raw))
+                );
+                println!(
+                    "  Detected:  ${} USDC",
+                    format_usdc_ui(usdc_raw_to_ui(intent.detected_usdc_raw))
+                );
+                println!(
+                    "  Remaining: ${} USDC",
+                    format_usdc_ui(usdc_raw_to_ui(intent.remaining_usdc_raw))
+                );
+                println!("  Reference: {}", intent.reference_pubkey);
+                if !intent.treasury_owner_pubkey.is_empty() {
+                    println!(
+                        "  Solana Pay: {}",
+                        solana_pay_url_raw(
+                            &intent.treasury_owner_pubkey,
+                            intent.remaining_usdc_raw,
+                            &intent.usdc_mint,
+                            &intent.reference_pubkey,
+                            6
+                        )
+                    );
+                }
+            }
+        }
+
+        Commands::LifetimeIntent { user_id } => {
+            let mut creds = load_credentials_from_file(config_path)?.ok_or_else(|| {
+                anyhow!("No credentials found. Please create a user or login first.")
+            })?;
+            ensure_valid_token(&client, base_url, &mut creds, config_path).await?;
+
+            if let Some(uid) = user_id {
+                creds.user_id = uid;
+            }
+
+            let mut request = client.post(format!("{}/api/subscription/lifetime/intent", base_url));
+            request = add_auth_headers(request, &creds, true)?;
+            request = request.json(&serde_json::json!({}));
+
+            let resp = request.send().await?;
+            let status = resp.status();
+            let text_body = resp.text().await?;
+            if !status.is_success() {
+                return Err(anyhow!(
+                    "Lifetime intent failed. Status = {}, Body = {}",
+                    status,
+                    text_body
+                ));
+            }
+
+            let intent = serde_json::from_str::<LifetimeIntentResponse>(&text_body)?;
+            println!("✅ Lifetime intent created");
+            println!("Status: {}", intent.status);
+            println!("Intent ID: {}", intent.intent_id);
+            println!("Price: {} USDC", intent.required_usdc);
+            println!("USDC mint: {}", intent.usdc_mint);
+            println!("Treasury: {}", intent.treasury_owner_pubkey);
+            println!("Reference: {}", intent.reference_pubkey);
+            println!();
+            println!(
+                "Solana Pay: {}",
+                solana_pay_url_raw(
+                    &intent.treasury_owner_pubkey,
+                    intent.required_usdc_raw,
+                    &intent.usdc_mint,
+                    &intent.reference_pubkey,
+                    6
+                )
+            );
+            if let Some(url) = intent.lifetime_terms_url.as_deref() {
+                println!("Terms: {}", url);
+            }
+            println!();
+            println!("Next:");
+            println!("  1) Pay the Solana Pay link in your wallet");
+            println!(
+                "  2) Submit the tx: pipe lifetime-submit {} <tx_sig>",
+                intent.intent_id
+            );
+        }
+
+        Commands::LifetimeSubmit {
+            intent_id,
+            tx_sig,
+            user_id,
+        } => {
+            let mut creds = load_credentials_from_file(config_path)?.ok_or_else(|| {
+                anyhow!("No credentials found. Please create a user or login first.")
+            })?;
+            ensure_valid_token(&client, base_url, &mut creds, config_path).await?;
+
+            if let Some(uid) = user_id {
+                creds.user_id = uid;
+            }
+
+            let mut request = client.post(format!("{}/api/subscription/lifetime/submit", base_url));
+            request = add_auth_headers(request, &creds, true)?;
+            request = request.json(&SubmitLifetimePaymentRequest { intent_id, tx_sig });
+
+            let resp = request.send().await?;
+            let status = resp.status();
+            let text_body = resp.text().await?;
+            if !status.is_success() {
+                return Err(anyhow!(
+                    "Lifetime submit failed. Status = {}, Body = {}",
+                    status,
+                    text_body
+                ));
+            }
+
+            let result = serde_json::from_str::<SubmitLifetimePaymentResponse>(&text_body)?;
+            println!("✅ Lifetime payment updated");
+            println!("Intent: {}", result.intent_id);
+            println!("Status: {}", result.status);
+            println!(
+                "Detected: ${} USDC",
+                format_usdc_ui(usdc_raw_to_ui(result.detected_usdc_raw))
+            );
+            println!(
+                "Remaining: ${} USDC",
+                format_usdc_ui(usdc_raw_to_ui(result.remaining_usdc_raw))
+            );
+        }
+
+        Commands::EstimateCost {
+            file_path,
+            tier,
+            user_id,
+        } => {
             // Load credentials and check for JWT
             let mut creds = load_credentials_from_file(config_path)?.ok_or_else(|| {
                 anyhow!("No credentials found. Please create a user or login first.")
@@ -6006,145 +7841,582 @@ pub async fn run_cli() -> Result<()> {
             if let Some(uid) = user_id {
                 creds.user_id = uid;
             }
-            
+
             // Get file size
             let metadata = tokio::fs::metadata(&file_path).await?;
             let file_size = metadata.len();
-            
-            let mut request = client.post(format!("{}/deposit/estimate", base_url));
-            request = add_auth_headers(request, &creds, false);
-            
-            let req_body = EstimateUploadRequest {
-                file_size_bytes: file_size,
-                tier: Some(tier.clone()),
-            };
-            request = request.json(&req_body);
-            
-            let resp = request.send().await?;
-            let status = resp.status();
-            let text_body = resp.text().await?;
-            
-            if status.is_success() {
-                let estimate: UploadEstimate = serde_json::from_str(&text_body)?;
-                
-                println!("╔══════════════════════════════════════════════════════════════╗");
-                println!("║                   📊 UPLOAD COST ESTIMATE                    ║");
-                println!("╚══════════════════════════════════════════════════════════════╝");
-                println!();
-                println!("📁 File: {}", file_path);
-                println!("📏 Size: {:.2} GB ({} bytes)", file_size as f64 / 1_073_741_824.0, file_size);
-                println!("🎯 Tier: {}", estimate.tier_name);
-                println!();
-                println!("💰 Estimated Cost:");
-                println!("   {:.6} PIPE (${:.4} USD)", 
-                    estimate.estimated_cost_pipe,
-                    estimate.estimated_cost_usd);
-                println!();
-                println!("💳 Your Balance:");
-                let current_balance = estimate.remaining_balance_pipe + estimate.estimated_cost_pipe;
-                println!("   Before Upload: {:.6} PIPE", current_balance);
-                println!("   After Upload:  {:.6} PIPE", estimate.remaining_balance_pipe);
-                println!();
-                
-                if estimate.can_afford {
-                    println!("✅ Status: CAN AFFORD");
-                    println!();
-                    println!("   You have sufficient deposit balance for this upload.");
-                } else {
-                    println!("❌ Status: INSUFFICIENT BALANCE");
-                    let needed = estimate.estimated_cost_pipe - current_balance;
-                    println!();
-                    println!("   You need {:.6} more PIPE to upload this file.", needed);
-                    println!("   Current balance: {:.6} PIPE", current_balance);
-                    println!("   Required: {:.6} PIPE", estimate.estimated_cost_pipe);
-                }
-                
+
+            let credits = fetch_credits_status(&client, base_url, &creds).await?;
+            let tier_est = credits
+                .quota
+                .tier_estimates
+                .iter()
+                .find(|t| t.tier_name.eq_ignore_ascii_case(&tier))
+                .ok_or_else(|| anyhow!("Unknown tier: {}", tier))?;
+
+            let file_size_gb = bytes_to_gb_decimal(file_size);
+            let estimated_cost_usdc = file_size_gb * tier_est.cost_per_gb_usdc;
+            let remaining = credits.balance_usdc - estimated_cost_usdc;
+
+            println!("╔══════════════════════════════════════════════════════════════╗");
+            println!("║               📊 UPLOAD COST ESTIMATE (USDC)                 ║");
+            println!("╚══════════════════════════════════════════════════════════════╝");
+            println!();
+            println!("📁 File: {}", file_path);
+            println!("📏 Size: {:.2} GB ({} bytes)", file_size_gb, file_size);
+            println!("🎯 Tier: {}", tier_est.tier_name);
+            println!();
+            println!(
+                "💵 Rate: ${} USDC/GB",
+                format_usdc_ui(tier_est.cost_per_gb_usdc)
+            );
+            println!(
+                "💰 Estimated Cost: ${} USDC",
+                format_usdc_ui(estimated_cost_usdc)
+            );
+            println!();
+            println!(
+                "💳 Credits Balance: ${} USDC",
+                format_usdc_ui(credits.balance_usdc)
+            );
+            println!(
+                "📦 Available Storage ({}): {:.2} GB",
+                tier_est.tier_name, tier_est.available_gb
+            );
+            println!();
+            if remaining + 1e-9 >= 0.0 {
+                println!("✅ Status: CAN AFFORD");
+                println!("   After Upload: ${} USDC", format_usdc_ui(remaining));
+                println!(
+                    "   Remaining Storage ({}): {:.2} GB",
+                    tier_est.tier_name,
+                    (remaining / tier_est.cost_per_gb_usdc).max(0.0)
+                );
             } else {
-                return Err(anyhow!(
-                    "Estimate cost failed. Status = {}, Body = {}",
-                    status,
-                    text_body
-                ));
+                println!("❌ Status: INSUFFICIENT CREDITS");
+                println!(
+                    "   Need ${} more USDC",
+                    format_usdc_ui((-remaining).max(0.0))
+                );
+                println!("   Top up: pipe credits-intent 10");
             }
         }
-        
-        Commands::SyncDeposits { user_id } => {
-            // Load credentials and check for JWT
+
+        Commands::SyncDeposits {
+            user_id,
+            intent_id,
+            tx_sig,
+        } => {
             let mut creds = load_credentials_from_file(config_path)?.ok_or_else(|| {
                 anyhow!("No credentials found. Please create a user or login first.")
             })?;
 
-            // Ensure we have valid JWT token if available
             ensure_valid_token(&client, base_url, &mut creds, config_path).await?;
 
-            // Override with command-line args if provided
             if let Some(uid) = user_id {
                 creds.user_id = uid;
             }
-            
-            println!("🔄 Syncing deposits from wallet...");
-            println!();
-            
-            let mut request = client.post(format!("{}/deposit/sync", base_url));
-            request = add_auth_headers(request, &creds, false);
-            
+
+            if tx_sig.is_none() {
+                let status = fetch_credits_status(&client, base_url, &creds).await?;
+                print_credits_status(&status);
+                println!();
+                println!("To top up credits: pipe credits-intent 10");
+                println!("To submit a payment: pipe credits-submit <intent_id> <tx_sig>");
+                return Ok(());
+            }
+
+            let tx_sig = tx_sig.expect("checked above");
+            let intent_id = match intent_id {
+                Some(v) => v,
+                None => {
+                    let status = fetch_credits_status(&client, base_url, &creds).await?;
+                    status.intent.map(|i| i.intent_id).ok_or_else(|| {
+                        anyhow!(
+                            "No pending intent found. Run `pipe credits-intent <amount>` first."
+                        )
+                    })?
+                }
+            };
+
+            let mut request = client.post(format!("{}/api/credits/submit", base_url));
+            request = add_auth_headers(request, &creds, true)?;
+            request = request.json(&SubmitCreditsPaymentRequest { intent_id, tx_sig });
+
             let resp = request.send().await?;
             let status = resp.status();
             let text_body = resp.text().await?;
-            
-            if status.is_success() {
-                let result: SyncDepositsResponse = serde_json::from_str(&text_body)?;
-                
-                if result.success {
-                    if result.deposited_pipe > 0.0 {
-                        println!("✅ New deposit detected!");
-                        println!();
-                        println!("   Amount: {:.6} PIPE (${:.4} USD)", 
-                            result.deposited_pipe,
-                            result.deposited_amount as f64 / 1e9 * 0.10); // Approximate USD
-                        println!();
-                        
-                        // Get updated balance
-                        let balance_req = client.get(format!("{}/deposit/balance", base_url));
-                        let balance_req = add_auth_headers(balance_req, &creds, false);
-                        
-                        if let Ok(balance_resp) = balance_req.send().await {
-                            if let Ok(balance_text) = balance_resp.text().await {
-                                if let Ok(balance) = serde_json::from_str::<DepositBalanceResponse>(&balance_text) {
-                                    println!("💰 Updated Balance: {:.6} PIPE (${:.2} USD)", 
-                                        balance.deposit_balance_pipe,
-                                        balance.deposit_balance_pipe * balance.storage_quota.pipe_price_usd);
-                                    
-                                    // Show storage for Normal tier
-                                    if let Some(normal) = balance.storage_quota.tier_estimates.first() {
-                                        println!("📦 Storage Available: {:.2} GB (Normal tier)", 
-                                            normal.available_gb);
-                                    }
-                                }
-                            }
-                        }
-                    } else {
-                        println!("ℹ️  No new deposits found");
-                        println!();
-                        println!("   {}", result.message);
-                    }
-                    
-                    println!();
-                    println!("💡 To deposit PIPE:");
-                    println!("   1. Run: pipe check-deposit");
-                    println!("   2. Send PIPE to your wallet address");
-                    println!("   3. Wait 30 seconds or run: pipe sync-deposits");
-                    
-                } else {
-                    return Err(anyhow!("Sync failed: {}", result.message));
-                }
-                
-            } else {
+            if !status.is_success() {
                 return Err(anyhow!(
-                    "Sync deposits failed. Status = {}, Body = {}",
+                    "Credits submit failed. Status = {}, Body = {}",
                     status,
                     text_body
                 ));
+            }
+
+            let result = serde_json::from_str::<SubmitCreditsPaymentResponse>(&text_body)?;
+            println!("✅ Credits updated");
+            println!(
+                "Credited: ${} USDC",
+                format_usdc_ui(usdc_raw_to_ui(result.credited_usdc_raw))
+            );
+            println!(
+                "Balance:  ${} USDC",
+                format_usdc_ui(usdc_raw_to_ui(result.balance_usdc_raw))
+            );
+        }
+
+        Commands::S3 { command } => {
+            let mut creds = load_credentials_from_file(config_path)?.ok_or_else(|| {
+                anyhow!("No credentials found. Please create a user or login first.")
+            })?;
+            ensure_valid_token(&client, base_url, &mut creds, config_path).await?;
+
+            match command {
+                S3Commands::Keys { command } => match command {
+                    S3KeysCommands::Create { read_only } => {
+                        let mut request = client.post(format!("{}/api/s3/keys", base_url));
+                        if read_only {
+                            request = request.query(&[("read_only", "true")]);
+                        }
+                        request = add_auth_headers(request, &creds, true)?;
+
+                        let resp = request.send().await?;
+                        let status = resp.status();
+                        let text_body = resp.text().await?;
+                        if !status.is_success() {
+                            return Err(anyhow!(
+                                "S3 key create failed. Status = {}, Body = {}",
+                                status,
+                                text_body
+                            ));
+                        }
+
+                        let created = serde_json::from_str::<S3CreateKeyResponse>(&text_body)?;
+                        let bucket = bucket_name_for_user_id(&creds.user_id);
+                        let region = creds.s3_region.as_deref().unwrap_or("us-east-1");
+                        println!("✅ S3 key created");
+                        println!("Access key id: {}", created.access_key_id);
+                        println!("Secret key: {}", created.secret);
+                        println!(
+                            "Read-only: {}",
+                            if created.read_only { "yes" } else { "no" }
+                        );
+                        println!();
+                        println!("Bucket: {}", bucket);
+                        if let Some(endpoint) = creds.s3_endpoint.as_deref() {
+                            println!("S3 endpoint: {}", endpoint);
+                        } else {
+                            println!("S3 endpoint: (not set)  — set one with: pipe config set-s3-endpoint https://s3.YOURDOMAIN");
+                        }
+                        println!();
+                        println!("AWS CLI (copy/paste):");
+                        println!("  export AWS_ACCESS_KEY_ID={}", created.access_key_id);
+                        println!("  export AWS_SECRET_ACCESS_KEY={}", created.secret);
+                        println!("  export AWS_DEFAULT_REGION={}", region);
+                        if let Some(endpoint) = creds.s3_endpoint.as_deref() {
+                            println!("  aws --endpoint-url {} s3 ls s3://{}", endpoint, bucket);
+                        }
+                        println!();
+                        println!("Next:");
+                        println!("  pipe s3 bucket get");
+                        println!("  pipe s3 presign --method GET --key path/to/object");
+                    }
+                    S3KeysCommands::Rotate {
+                        from,
+                        revoke_old,
+                        mode,
+                    } => {
+                        // Load current keys to pick an old key (and inherit its mode by default).
+                        let mut request = client.get(format!("{}/api/s3/keys", base_url));
+                        request = add_auth_headers(request, &creds, false)?;
+                        let resp = request.send().await?;
+                        let status = resp.status();
+                        let text_body = resp.text().await?;
+                        if !status.is_success() {
+                            return Err(anyhow!(
+                                "S3 keys list failed. Status = {}, Body = {}",
+                                status,
+                                text_body
+                            ));
+                        }
+
+                        let listed = serde_json::from_str::<S3KeysListResponse>(&text_body)?;
+                        let mut keys = listed.keys;
+
+                        let old_key_opt = match from.as_deref() {
+                            Some(id) => {
+                                let found = keys.iter().find(|k| k.access_key_id == id).cloned();
+                                let Some(found) = found else {
+                                    return Err(anyhow!("Key not found: {}", id));
+                                };
+                                if found.revoked_at.is_some() {
+                                    return Err(anyhow!("Key is already revoked: {}", id));
+                                }
+                                Some(found)
+                            }
+                            None => {
+                                keys.retain(|k| k.revoked_at.is_none());
+                                keys.sort_by_key(|k| {
+                                    k.created_at.map(|t| t.timestamp()).unwrap_or(0)
+                                });
+                                keys.last().cloned()
+                            }
+                        };
+
+                        let new_read_only = match mode.as_deref() {
+                            Some(m) => parse_s3_key_mode(m)?,
+                            None => old_key_opt.as_ref().map(|k| k.read_only).unwrap_or(true),
+                        };
+
+                        let mut create_req = client.post(format!("{}/api/s3/keys", base_url));
+                        if new_read_only {
+                            create_req = create_req.query(&[("read_only", "true")]);
+                        }
+                        create_req = add_auth_headers(create_req, &creds, true)?;
+
+                        let resp = create_req.send().await?;
+                        let status = resp.status();
+                        let text_body = resp.text().await?;
+                        if !status.is_success() {
+                            return Err(anyhow!(
+                                "S3 key create failed. Status = {}, Body = {}",
+                                status,
+                                text_body
+                            ));
+                        }
+
+                        let created = serde_json::from_str::<S3CreateKeyResponse>(&text_body)?;
+                        let bucket = bucket_name_for_user_id(&creds.user_id);
+                        let region = creds.s3_region.as_deref().unwrap_or("us-east-1");
+
+                        println!("✅ S3 key rotated");
+                        if let Some(old) = old_key_opt.as_ref() {
+                            println!("Old access key id: {}", old.access_key_id);
+                        }
+                        println!("New access key id: {}", created.access_key_id);
+                        println!("Secret key: {}", created.secret);
+                        println!(
+                            "Read-only: {}",
+                            if created.read_only { "yes" } else { "no" }
+                        );
+                        println!();
+                        println!("Bucket: {}", bucket);
+                        if let Some(endpoint) = creds.s3_endpoint.as_deref() {
+                            println!("S3 endpoint: {}", endpoint);
+                        } else {
+                            println!("S3 endpoint: (not set)  — set one with: pipe config set-s3-endpoint https://s3.YOURDOMAIN");
+                        }
+                        println!();
+                        println!("AWS CLI (copy/paste):");
+                        println!("  export AWS_ACCESS_KEY_ID={}", created.access_key_id);
+                        println!("  export AWS_SECRET_ACCESS_KEY={}", created.secret);
+                        println!("  export AWS_DEFAULT_REGION={}", region);
+                        if let Some(endpoint) = creds.s3_endpoint.as_deref() {
+                            println!("  aws --endpoint-url {} s3 ls s3://{}", endpoint, bucket);
+                        }
+
+                        if revoke_old {
+                            if let Some(old) = old_key_opt {
+                                let mut revoke_req = client.delete(format!(
+                                    "{}/api/s3/keys/{}",
+                                    base_url, old.access_key_id
+                                ));
+                                revoke_req = add_auth_headers(revoke_req, &creds, true)?;
+                                let resp = revoke_req.send().await?;
+                                let status = resp.status();
+                                let text_body = resp.text().await?;
+                                if status == StatusCode::NOT_FOUND {
+                                    println!(
+                                        "\nOld key not found (already revoked?): {}",
+                                        old.access_key_id
+                                    );
+                                    return Ok(());
+                                }
+                                if !status.is_success() {
+                                    return Err(anyhow!(
+                                        "S3 key revoke failed. Status = {}, Body = {}",
+                                        status,
+                                        text_body
+                                    ));
+                                }
+                                let result =
+                                    serde_json::from_str::<S3RevokeKeyResponse>(&text_body)?;
+                                if result.revoked {
+                                    println!("\n✅ Old key revoked: {}", old.access_key_id);
+                                } else {
+                                    println!("\nOld key not found: {}", old.access_key_id);
+                                }
+                            } else {
+                                println!("\nNo old key to revoke (no active keys found).");
+                            }
+                        }
+                    }
+                    S3KeysCommands::List => {
+                        let mut request = client.get(format!("{}/api/s3/keys", base_url));
+                        request = add_auth_headers(request, &creds, false)?;
+
+                        let resp = request.send().await?;
+                        let status = resp.status();
+                        let text_body = resp.text().await?;
+                        if !status.is_success() {
+                            return Err(anyhow!(
+                                "S3 keys list failed. Status = {}, Body = {}",
+                                status,
+                                text_body
+                            ));
+                        }
+
+                        let listed = serde_json::from_str::<S3KeysListResponse>(&text_body)?;
+                        if listed.keys.is_empty() {
+                            println!("No S3 keys found.");
+                        } else {
+                            for k in listed.keys {
+                                let access = if k.read_only {
+                                    "read-only"
+                                } else {
+                                    "read-write"
+                                };
+                                let status = if k.revoked_at.is_some() {
+                                    "revoked"
+                                } else {
+                                    "active"
+                                };
+                                println!("{}  {}  {}", k.access_key_id, access, status);
+                            }
+                        }
+                    }
+                    S3KeysCommands::Revoke { access_key_id } => {
+                        let mut request =
+                            client.delete(format!("{}/api/s3/keys/{}", base_url, access_key_id));
+                        request = add_auth_headers(request, &creds, true)?;
+
+                        let resp = request.send().await?;
+                        let status = resp.status();
+                        let text_body = resp.text().await?;
+                        if status == StatusCode::NOT_FOUND {
+                            println!("Key not found: {}", access_key_id);
+                            return Ok(());
+                        }
+                        if !status.is_success() {
+                            return Err(anyhow!(
+                                "S3 key revoke failed. Status = {}, Body = {}",
+                                status,
+                                text_body
+                            ));
+                        }
+
+                        let result = serde_json::from_str::<S3RevokeKeyResponse>(&text_body)?;
+                        if result.revoked {
+                            println!("✅ Key revoked: {}", access_key_id);
+                        } else {
+                            println!("Key not found: {}", access_key_id);
+                        }
+                    }
+                },
+                S3Commands::Bucket { command } => match command {
+                    S3BucketCommands::Get => {
+                        let mut request = client.get(format!("{}/api/s3/bucket", base_url));
+                        request = add_auth_headers(request, &creds, false)?;
+
+                        let resp = request.send().await?;
+                        let status = resp.status();
+                        let text_body = resp.text().await?;
+                        if !status.is_success() {
+                            return Err(anyhow!(
+                                "S3 bucket get failed. Status = {}, Body = {}",
+                                status,
+                                text_body
+                            ));
+                        }
+
+                        let bucket = serde_json::from_str::<S3BucketSettingsResponse>(&text_body)?;
+                        println!("Bucket: {}", bucket.bucket_name);
+                        println!(
+                            "Public read: {}",
+                            if bucket.public_read {
+                                "enabled"
+                            } else {
+                                "disabled"
+                            }
+                        );
+                        if bucket.cors_allowed_origins.is_empty() {
+                            println!("CORS allowed origins: (none)");
+                        } else {
+                            println!("CORS allowed origins:");
+                            for o in bucket.cors_allowed_origins.iter() {
+                                println!("  {}", o);
+                            }
+                        }
+                        if bucket.public_read {
+                            println!("Note: Public read enables anonymous GET/HEAD only (no list). Public reads bill the bucket owner’s credits.");
+                        }
+                    }
+                    S3BucketCommands::SetPublicRead { enabled } => {
+                        let mut request = client.patch(format!("{}/api/s3/bucket", base_url));
+                        request = add_auth_headers(request, &creds, true)?;
+                        request = request.json(&PatchS3BucketSettingsRequest {
+                            public_read: Some(enabled),
+                            cors_allowed_origins: None,
+                        });
+
+                        let resp = request.send().await?;
+                        let status = resp.status();
+                        let text_body = resp.text().await?;
+                        if !status.is_success() {
+                            return Err(anyhow!(
+                                "S3 bucket update failed. Status = {}, Body = {}",
+                                status,
+                                text_body
+                            ));
+                        }
+
+                        let bucket = serde_json::from_str::<S3BucketSettingsResponse>(&text_body)?;
+                        println!("Bucket: {}", bucket.bucket_name);
+                        println!(
+                            "Public read: {}",
+                            if bucket.public_read {
+                                "enabled"
+                            } else {
+                                "disabled"
+                            }
+                        );
+                        if bucket.cors_allowed_origins.is_empty() {
+                            println!("CORS allowed origins: (none)");
+                        } else {
+                            println!("CORS allowed origins:");
+                            for o in bucket.cors_allowed_origins.iter() {
+                                println!("  {}", o);
+                            }
+                        }
+                        if bucket.public_read {
+                            println!("Note: Public read enables anonymous GET/HEAD only (no list). Public reads bill the bucket owner’s credits.");
+                        }
+                    }
+                    S3BucketCommands::SetCors { origin } => {
+                        let origins = split_comma_newline_list(&origin);
+                        let mut request = client.patch(format!("{}/api/s3/bucket", base_url));
+                        request = add_auth_headers(request, &creds, true)?;
+                        request = request.json(&PatchS3BucketSettingsRequest {
+                            public_read: None,
+                            cors_allowed_origins: Some(origins),
+                        });
+
+                        let resp = request.send().await?;
+                        let status = resp.status();
+                        let text_body = resp.text().await?;
+                        if !status.is_success() {
+                            return Err(anyhow!(
+                                "S3 bucket update failed. Status = {}, Body = {}",
+                                status,
+                                text_body
+                            ));
+                        }
+
+                        let bucket = serde_json::from_str::<S3BucketSettingsResponse>(&text_body)?;
+                        println!("Bucket: {}", bucket.bucket_name);
+                        println!(
+                            "Public read: {}",
+                            if bucket.public_read {
+                                "enabled"
+                            } else {
+                                "disabled"
+                            }
+                        );
+                        if bucket.cors_allowed_origins.is_empty() {
+                            println!("CORS allowed origins: (none)");
+                        } else {
+                            println!("CORS allowed origins:");
+                            for o in bucket.cors_allowed_origins.iter() {
+                                println!("  {}", o);
+                            }
+                        }
+                        if bucket.public_read {
+                            println!("Note: CORS settings apply only when public read is enabled.");
+                        }
+                    }
+                    S3BucketCommands::ClearCors => {
+                        let mut request = client.patch(format!("{}/api/s3/bucket", base_url));
+                        request = add_auth_headers(request, &creds, true)?;
+                        request = request.json(&PatchS3BucketSettingsRequest {
+                            public_read: None,
+                            cors_allowed_origins: Some(Vec::new()),
+                        });
+
+                        let resp = request.send().await?;
+                        let status = resp.status();
+                        let text_body = resp.text().await?;
+                        if !status.is_success() {
+                            return Err(anyhow!(
+                                "S3 bucket update failed. Status = {}, Body = {}",
+                                status,
+                                text_body
+                            ));
+                        }
+
+                        let bucket = serde_json::from_str::<S3BucketSettingsResponse>(&text_body)?;
+                        println!("Bucket: {}", bucket.bucket_name);
+                        println!(
+                            "Public read: {}",
+                            if bucket.public_read {
+                                "enabled"
+                            } else {
+                                "disabled"
+                            }
+                        );
+                        println!("CORS allowed origins: (none)");
+                    }
+                },
+                S3Commands::Presign {
+                    method,
+                    key,
+                    access_key_id,
+                    expires,
+                    region,
+                    endpoint,
+                    virtual_hosted,
+                    path_style,
+                    query,
+                } => {
+                    let query_map = parse_s3_query_args(&query)?;
+                    let endpoint = endpoint.or_else(|| creds.s3_endpoint.clone());
+                    let region = region.or_else(|| creds.s3_region.clone());
+                    let virtual_hosted = if path_style {
+                        false
+                    } else if virtual_hosted {
+                        true
+                    } else {
+                        creds.s3_virtual_hosted.unwrap_or(false)
+                    };
+                    let req_body = PresignS3Request {
+                        access_key_id,
+                        method,
+                        key,
+                        query: query_map,
+                        expires_secs: expires,
+                        region,
+                        endpoint,
+                        virtual_hosted,
+                    };
+
+                    let mut request = client.post(format!("{}/api/s3/presign", base_url));
+                    request = add_auth_headers(request, &creds, true)?;
+                    request = request.json(&req_body);
+
+                    let resp = request.send().await?;
+                    let status = resp.status();
+                    let text_body = resp.text().await?;
+                    if !status.is_success() {
+                        return Err(anyhow!(
+                            "S3 presign failed. Status = {}, Body = {}",
+                            status,
+                            text_body
+                        ));
+                    }
+
+                    let presigned = serde_json::from_str::<PresignS3Response>(&text_body)?;
+                    println!("{}", presigned.url);
+                }
             }
         }
 
@@ -6328,7 +8600,13 @@ pub async fn run_cli() -> Result<()> {
                     return Err(anyhow!("Passwords do not match"));
                 }
 
-                keyring::export_key(&keyring, &key_name, Path::new(&output_path), &keyring_password, &export_password)?;
+                keyring::export_key(
+                    &keyring,
+                    &key_name,
+                    Path::new(&output_path),
+                    &keyring_password,
+                    &export_password,
+                )?;
                 println!("✅ Key exported to: {}", output_path);
 
                 // Don't save to keyring if exporting
@@ -6371,7 +8649,7 @@ pub async fn run_cli() -> Result<()> {
             println!("\nSetting up new master password...");
             let new_password = rpassword::prompt_password("Enter new keyring password: ")?;
             let confirm = rpassword::prompt_password("Confirm new keyring password: ")?;
-            
+
             if new_password != confirm {
                 return Err(anyhow!("Passwords do not match"));
             }
@@ -6383,7 +8661,7 @@ pub async fn run_cli() -> Result<()> {
             // Perform migration
             println!("\nMigrating keyring...");
             keyring.migrate_from_legacy("keyring-protection", &new_password)?;
-            
+
             // Save the migrated keyring
             keyring.save_to_file(&keyring_path)?;
 
@@ -6443,13 +8721,20 @@ pub async fn run_cli() -> Result<()> {
                 rpassword::prompt_password("Enter keyring password: ")?
             };
 
-            let export_password = rpassword::prompt_password("Enter password to protect exported key: ")?;
+            let export_password =
+                rpassword::prompt_password("Enter password to protect exported key: ")?;
             let confirm = rpassword::prompt_password("Confirm password: ")?;
             if export_password != confirm {
                 return Err(anyhow!("Passwords do not match"));
             }
 
-            keyring::export_key(&keyring, &key_name, Path::new(&output), &keyring_password, &export_password)?;
+            keyring::export_key(
+                &keyring,
+                &key_name,
+                Path::new(&output),
+                &keyring_password,
+                &export_password,
+            )?;
             println!("✅ Key '{}' exported to: {}", key_name, output);
         }
 
@@ -6484,8 +8769,11 @@ pub async fn run_cli() -> Result<()> {
             let key_material = keyring.get_key_material(&key, &password)?;
 
             // Sign the data
-            let signature =
-                quantum::sign_with_dilithium(&data, key_material.private_key.as_ref().unwrap())?;
+            let private_key = key_material
+                .private_key
+                .as_ref()
+                .ok_or_else(|| anyhow!("Signing key '{}' is missing private key material", key))?;
+            let signature = quantum::sign_with_dilithium(&data, private_key)?;
 
             // Save signature
             std::fs::write(&signature_file, &signature)?;
