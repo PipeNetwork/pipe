@@ -767,6 +767,7 @@ pub struct TierPricingInfo {
 }
 
 const USDC_DECIMALS_FACTOR: i64 = 1_000_000;
+const USDC_PER_PIPE_TOKEN: f64 = 0.025;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct CreditsTierEstimate {
@@ -1926,7 +1927,7 @@ async fn improved_download_file_with_auth_and_options(
                     }
                     eprintln!("\n💡 Next steps:");
                     eprintln!("   1) Run: pipe credits-status");
-                    eprintln!("   2) Top up: pipe credits-intent 10");
+                    eprintln!("   2) Top up: pipe topup 10");
                 }
             }
         }
@@ -1937,12 +1938,13 @@ async fn improved_download_file_with_auth_and_options(
         ));
     }
 
-    let cost_charged = resp
+    let tokens_charged_pipe = resp
         .headers()
         .get("X-Tokens-Charged")
         .and_then(|h| h.to_str().ok())
         .and_then(|s| s.parse::<f64>().ok())
         .unwrap_or(0.0);
+    let cost_charged_usdc = tokens_charged_pipe * USDC_PER_PIPE_TOKEN;
 
     if use_legacy {
         // Legacy mode: Get the full response body and decode base64
@@ -1977,10 +1979,10 @@ async fn improved_download_file_with_auth_and_options(
         tokio::fs::write(&output_path, &final_bytes).await?;
         progress.set_position(final_bytes.len() as u64);
         progress.finish_with_message("Download completed");
-        if cost_charged > 0.0 {
+        if cost_charged_usdc > 0.0 {
             println!(
                 "💰 Cost: ${} USDC (prepaid credits)",
-                format_usdc_ui(cost_charged)
+                format_usdc_ui(cost_charged_usdc)
             );
         }
     } else {
@@ -2003,10 +2005,10 @@ async fn improved_download_file_with_auth_and_options(
 
         writer.flush().await?;
         progress.finish_with_message("Download completed");
-        if cost_charged > 0.0 {
+        if cost_charged_usdc > 0.0 {
             println!(
                 "💰 Cost: ${} USDC (prepaid credits)",
-                format_usdc_ui(cost_charged)
+                format_usdc_ui(cost_charged_usdc)
             );
         }
     }
@@ -3374,27 +3376,28 @@ async fn upload_file_with_shared_progress(
 
     let status = resp.status();
 
-    // Extract cost from headers (USDC credits in current pipe-store)
-    let cost_charged = resp
+    // Extract cost from headers (tokens charged in PIPE, convert to USDC for display).
+    let tokens_charged_pipe = resp
         .headers()
         .get("X-Tokens-Charged")
         .and_then(|h| h.to_str().ok())
         .and_then(|s| s.parse::<f64>().ok())
         .unwrap_or(0.0);
+    let cost_charged_usdc = tokens_charged_pipe * USDC_PER_PIPE_TOKEN;
 
     let text_body = resp.text().await?;
     if status.is_success() {
         if !is_shared {
             progress.finish_with_message("Upload completed successfully");
             println!("Server response: {}", text_body);
-            if cost_charged > 0.0 {
+            if cost_charged_usdc > 0.0 {
                 println!(
                     "💰 Cost: ${} USDC (prepaid credits)",
-                    format_usdc_ui(cost_charged)
+                    format_usdc_ui(cost_charged_usdc)
                 );
             }
         }
-        Ok((file_name_in_bucket.to_string(), cost_charged))
+        Ok((file_name_in_bucket.to_string(), cost_charged_usdc))
     } else {
         if !is_shared {
             progress.finish_and_clear();
@@ -3429,7 +3432,7 @@ async fn upload_file_with_shared_progress(
                     }
                     eprintln!("\n💡 Next steps:");
                     eprintln!("   1) Run: pipe credits-status");
-                    eprintln!("   2) Top up: pipe credits-intent 10");
+                    eprintln!("   2) Top up: pipe topup 10");
                     return Err(anyhow!("Upload failed: {}", message));
                 }
             }
@@ -3594,13 +3597,14 @@ async fn upload_file_priority_with_shared_progress(
 
     let status = resp.status();
 
-    // Extract cost from headers (USDC credits in current pipe-store)
-    let cost_charged = resp
+    // Extract cost from headers (tokens charged in PIPE, convert to USDC for display).
+    let tokens_charged_pipe = resp
         .headers()
         .get("X-Tokens-Charged")
         .and_then(|h| h.to_str().ok())
         .and_then(|s| s.parse::<f64>().ok())
         .unwrap_or(0.0);
+    let cost_charged_usdc = tokens_charged_pipe * USDC_PER_PIPE_TOKEN;
 
     let priority_fee = resp
         .headers()
@@ -3618,30 +3622,30 @@ async fn upload_file_priority_with_shared_progress(
                     if !is_shared {
                         progress.finish_with_message("Background upload started by server");
                         println!("Server response: {}", text_body);
-                        if cost_charged > 0.0 {
+                        if cost_charged_usdc > 0.0 {
                             println!(
                                 "💰 Cost: ${} USDC (priority multiplier: {}x)",
-                                format_usdc_ui(cost_charged),
+                                format_usdc_ui(cost_charged_usdc),
                                 priority_fee
                             );
                         }
                     }
-                    return Ok((file_name_in_bucket.to_string(), cost_charged));
+                    return Ok((file_name_in_bucket.to_string(), cost_charged_usdc));
                 }
             }
         }
         if !is_shared {
             progress.finish_with_message("Priority upload finished successfully");
             println!("Server says: {}", text_body);
-            if cost_charged > 0.0 {
+            if cost_charged_usdc > 0.0 {
                 println!(
                     "💰 Cost: ${} USDC (priority multiplier: {}x)",
-                    format_usdc_ui(cost_charged),
+                    format_usdc_ui(cost_charged_usdc),
                     priority_fee
                 );
             }
         }
-        Ok((file_name_in_bucket.to_string(), cost_charged))
+        Ok((file_name_in_bucket.to_string(), cost_charged_usdc))
     } else {
         if !is_shared {
             progress.finish_and_clear();
@@ -3689,7 +3693,7 @@ async fn upload_file_priority_with_shared_progress(
                     }
                     eprintln!("\n💡 Next steps:");
                     eprintln!("   1) Run: pipe credits-status");
-                    eprintln!("   2) Top up: pipe credits-intent 10");
+                    eprintln!("   2) Top up: pipe topup 10");
                     return Err(anyhow!("Priority upload failed: {}", message));
                 }
             }
@@ -4988,7 +4992,7 @@ pub async fn run_cli() -> Result<()> {
                             format_usdc_ui((estimated_cost_usdc - balance_usdc).max(0.0))
                         );
                         println!("\n💡 Top up:");
-                        println!("   pipe credits-intent 10");
+                        println!("   pipe topup 10");
                     } else {
                         println!("✅ Sufficient credits for upload");
                         let remaining = (balance_usdc - estimated_cost_usdc).max(0.0);
@@ -5671,7 +5675,7 @@ pub async fn run_cli() -> Result<()> {
                             "Needed: ${} USDC",
                             format_usdc_ui((total_cost_estimate_usdc - current_balance).max(0.0))
                         );
-                        eprintln!("\nTop up credits with: pipe credits-intent 10");
+                        eprintln!("\nTop up credits with: pipe topup 10");
                         return Ok(());
                     }
                     println!(
@@ -6071,7 +6075,7 @@ pub async fn run_cli() -> Result<()> {
                         "Needed: ${} USDC",
                         format_usdc_ui((total_cost_estimate_usdc - balance_usdc).max(0.0))
                     );
-                    eprintln!("\nTop up credits with: pipe credits-intent 10");
+                    eprintln!("\nTop up credits with: pipe topup 10");
                     return Ok(());
                 }
 
@@ -6457,7 +6461,7 @@ pub async fn run_cli() -> Result<()> {
                             format_usdc_ui((estimated_cost_usdc - balance_usdc).max(0.0))
                         );
                         println!("\n💡 Top up:");
-                        println!("   pipe credits-intent 10");
+                        println!("   pipe topup 10");
                     } else {
                         println!("✅ Sufficient credits for upload");
                         let remaining = (balance_usdc - estimated_cost_usdc).max(0.0);
@@ -7144,7 +7148,7 @@ pub async fn run_cli() -> Result<()> {
                     "   Need ${} more USDC",
                     format_usdc_ui((-remaining).max(0.0))
                 );
-                println!("   Top up: pipe credits-intent 10");
+                println!("   Top up: pipe topup 10");
             }
         }
 
@@ -7167,7 +7171,7 @@ pub async fn run_cli() -> Result<()> {
                 let status = fetch_credits_status(&client, base_url, &creds).await?;
                 print_credits_status(&status);
                 println!();
-                println!("To top up credits: pipe credits-intent 10");
+                println!("To top up credits: pipe topup 10");
                 println!("To submit a payment: pipe credits-submit <intent_id> <tx_sig>");
                 return Ok(());
             }
@@ -7179,7 +7183,7 @@ pub async fn run_cli() -> Result<()> {
                     let status = fetch_credits_status(&client, base_url, &creds).await?;
                     status.intent.map(|i| i.intent_id).ok_or_else(|| {
                         anyhow!(
-                            "No pending intent found. Run `pipe credits-intent <amount>` first."
+                            "No pending intent found. Run `pipe topup <amount>` first."
                         )
                     })?
                 }
