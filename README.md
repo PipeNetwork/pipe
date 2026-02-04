@@ -601,10 +601,8 @@ Downloads are automatically base64 decoded. If you encounter issues:
   - Removed token withdrawal commands  
   - Removed `check-sol` command
 - **Added**: Prepaid credits system (USDC)
-  - `credits-status` (alias: `check-deposit`) - View credits balance and storage quotas
-  - `credits-intent` - Create a top-up intent (prints Solana Pay link)
-  - `credits-submit` - Submit a payment tx signature for verification
-  - `credits-cancel` - Cancel a pending top-up intent
+  - `credits-status` (aliases: `credits`, `check-deposit`) - View credits balance and storage quotas
+  - `topup` - Guided top-up flow (creates intent + prints Solana Pay link + optional submit)
   - `estimate-cost` - Estimate upload costs before uploading
 - **Changed**: USD-based pricing model ($25/TB = $0.025/GB baseline)
 - **Important**: This is a production mainnet release - credits use real USDC
@@ -691,13 +689,13 @@ The estimate shows:
 
 #### Top Up Credits
 
-Create a top-up intent and get a Solana Pay link:
+Create a top-up intent and get a Solana Pay link (recommended):
 
 ```bash
-pipe credits-intent 10
+pipe topup 10
 ```
 
-After you pay in your wallet, submit the transaction signature:
+`pipe topup` will prompt you for the tx signature (optional). If you skip it, after you pay in your wallet you can submit the transaction signature:
 
 ```bash
 pipe credits-submit <intent_id> <tx_sig>
@@ -705,9 +703,9 @@ pipe credits-submit <intent_id> <tx_sig>
 
 #### How the Credits System Works
 
-1. **Create intent**: `pipe credits-intent 10`
+1. **Create intent**: `pipe topup 10`
 2. **Pay**: Open the Solana Pay link in a wallet with USDC
-3. **Submit tx**: `pipe credits-submit <intent_id> <tx_sig>`
+3. **Submit tx**: paste the tx sig when prompted, or run `pipe credits-submit <intent_id> <tx_sig>`
 4. **Use storage**: Upload/download files - costs are deducted from your credits
 5. **Monitor**: `pipe credits-status` (alias: `pipe check-deposit`)
 

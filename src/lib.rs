@@ -557,13 +557,34 @@ pub enum Commands {
     },
 
     /// Check prepaid credits balance (USDC) and storage quota
-    #[command(alias = "check-deposit")]
+    #[command(aliases = ["check-deposit", "credits"])]
     CreditsStatus {
         #[arg(long)]
         user_id: Option<String>,
     },
 
+    /// Top up prepaid credits (USDC) (guided)
+    ///
+    /// This creates a top-up intent, prints a Solana Pay link, and optionally submits a tx signature.
+    #[command(alias = "top-up")]
+    Topup {
+        /// USDC amount (e.g. 10.50)
+        amount: String,
+
+        /// Optional tx signature to auto-submit after paying
+        #[arg(long)]
+        tx_sig: Option<String>,
+
+        /// Disable the interactive prompt for a tx signature
+        #[arg(long)]
+        no_prompt: bool,
+
+        #[arg(long)]
+        user_id: Option<String>,
+    },
+
     /// Create a prepaid credits top-up intent (USDC)
+    #[command(hide = true)]
     CreditsIntent {
         /// USDC amount (e.g. 10.50)
         amount: String,
@@ -573,6 +594,7 @@ pub enum Commands {
     },
 
     /// Submit a prepaid credits payment transaction signature for verification
+    #[command(hide = true)]
     CreditsSubmit {
         intent_id: String,
         tx_sig: String,
@@ -582,6 +604,7 @@ pub enum Commands {
     },
 
     /// Cancel a pending prepaid credits top-up intent
+    #[command(hide = true)]
     CreditsCancel {
         intent_id: String,
 
@@ -957,6 +980,22 @@ fn solana_pay_url_raw(
         spl_token_mint,
         reference
     )
+}
+
+fn extract_solana_tx_sig(raw: &str) -> String {
+    let trimmed = raw.trim().trim_matches('"');
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    let without_query = trimmed.split('?').next().unwrap_or(trimmed);
+    let without_fragment = without_query.split('#').next().unwrap_or(without_query);
+    without_fragment
+        .rsplit('/')
+        .next()
+        .unwrap_or(without_fragment)
+        .trim()
+        .to_string()
 }
 
 #[cfg(test)]
@@ -6716,6 +6755,124 @@ pub async fn run_cli() -> Result<()> {
                 dry_run,
             )
             .await?;
+        }
+
+        Commands::Topup {
+            amount,
+            tx_sig,
+            no_prompt,
+            user_id,
+        } => {
+            let mut creds = load_credentials_from_file(config_path)?.ok_or_else(|| {
+                anyhow!("No credentials found. Please create a user or login first.")
+            })?;
+            ensure_valid_token(&client, base_url, &mut creds, config_path).await?;
+
+            if let Some(uid) = user_id {
+                creds.user_id = uid;
+            }
+
+            let amount_usdc_raw = parse_usdc_ui_to_raw(&amount)?;
+
+            let mut request = client.post(format!("{}/api/credits/intent", base_url));
+            request = add_auth_headers(request, &creds, true)?;
+            request = request.json(&CreateCreditsIntentRequest { amount_usdc_raw });
+
+            let resp = request.send().await?;
+            let status = resp.status();
+            let text_body = resp.text().await?;
+            if !status.is_success() {
+                return Err(anyhow!(
+                    "Credits intent failed. Status = {}, Body = {}",
+                    status,
+                    text_body
+                ));
+            }
+
+            let intent = serde_json::from_str::<CreditsIntentResponse>(&text_body)?;
+            println!("✅ Credits intent created");
+            println!("Status: {}", intent.status);
+            println!("Intent ID: {}", intent.intent_id);
+            println!(
+                "Amount: ${} USDC",
+                format_usdc_ui(usdc_raw_to_ui(intent.requested_usdc_raw))
+            );
+            println!("USDC mint: {}", intent.usdc_mint);
+            println!("Treasury: {}", intent.treasury_owner_pubkey);
+            println!("Reference: {}", intent.reference_pubkey);
+            println!();
+            println!(
+                "Solana Pay: {}",
+                solana_pay_url_raw(
+                    &intent.treasury_owner_pubkey,
+                    intent.requested_usdc_raw,
+                    &intent.usdc_mint,
+                    &intent.reference_pubkey,
+                    6
+                )
+            );
+
+            let mut tx_sig = tx_sig.map(|s| extract_solana_tx_sig(&s)).filter(|s| !s.is_empty());
+            if tx_sig.is_none() && !no_prompt && atty::is(atty::Stream::Stdin) {
+                use std::io::{self, Write};
+                println!();
+                println!("Paste the payment tx signature to finish (or press Enter to skip):");
+                print!("tx sig> ");
+                io::stdout().flush()?;
+                let mut line = String::new();
+                io::stdin().read_line(&mut line)?;
+                let extracted = extract_solana_tx_sig(&line);
+                if !extracted.is_empty() {
+                    tx_sig = Some(extracted);
+                }
+            }
+
+            let Some(tx_sig) = tx_sig else {
+                println!();
+                println!("Next:");
+                println!("  1) Pay the Solana Pay link in your wallet");
+                println!("  2) Submit the tx:");
+                println!("     pipe credits-submit {} <tx_sig>", intent.intent_id);
+                println!("  3) Check balance:");
+                println!("     pipe credits-status");
+                return Ok(());
+            };
+
+            let mut request = client.post(format!("{}/api/credits/submit", base_url));
+            request = add_auth_headers(request, &creds, true)?;
+            request = request.json(&SubmitCreditsPaymentRequest {
+                intent_id: intent.intent_id.clone(),
+                tx_sig,
+            });
+
+            let resp = request.send().await?;
+            let status = resp.status();
+            let text_body = resp.text().await?;
+            if !status.is_success() {
+                return Err(anyhow!(
+                    "Credits submit failed. Status = {}, Body = {}",
+                    status,
+                    text_body
+                ));
+            }
+
+            let result = serde_json::from_str::<SubmitCreditsPaymentResponse>(&text_body)?;
+            println!();
+            println!("✅ Credits updated");
+            println!("Intent: {}", result.intent_id);
+            println!("Status: {}", result.status);
+            println!(
+                "Detected: ${} USDC",
+                format_usdc_ui(usdc_raw_to_ui(result.detected_usdc_raw))
+            );
+            println!(
+                "Credited: ${} USDC",
+                format_usdc_ui(usdc_raw_to_ui(result.credited_usdc_raw))
+            );
+            println!(
+                "Balance:  ${} USDC",
+                format_usdc_ui(usdc_raw_to_ui(result.balance_usdc_raw))
+            );
         }
 
         Commands::CreditsStatus { user_id } => {
