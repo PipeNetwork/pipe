@@ -927,6 +927,50 @@ mod cli_tests {
             other => panic!("unexpected command: {other:?}"),
         }
     }
+
+    #[test]
+    fn clap_accepts_credits_alias() {
+        let cli = Cli::try_parse_from(["pipe", "credits"]).unwrap();
+        match cli.command {
+            Commands::CreditsStatus { .. } => {}
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn clap_accepts_topup_and_top_up_alias() {
+        let cli = Cli::try_parse_from(["pipe", "topup", "10"]).unwrap();
+        match cli.command {
+            Commands::Topup {
+                amount,
+                tx_sig,
+                no_prompt,
+                user_id,
+            } => {
+                assert_eq!(amount, "10");
+                assert!(tx_sig.is_none());
+                assert!(!no_prompt);
+                assert!(user_id.is_none());
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+
+        let cli = Cli::try_parse_from(["pipe", "top-up", "10"]).unwrap();
+        match cli.command {
+            Commands::Topup { amount, .. } => assert_eq!(amount, "10"),
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn extracts_tx_sig_from_solscan_url() {
+        assert_eq!(
+            extract_solana_tx_sig("https://solscan.io/tx/ABC?cluster=mainnet"),
+            "ABC"
+        );
+        assert_eq!(extract_solana_tx_sig("ABC"), "ABC");
+        assert_eq!(extract_solana_tx_sig(""), "");
+    }
 }
 
 fn bytes_to_gb_decimal(bytes: u64) -> f64 {
