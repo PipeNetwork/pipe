@@ -1,0 +1,472 @@
+{
+  "schema_version": 1,
+  "implementation_commit": "b7b677a6d0961b6c9637a6f29c531eb002073bbc",
+  "authorization_fix": {
+    "read_login_then_browser_step_up": true,
+    "same_owner_verified": true,
+    "wrong_canonical_account_rejected_in_executable_fixture": true,
+    "existing_scopes_retained": true,
+    "noninteractive_refusal_before_any_request_verified": true,
+    "no_backend_permission_change": true
+  },
+  "local_verification": {
+    "workspace_tests_passed": 140,
+    "ignored_openssh_integration_tests": 1,
+    "clippy_warnings": 0,
+    "operation_dispositions": 210,
+    "coverage_regeneration_checked": true
+  },
+  "production": {
+    "live": {
+      "transport": "public DNS with verified TLS",
+      "browser_login_and_device_approval": true,
+      "device_denial": true,
+      "write_scope_step_up": true,
+      "passed": false,
+      "checks": [
+        {
+          "args": [
+            "account"
+          ],
+          "exit_status": 0
+        },
+        {
+          "args": [
+            "pricing"
+          ],
+          "exit_status": 0
+        },
+        {
+          "args": [
+            "s3",
+            "credential",
+            "list"
+          ],
+          "exit_status": 0
+        },
+        {
+          "args": [
+            "s3",
+            "endpoint"
+          ],
+          "exit_status": 0
+        },
+        {
+          "args": [
+            "s3",
+            "mb",
+            "s3://cli3-write-b7aa59657189b7a3/"
+          ],
+          "exit_status": 0
+        },
+        {
+          "args": [
+            "s3",
+            "ls"
+          ],
+          "exit_status": 0
+        },
+        {
+          "args": [
+            "s3",
+            "head",
+            "s3://cli3-write-b7aa59657189b7a3/"
+          ],
+          "exit_status": 0
+        },
+        {
+          "args": [
+            "s3",
+            "cp",
+            "<private-evidence>/live/pipe",
+            "s3://cli3-write-b7aa59657189b7a3/"
+          ],
+          "exit_status": 0
+        },
+        {
+          "args": [
+            "s3",
+            "ls",
+            "s3://cli3-write-b7aa59657189b7a3/"
+          ],
+          "exit_status": 0
+        },
+        {
+          "args": [
+            "s3",
+            "head",
+            "s3://cli3-write-b7aa59657189b7a3/pipe"
+          ],
+          "exit_status": 0
+        },
+        {
+          "args": [
+            "s3",
+            "cp",
+            "s3://cli3-write-b7aa59657189b7a3/pipe",
+            "<private-evidence>/live/copy.bin"
+          ],
+          "exit_status": 0
+        },
+        {
+          "args": [
+            "object",
+            "get",
+            "s3://cli3-write-b7aa59657189b7a3/pipe",
+            "<private-evidence>/live/copy.bin",
+            "--range",
+            "1-3"
+          ],
+          "exit_status": 0
+        },
+        {
+          "args": [
+            "object",
+            "put",
+            "<private-evidence>/live/pipe",
+            "s3://cli3-write-b7aa59657189b7a3/pipe",
+            "--if-none-match",
+            "*"
+          ],
+          "exit_status": 6
+        },
+        {
+          "args": [
+            "s3",
+            "head",
+            "s3://cli3-write-b7aa59657189b7a3/pipe",
+            "--if-match",
+            "\"155158cec05f9cc147fca516d9da96f924488780deaaf0a087db846cfa8d841a\""
+          ],
+          "exit_status": 0
+        },
+        {
+          "args": [
+            "s3",
+            "cp",
+            "<private-evidence>/live/tree",
+            "s3://cli3-write-b7aa59657189b7a3/backup/",
+            "--recursive"
+          ],
+          "exit_status": 0
+        },
+        {
+          "args": [
+            "s3",
+            "cp",
+            "s3://cli3-write-b7aa59657189b7a3/backup/",
+            "<private-evidence>/live/restored",
+            "--recursive"
+          ],
+          "exit_status": 0
+        },
+        {
+          "args": [
+            "s3",
+            "sync",
+            "<private-evidence>/live/tree",
+            "s3://cli3-write-b7aa59657189b7a3/sync/"
+          ],
+          "exit_status": 4
+        }
+      ]
+    },
+    "origin": {
+      "transport": "production origin via isolated hostname resolution with verified TLS",
+      "browser_login_and_device_approval": true,
+      "device_denial": true,
+      "write_scope_step_up": true,
+      "passed": true,
+      "checks": [
+        {
+          "args": [
+            "account"
+          ],
+          "exit_status": 0
+        },
+        {
+          "args": [
+            "pricing"
+          ],
+          "exit_status": 0
+        },
+        {
+          "args": [
+            "s3",
+            "credential",
+            "list"
+          ],
+          "exit_status": 0
+        },
+        {
+          "args": [
+            "s3",
+            "endpoint"
+          ],
+          "exit_status": 0
+        },
+        {
+          "args": [
+            "s3",
+            "mb",
+            "s3://cli3-write-fc7b785928e33c51/"
+          ],
+          "exit_status": 0
+        },
+        {
+          "args": [
+            "s3",
+            "ls"
+          ],
+          "exit_status": 0
+        },
+        {
+          "args": [
+            "s3",
+            "head",
+            "s3://cli3-write-fc7b785928e33c51/"
+          ],
+          "exit_status": 0
+        },
+        {
+          "args": [
+            "s3",
+            "cp",
+            "<private-evidence>/origin/pipe",
+            "s3://cli3-write-fc7b785928e33c51/"
+          ],
+          "exit_status": 0
+        },
+        {
+          "args": [
+            "s3",
+            "ls",
+            "s3://cli3-write-fc7b785928e33c51/"
+          ],
+          "exit_status": 0
+        },
+        {
+          "args": [
+            "s3",
+            "head",
+            "s3://cli3-write-fc7b785928e33c51/pipe"
+          ],
+          "exit_status": 0
+        },
+        {
+          "args": [
+            "s3",
+            "cp",
+            "s3://cli3-write-fc7b785928e33c51/pipe",
+            "<private-evidence>/origin/copy.bin"
+          ],
+          "exit_status": 0
+        },
+        {
+          "args": [
+            "object",
+            "get",
+            "s3://cli3-write-fc7b785928e33c51/pipe",
+            "<private-evidence>/origin/copy.bin",
+            "--range",
+            "1-3"
+          ],
+          "exit_status": 0
+        },
+        {
+          "args": [
+            "object",
+            "put",
+            "<private-evidence>/origin/pipe",
+            "s3://cli3-write-fc7b785928e33c51/pipe",
+            "--if-none-match",
+            "*"
+          ],
+          "exit_status": 6
+        },
+        {
+          "args": [
+            "s3",
+            "head",
+            "s3://cli3-write-fc7b785928e33c51/pipe",
+            "--if-match",
+            "\"155158cec05f9cc147fca516d9da96f924488780deaaf0a087db846cfa8d841a\""
+          ],
+          "exit_status": 0
+        },
+        {
+          "args": [
+            "s3",
+            "cp",
+            "<private-evidence>/origin/tree",
+            "s3://cli3-write-fc7b785928e33c51/backup/",
+            "--recursive"
+          ],
+          "exit_status": 0
+        },
+        {
+          "args": [
+            "s3",
+            "cp",
+            "s3://cli3-write-fc7b785928e33c51/backup/",
+            "<private-evidence>/origin/restored",
+            "--recursive"
+          ],
+          "exit_status": 0
+        },
+        {
+          "args": [
+            "s3",
+            "sync",
+            "<private-evidence>/origin/tree",
+            "s3://cli3-write-fc7b785928e33c51/sync/"
+          ],
+          "exit_status": 0
+        },
+        {
+          "args": [
+            "s3",
+            "sync",
+            "<private-evidence>/origin/tree",
+            "s3://cli3-write-fc7b785928e33c51/sync/"
+          ],
+          "exit_status": 0
+        },
+        {
+          "args": [
+            "s3",
+            "sync",
+            "s3://cli3-write-fc7b785928e33c51/sync/",
+            "<private-evidence>/origin/sync-download"
+          ],
+          "exit_status": 0
+        },
+        {
+          "args": [
+            "s3",
+            "cp",
+            "<private-evidence>/origin/large.bin",
+            "s3://cli3-write-fc7b785928e33c51/"
+          ],
+          "exit_status": 0
+        },
+        {
+          "args": [
+            "s3",
+            "cp",
+            "s3://cli3-write-fc7b785928e33c51/large.bin",
+            "<private-evidence>/origin/copy.bin"
+          ],
+          "exit_status": 0
+        },
+        {
+          "args": [
+            "s3",
+            "multipart",
+            "list",
+            "cli3-write-fc7b785928e33c51"
+          ],
+          "exit_status": 0
+        },
+        {
+          "args": [
+            "s3",
+            "rm",
+            "s3://cli3-write-fc7b785928e33c51/pipe"
+          ],
+          "exit_status": 0
+        },
+        {
+          "args": [
+            "s3",
+            "rm",
+            "s3://cli3-write-fc7b785928e33c51/",
+            "--recursive"
+          ],
+          "exit_status": 0
+        },
+        {
+          "args": [
+            "s3",
+            "ls",
+            "s3://cli3-write-fc7b785928e33c51/"
+          ],
+          "exit_status": 0
+        },
+        {
+          "args": [
+            "s3",
+            "rb",
+            "s3://cli3-write-fc7b785928e33c51/"
+          ],
+          "exit_status": 0
+        },
+        {
+          "args": [
+            "account"
+          ],
+          "exit_status": 0
+        },
+        {
+          "args": [
+            "s3",
+            "credential",
+            "rotate",
+            "LT2010ACDA6649B2EC0D"
+          ],
+          "exit_status": 0
+        },
+        {
+          "args": [
+            "s3",
+            "credential",
+            "use",
+            "LT0051443AFA2A259688"
+          ],
+          "exit_status": 0
+        },
+        {
+          "args": [
+            "s3",
+            "ls",
+            "s3://cli3-write-fc7b785928e33c51/"
+          ],
+          "exit_status": 0
+        },
+        {
+          "args": [
+            "s3",
+            "credential",
+            "revoke",
+            "LT0051443AFA2A259688"
+          ],
+          "exit_status": 0
+        }
+      ]
+    }
+  },
+  "accounting": {
+    "captured_at": "2026-09-17T23:26:33.792231+00:00",
+    "consumed_atoms": "181",
+    "usage_atoms": "181",
+    "active_leases": 0,
+    "pending_reservations": 0,
+    "active_credentials": 0,
+    "live_objects": 0,
+    "active_test_sessions": 0,
+    "wallet_reserved_atoms": "0"
+  },
+  "budget": {
+    "reservation_id": "s3-write-fix-20260918",
+    "actual_atoms": 181,
+    "maximum_atoms": 100000000,
+    "total_exposure_atoms": 45000581,
+    "remaining_atoms": 54999419
+  },
+  "backend_deployed_by_this_change": false,
+  "public_edge_fully_qualified": false,
+  "remaining_requirement": "Apply the prepared signed-S3 cache-bypass rule to pipedev.network and repeat public-path HEAD, ranged GET and sync checks for cacheable filenames. No Cloudflare API credential was available.",
+  "live_test_binary_sha256": "e8d0bf12e79d9391b59640583aec968113f841fe0ad37d0a0f387a473e101b05",
+  "final_release_build_sha256": "c502e47529e3016e3f9b70370786f4b191561872d5b85c10fb01148092e4fb0a",
+  "final_build_live_retest": false
+}
