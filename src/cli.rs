@@ -1945,6 +1945,7 @@ async fn setup_s3_credential(
         .as_secs()
         .checked_add(args.expires_in)
         .ok_or_else(|| anyhow!("credential expiry overflow"))?;
+    let wallet_for_error = wallet.clone();
     let value = if args.write {
         account::create_credential(
             client,
@@ -1969,7 +1970,7 @@ async fn setup_s3_credential(
     }
     .map_err(|error| {
         anyhow!(
-            "could not create the storage credential; check storage permission and available credit: {error}"
+            "could not create the storage credential for linked identity {wallet_for_error}; check `pipe account infrastructure`, CLI admission, storage permission, and available credit: {error}"
         )
     })?;
     store_credential(client, &value)?;
