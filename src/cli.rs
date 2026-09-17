@@ -1686,7 +1686,7 @@ async fn put_file_command(
             std::fs::remove_file(manifest)?;
         }
     }
-    upload_result?;
+    upload_result.map_err(|error| explain_s3_write_error(error, &bucket))?;
     output::print(
         &json!({"bucket":bucket,"key":key,"uploaded":true}),
         json_output,
@@ -1974,6 +1974,19 @@ fn write_credential_help(profile: &Profile, bucket_hint: Option<&str>) -> anyhow
     anyhow!(
         "no active S3 credential; run 'pipe s3 setup --write{bucket}' to explicitly enable storage writes"
     )
+}
+
+fn explain_s3_write_error(error: anyhow::Error, bucket: &str) -> anyhow::Error {
+    let denied = error
+        .downcast_ref::<crate::s3::S3Error>()
+        .is_some_and(|s3| s3.status == reqwest::StatusCode::FORBIDDEN && s3.code == "AccessDenied");
+    if denied {
+        anyhow!(
+            "S3 write access is denied for bucket '{bucket}'; the active credential is probably read/list-only. Run `pipe s3 setup --write --bucket {bucket}` once, then retry. The upload was not retried."
+        )
+    } else {
+        error
+    }
 }
 
 async fn setup_s3_credential(
@@ -2678,5 +2691,18 @@ mod tests {
         assert!(looks_like_remote("s3://test/"));
         assert_eq!(normalize_bucket_name("s3://test/").unwrap(), "test");
         assert!(normalize_bucket_name("s3://test/object").is_err());
+    }
+
+    #[test]
+    fn read_only_write_denials_explain_how_to_enable_uploads() {
+        let error = anyhow::Error::new(crate::s3::S3Error {
+            status: reqwest::StatusCode::FORBIDDEN,
+            code: "AccessDenied".into(),
+            message: "Forbidden".into(),
+        });
+        let message = explain_s3_write_error(error, "test").to_string();
+        assert!(message.contains("read/list-only"));
+        assert!(message.contains("pipe s3 setup --write --bucket test"));
+        assert!(message.contains("not retried"));
     }
 }
