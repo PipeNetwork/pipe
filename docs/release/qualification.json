@@ -1,0 +1,102 @@
+{
+  "backend": {
+    "admission": "qualification-account-only",
+    "application_build_commit": "6f27d15ce6a9cf7273fa2a58fa07c9a47b84a4ff",
+    "binary_sha256": "539fe53b543d591d0be04822b4790262fc92a2b97c07d9996df01a685d3628ea",
+    "compatibility": {
+      "base_migration_max": 25,
+      "cli_contract_revision": "cli-3-draft-3",
+      "optional_cli_schema_version": 3,
+      "service_revision": "0.1.0"
+    },
+    "deployed": true,
+    "source_commit": "05c9a83051e43eeb15b36772f644b4e5af0889b1"
+  },
+  "canary": {
+    "automatic_funding": false,
+    "ledger_sha256": "7a8e3d77938cb9bff18d1db3896674788a4ea016fd84ef24e0922dd7aaca3b8c",
+    "maximum_atoms": 10000000,
+    "real_payment_transfers": false,
+    "reserved_atoms": 0,
+    "spent_atoms": 0
+  },
+  "cli_source_tree_sha256": "aa02f028c9d69e7f15b899c4f189cdbf44d0c40b56336eb4bc488de6dffca010",
+  "contracts": {
+    "control_plane_sha256": "5fea353dea79f855fc451b0d17ffb71f15de69350aaaa65ef1ad750134533812",
+    "documents": {
+      "control-plane": "5fea353dea79f855fc451b0d17ffb71f15de69350aaaa65ef1ad750134533812",
+      "s3": "ad2c802b939d990f9e1977c894e37067499288d2bcbf1ba4511c7853b7b178ad",
+      "storage": "9793f5a7fec36fe27ba7cd8878d1ff72b3e612a8e9b2354298b923381eef669b"
+    },
+    "immutable_catalog": "https://api.pipedev.network/openapi/releases/b65ee50aacb613d7f6914c2869efed91f11df193208965d3de998be28ff6369e/index.json",
+    "published": true,
+    "source_revision": "sha256:b65ee50aacb613d7f6914c2869efed91f11df193208965d3de998be28ff6369e"
+  },
+  "date": "2026-09-17",
+  "evidence": [
+    {
+      "path": "docs/release/evidence/deployment-publication.json",
+      "sha256": "5fb8d417be829d24d5f3ff56a2660985d8dc69c550ed0399c96085c753e1c17b"
+    },
+    {
+      "path": "docs/release/evidence/frontend.json",
+      "sha256": "2466ea4291697af3d9eb03aa014e57d7a4a02e260445f2f6154f4c7878bc1ad1"
+    },
+    {
+      "path": "docs/release/evidence/production-auth.json",
+      "sha256": "4a8b5b4dd1088337596cdbcd03227c64b9cfc30111cf6dd5b37a5da09224c9bb"
+    },
+    {
+      "path": "docs/release/evidence/staging.json",
+      "sha256": "b7f1ebcaab51553ded2bb1b9d038cf9128dd7d843dcf6cc63cc17728817169b9"
+    }
+  ],
+  "format_version": 1,
+  "frontend": {
+    "deployed": true,
+    "source_commit": "59180308642f50a329efd601177e4c70c813f110"
+  },
+  "native_qualification": {
+    "policy": "All five native jobs, installers, packaging and tag-ref attestations must pass before publishing this RC. Exact outcomes are attached in the final release record.",
+    "targets": [
+      "x86_64-unknown-linux-gnu",
+      "aarch64-unknown-linux-gnu",
+      "x86_64-apple-darwin",
+      "aarch64-apple-darwin",
+      "x86_64-pc-windows-msvc"
+    ]
+  },
+  "production_pending": true,
+  "qualification": {
+    "cleanup_complete": true,
+    "enabled_workflows_passed": false,
+    "intentionally_unavailable": [
+      {
+        "feature": "general CLI admission",
+        "reason": "Qualification account allowlist retained until production acceptance."
+      },
+      {
+        "feature": "public KV creation",
+        "reason": "Existing launch gate remains closed; supported management reads remain enabled."
+      },
+      {
+        "feature": "platform Solana address creation",
+        "reason": "Existing platform_solana_create runtime gate is closed."
+      },
+      {
+        "feature": "operator/internal and privileged native Durable Objects APIs",
+        "reason": "Excluded from customer CLI authority and public advanced calls."
+      }
+    ],
+    "real_browser_login": true,
+    "remaining_acceptance": [
+      "Paid enabled-product production workflows and cleanup require an existing funded, authorized account.",
+      "Compute production creation has a $20 minimum exposure and cannot run within the persistent $10 cap.",
+      "Provider-hosted card/USDC sandbox settlement is not claimed by local provider-emulator fixtures."
+    ],
+    "scope": "Staging fixtures and zero-cost production authentication/management checks. Full paid production acceptance remains pending.",
+    "staging_passed": true
+  },
+  "status": "staging-qualified-production-pending",
+  "version": "3.0.0-rc.1"
+}

@@ -16,7 +16,7 @@ def main():
     if dirty and not a.development_snapshot:raise SystemExit('Release packaging requires a committed clean source tree')
     a.output.mkdir(parents=True,exist_ok=True)
     name=f'pipe-v{version}-{a.target}';windows=a.target.endswith('windows-msvc');binary='pipe.exe' if windows else 'pipe'
-    files={binary:a.binary.read_bytes(),'README.md':(ROOT/'README.md').read_bytes(),'CRYPTO_FORMAT.md':(ROOT/'CRYPTO_FORMAT.md').read_bytes(),'LICENSE':(ROOT/'LICENSE').read_bytes()}
+    files={binary:a.binary.read_bytes(),'README.md':(ROOT/'README.md').read_bytes(),'CRYPTO_FORMAT.md':(ROOT/'CRYPTO_FORMAT.md').read_bytes(),'MIGRATION.md':(ROOT/'docs/release/MIGRATION.md').read_bytes(),'LICENSE':(ROOT/'LICENSE').read_bytes()}
     record={'format_version':1,'version':version,'source_commit':a.source,'source_status':'development-uncommitted' if dirty else 'committed','target':a.target,'binary_sha256':sha(a.binary),'contract_index_sha256':sha(ROOT/'contracts/platform-draft/index.json'),'contract_sha256':sha(ROOT/'contracts/platform-draft/control-plane.json'),'lockfile_sha256':sha(ROOT/'Cargo.lock')}
     record['tested_build_os']=platform.platform()
     record['rustc']=subprocess.check_output(['rustc','--version'],text=True).strip()

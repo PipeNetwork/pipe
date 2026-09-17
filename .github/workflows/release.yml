@@ -97,8 +97,8 @@ jobs:
           cat dist/*.sha256 | LC_ALL=C sort -k2 > dist/SHA256SUMS
           test "$(wc -l < dist/SHA256SUMS)" -eq 5
           (cd dist && sha256sum --check SHA256SUMS)
-          cp install.sh install.ps1 docs/release/VERIFY.md dist/
-          sha256sum dist/install.sh dist/install.ps1 dist/VERIFY.md | sed 's@  dist/@  @' >> dist/SHA256SUMS
+          cp install.sh install.ps1 docs/release/VERIFY.md docs/release/MIGRATION.md dist/
+          sha256sum dist/install.sh dist/install.ps1 dist/VERIFY.md dist/MIGRATION.md | sed 's@  dist/@  @' >> dist/SHA256SUMS
       - uses: actions/attest@v4
         with:
           subject-path: |
@@ -106,6 +106,7 @@ jobs:
             dist/install.sh
             dist/install.ps1
             dist/VERIFY.md
+            dist/MIGRATION.md
       - uses: actions/upload-artifact@v4
         with:
           name: qualified-release-set
@@ -121,4 +122,4 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          gh release create "$RELEASE_TAG" dist/*.tar.gz dist/*.zip dist/SHA256SUMS dist/install.sh dist/install.ps1 dist/VERIFY.md --repo PipeNetwork/pipe --verify-tag --draft --prerelease --title "Pipe CLI $RELEASE_TAG" --notes-file docs/release/RELEASE_NOTES.md
+          gh release create "$RELEASE_TAG" dist/*.tar.gz dist/*.zip dist/SHA256SUMS dist/install.sh dist/install.ps1 dist/VERIFY.md dist/MIGRATION.md --repo PipeNetwork/pipe --verify-tag --draft --prerelease --title "Pipe CLI $RELEASE_TAG" --notes-file docs/release/RELEASE_NOTES.md

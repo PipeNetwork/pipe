@@ -1,0 +1,129 @@
+{
+  "cleanup": {
+    "credential_shapes_found": 0,
+    "fixture_databases_remaining": 0,
+    "fixture_roles_remaining": 0,
+    "hosting_resources_remaining": 0,
+    "qualification_production_reserved_atoms": 0,
+    "qualification_production_spent_atoms": 0,
+    "real_payment_transfers": false,
+    "successful_scoped_logs_scanned_for_credential_shapes": 5
+  },
+  "contract_gate": {
+    "all_recorded_check_log_hashes_verified": true,
+    "catalog_sha256": "ff15913aa3143383a11d02df788c6423f39261cc591572abe0c8de9bb2b28d57",
+    "checks_failed": 0,
+    "checks_passed": 39,
+    "contract_version": "0.2.0",
+    "control_contract_sha256": "5fea353dea79f855fc451b0d17ffb71f15de69350aaaa65ef1ad750134533812",
+    "coverage": [
+      "deterministic OpenAPI generation and drift",
+      "public and private contract isolation",
+      "authentication and payment recovery",
+      "customer product HTTP contracts",
+      "S3 signatures, wire behavior and XML errors",
+      "executable CLI tests"
+    ]
+  },
+  "date": "2026-09-17",
+  "evidence_sha256": {
+    "backend_build_record": "5015da8a54a4183d6044845bcbbb20fc805705378c775db0a4d9d9b89cf43cde",
+    "cli_recorded_audit": "cace4c88d5c92cd8721bd2a9e9fc68f5c3667573c3ce80238edfebba5fafff6e",
+    "contract_qualification": "43d55f1581fa6655a7ea34332040a4e0c3422a2ad4c1e8db49e5c677c0cac02d",
+    "product_cleanup": "341761cb592b502c9a648e117fe86160b0ebbfab9c5832640af48f2b94af4a4d",
+    "product_qualification": "c1eb062ab3ce94235055b947dc5dc3e6523cecf0b4b2a04a4ede627537da3df6",
+    "runtime_grants": "a336be38290c9deee9b3d266ce802c47d72237c221336ad4dfc047b99a611ae6",
+    "scoped_cleanup": "167bf550690146bcafd7664eb022211405022af7c39aaa7bd2cca2fcd2691644",
+    "scoped_qualification": "e316a59031b070ad435c387f6ebe854c326b8b7623ab8aae6559323f49d47231",
+    "security_record": "71c244dff6972e8c6efad25fae4fc4d9e3e8d8b6ff640ebfd8f31cba79a8d40a"
+  },
+  "limitations": [
+    "These are staging results for the exact tested executable; native release artifacts and installers require their separate release qualification.",
+    "Browser approval was simulated in these fixtures; real browser and Google production acceptance is recorded separately.",
+    "Card and Solana settlement used local provider emulators; no real transfers or provider-hosted sandbox settlement are claimed.",
+    "Compute qualification used a host protocol fixture, not a real hypervisor.",
+    "This record does not attest that every product is enabled in production; existing feature and account admission gates still apply.",
+    "Zero spending and reservations refer only to these staging fixtures, not a separate production canary ledger."
+  ],
+  "product_fixtures": [
+    {
+      "fixture": "Executable CLI, real disposable PostgreSQL, canonical identities without a local signing key, explicit simulated browser approval.",
+      "passed": true,
+      "workflow": "account, organization and keys"
+    },
+    {
+      "fixture": "Executable CLI and disposable host protocol fixture; no real hypervisor.",
+      "tests_passed": 9,
+      "workflow": "compute"
+    },
+    {
+      "fixture": "Disposable PostgreSQL accounting, migration and executable recovery.",
+      "tests_passed": 3,
+      "workflow": "KV management"
+    },
+    {
+      "fixture": "Actual TLS router and node executor; binary values, certificate name verification, scopes and revocation; ambiguous forwarded mutation sent once.",
+      "passed": true,
+      "workflow": "KV data"
+    },
+    {
+      "fixture": "Paid customer API, router and three actual native storage replicas; executable state, SQL and blob workflows.",
+      "tests_passed": 10,
+      "workflow": "Durable Objects"
+    },
+    {
+      "fixture": "Device and wallet login, refresh replay, resource and organization isolation, session-management scopes, expiry, revocation and preserved authority during schema upgrade.",
+      "tests_passed": 5,
+      "workflow": "CLI authentication and scoped credentials"
+    },
+    {
+      "fixture": "Executable CLI, disposable PostgreSQL and local Stripe/Solana provider emulators; original hosted request recovery, exact monetary values, invoice and signature reuse, settlement credited once.",
+      "tests_passed": 1,
+      "workflow": "billing"
+    },
+    {
+      "fixture": "Executable CLI, actual hosting service and Spin SQLite, DNS fixture, deployment, activation, domain verification and committed response loss recovery.",
+      "passed": true,
+      "workflow": "hosting"
+    }
+  ],
+  "qualification": "staging",
+  "schema_version": 1,
+  "security": {
+    "advisory_database_commit": "e2e640471715167f73e22eaf761f2e547adafeec",
+    "backend_existing_exception": {
+      "id": "RUSTSEC-2023-0071",
+      "reason": "Unused SQLx MySQL lock entry; the all-target normal/build production dependency tree contains no RSA package."
+    },
+    "backend_required_audit_passed": true,
+    "cli_recorded_audit": {
+      "ignored_advisories": [],
+      "informational_warnings": [
+        {
+          "id": "RUSTSEC-2025-0119",
+          "kind": "unmaintained",
+          "package": "number_prefix"
+        },
+        {
+          "id": "RUSTSEC-2025-0134",
+          "kind": "unmaintained",
+          "package": "rustls-pemfile"
+        }
+      ],
+      "vulnerabilities": 0
+    },
+    "facilitator_production_dependency_vulnerabilities": 0,
+    "hosting_required_audit_passed_without_exceptions": true,
+    "new_backend_audit_exceptions": []
+  },
+  "status": "passed",
+  "tested_binaries_sha256": {
+    "backend": "539fe53b543d591d0be04822b4790262fc92a2b97c07d9996df01a685d3628ea",
+    "cli": "85d2cddcb2c3a1226e6d8327e7a194fb9448e9b226ecc1b8652d6a051e04a33f"
+  },
+  "tested_sources": {
+    "backend_code_commit": "6f27d15ce6a9cf7273fa2a58fa07c9a47b84a4ff",
+    "cli_code_commit": "989cabeae106296402fb7a95ee9fde6db543fff1",
+    "contract_source_revision": "sha256:b65ee50aacb613d7f6914c2869efed91f11df193208965d3de998be28ff6369e"
+  }
+}
