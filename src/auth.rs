@@ -429,6 +429,9 @@ impl ControlClient {
             return Ok(Some((stored.access_key_id, stored.secret_access_key)));
         }
         let secret = self.s3_secret(&active_key)?;
+        // Migrate the legacy two-entry layout after a successful read. The
+        // first command may touch both old items; later commands use one item.
+        self.save_active_s3_credential(&active_key, &secret)?;
         Ok(Some((active_key, secret)))
     }
 

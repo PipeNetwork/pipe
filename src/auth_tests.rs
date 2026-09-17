@@ -8,6 +8,23 @@ fn session_value(wallet: &str, id: Uuid, access: &str) -> Value {
     json!({"access_token":access.repeat(64),"refresh_token":"r".repeat(128),"token_type":"Bearer","owner_wallet":wallet,"session_id":id,"expires_in":900,"refresh_expires_in":2592000})
 }
 
+#[test]
+fn legacy_active_s3_credentials_are_migrated_to_one_secret() {
+    let dir = tempfile::tempdir().unwrap();
+    let client =
+        ControlClient::for_test(Profile::new("https://api.example.test"), dir.path()).unwrap();
+    client.secrets.set("s3_access_key", "LEGACYKEY").unwrap();
+    client.secrets.set("s3:LEGACYKEY", "legacy-secret").unwrap();
+
+    assert_eq!(
+        client.active_s3_credential().unwrap(),
+        Some(("LEGACYKEY".into(), "legacy-secret".into()))
+    );
+    let stored = client.secrets.get("s3_access_key").unwrap().unwrap();
+    assert!(stored.contains("\"access_key_id\":\"LEGACYKEY\""));
+    assert_eq!(client.s3_secret("LEGACYKEY").unwrap(), "legacy-secret");
+}
+
 #[tokio::test]
 async fn login_signs_only_cli_domain_and_keeps_tokens_out_of_result() {
     let server = MockServer::start().await;
