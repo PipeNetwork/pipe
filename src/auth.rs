@@ -431,7 +431,11 @@ impl ControlClient {
         let secret = self.s3_secret(&active_key)?;
         // Migrate the legacy two-entry layout after a successful read. The
         // first command may touch both old items; later commands use one item.
-        self.save_active_s3_credential(&active_key, &secret)?;
+        if let Err(error) = self.save_active_s3_credential(&active_key, &secret) {
+            eprintln!(
+                "warning: could not consolidate the legacy S3 credential in the OS keychain ({error}); continuing with the existing credential"
+            );
+        }
         Ok(Some((active_key, secret)))
     }
 

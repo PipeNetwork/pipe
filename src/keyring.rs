@@ -161,8 +161,9 @@ impl SecretStore {
         Ok(None)
     }
     pub fn set(&self, key: &str, value: &str) -> Result<()> {
-        if let Some(cached) = self.cached(key)? {
-            match cached {
+        let cached = self.cached(key)?;
+        if let Some(cached_value) = cached.clone() {
+            match cached_value {
                 CachedSecret::Value(Some(existing)) if existing == value => return Ok(()),
                 CachedSecret::Error(message) => {
                     if self.password().is_none() {
@@ -177,7 +178,9 @@ impl SecretStore {
                 Ok(entry) => entry,
                 Err(error) => {
                     let message = error.to_string();
-                    self.cache_error(key, message.clone())?;
+                    if !matches!(cached.as_ref(), Some(CachedSecret::Value(_))) {
+                        self.cache_error(key, message.clone())?;
+                    }
                     return if self.password().is_none() {
                         Err(anyhow!(message))
                     } else {
@@ -196,7 +199,9 @@ impl SecretStore {
                 }
                 Err(error) => {
                     let message = self.native_failure("saving", &error);
-                    self.cache_error(key, message.clone())?;
+                    if !matches!(cached.as_ref(), Some(CachedSecret::Value(_))) {
+                        self.cache_error(key, message.clone())?;
+                    }
                     if self.password().is_none() {
                         return Err(anyhow!(message));
                     }
