@@ -444,6 +444,9 @@ pub struct StorageSetupArgs {
     /// Limit the credential to this object prefix; defaults to the profile prefix.
     #[arg(long)]
     prefix: Option<String>,
+    /// Select a linked storage identity when the account has more than one.
+    #[arg(long, value_name = "WALLET")]
+    wallet: Option<String>,
     /// Credential lifetime in seconds (60 seconds to 30 days).
     #[arg(long, default_value_t = 7 * 24 * 60 * 60)]
     expires_in: u64,
@@ -1823,6 +1826,7 @@ fn automatic_setup_args(profile: &Profile, bucket_hint: Option<&str>) -> Result<
         write: false,
         bucket: Some(bucket),
         prefix: profile.prefix.clone(),
+        wallet: None,
         expires_in: 7 * 24 * 60 * 60,
         label: "pipe-cli-auto".into(),
     })
@@ -1908,7 +1912,9 @@ async fn setup_s3_credential(
         };
         anyhow::ensure!(accepted, "storage setup cancelled");
     }
-    let wallet = if std::env::var_os("PIPE_CLI_TOKEN").is_some() {
+    let wallet = if let Some(wallet) = args.wallet.clone() {
+        wallet
+    } else if std::env::var_os("PIPE_CLI_TOKEN").is_some() {
         let context = client
             .get("/v1/cli/context")
             .await
@@ -1919,11 +1925,15 @@ async fn setup_s3_credential(
             .ok_or_else(|| anyhow!("automation context did not include an owner wallet"))?
             .to_owned()
     } else {
-        client.current_wallet().map_err(|error| {
+        let owner = client.current_wallet().map_err(|error| {
             anyhow!(
                 "storage setup needs the account wallet context; run 'pipe auth login' again with storage.write if write access is required ({error})"
             )
-        })?
+        })?;
+        let account = account::account(client).await.map_err(|error| {
+            anyhow!("could not resolve linked storage identities for {owner}: {error}")
+        })?;
+        select_storage_wallet(&owner, &account)?
     };
     let mut permissions = vec!["read".to_owned(), "list".to_owned()];
     if args.write {
@@ -1977,6 +1987,48 @@ async fn setup_s3_credential(
     } else {
         output::print_credential(&value, json_output)
     }
+}
+
+fn select_storage_wallet(owner: &str, account: &Value) -> Result<String> {
+    let identities = account["identities"]
+        .as_array()
+        .ok_or_else(|| anyhow!("account response omitted linked storage identities"))?;
+    let wallets: Vec<&str> = identities
+        .iter()
+        .filter_map(|identity| identity["wallet"].as_str())
+        .filter(|wallet| !wallet.is_empty())
+        .collect();
+    if wallets.is_empty() {
+        return Err(anyhow!(
+            "no linked storage identity is available; link a storage wallet before creating an S3 credential"
+        ));
+    }
+    if wallets.contains(&owner) {
+        return Ok(owner.to_owned());
+    }
+    if wallets.len() == 1 {
+        return Ok(wallets[0].to_owned());
+    }
+    let funded: Vec<&str> = identities
+        .iter()
+        .filter(|identity| {
+            identity["wallet"]
+                .as_str()
+                .is_some_and(|wallet| wallets.contains(&wallet) && wallet != owner)
+                && identity["available_atoms"]
+                    .as_str()
+                    .and_then(|amount| amount.parse::<u128>().ok())
+                    .is_some_and(|amount| amount > 0)
+        })
+        .filter_map(|identity| identity["wallet"].as_str())
+        .collect();
+    if funded.len() == 1 {
+        return Ok(funded[0].to_owned());
+    }
+    Err(anyhow!(
+        "multiple linked storage identities are available; rerun with --wallet WALLET (available: {})",
+        wallets.join(", ")
+    ))
 }
 
 fn format_duration(seconds: u64) -> String {
@@ -2304,6 +2356,15 @@ mod tests {
             &["pipe", "profile", "set", "--bucket", "bucket"][..],
             &["pipe", "s3", "setup", "--bucket", "bucket"][..],
             &["pipe", "s3", "setup", "--write", "--bucket", "bucket"][..],
+            &[
+                "pipe",
+                "s3",
+                "setup",
+                "--bucket",
+                "bucket",
+                "--wallet",
+                "storage-wallet",
+            ][..],
             &["pipe", "storage", "setup", "--bucket", "bucket"][..],
             &["pipe", "storage", "init", "--bucket", "bucket"][..],
             &["pipe", "s3", "credential", "list"][..],
@@ -2356,6 +2417,41 @@ mod tests {
         let cli =
             Cli::try_parse_from(["pipe", "--config", file.to_str().unwrap(), "account"]).unwrap();
         assert_eq!(context(&cli).unwrap().1, "work");
+    }
+
+    #[test]
+    fn storage_setup_selects_the_linked_identity() {
+        let account = json!({
+            "identities": [
+                {"wallet":"storage-wallet","available_atoms":"1000000"}
+            ]
+        });
+        assert_eq!(
+            select_storage_wallet("owner-wallet", &account).unwrap(),
+            "storage-wallet"
+        );
+
+        let owner_account = json!({
+            "identities": [
+                {"wallet":"other-wallet","available_atoms":"1000000"},
+                {"wallet":"owner-wallet","available_atoms":"0"}
+            ]
+        });
+        assert_eq!(
+            select_storage_wallet("owner-wallet", &owner_account).unwrap(),
+            "owner-wallet"
+        );
+
+        let ambiguous = json!({
+            "identities": [
+                {"wallet":"one","available_atoms":"1000000"},
+                {"wallet":"two","available_atoms":"1000000"}
+            ]
+        });
+        assert!(select_storage_wallet("owner-wallet", &ambiguous)
+            .unwrap_err()
+            .to_string()
+            .contains("--wallet WALLET"));
     }
 
     #[test]

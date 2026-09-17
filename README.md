@@ -537,6 +537,7 @@ pipe auth status
 pipe auth sessions --revoke SESSION_UUID
 pipe auth logout
 pipe s3 setup --bucket my-bucket
+pipe s3 setup --bucket my-bucket --wallet STORAGE_WALLET
 pipe s3 setup --write --bucket my-bucket --expires-in 2592000
 pipe storage init --bucket my-bucket
 pipe s3 credential list
