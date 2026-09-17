@@ -263,16 +263,19 @@ async fn download(
             } else {
                 None
             };
-            let staging = tempfile::NamedTempFile::new_in(&destination.parent)?;
+            // The nested downloader atomically replaces this pathname. Keep
+            // its cleanup guard, but close the placeholder handle so Windows
+            // can replace the file.
+            let staging = tempfile::NamedTempFile::new_in(&destination.parent)?.into_temp_path();
             let reader = download_client(
                 client,
                 before.as_ref().and_then(|object| object.etag.as_deref()),
             )?;
             reader
-                .get_to_file(bucket, &item.key, staging.path(), None)
+                .get_to_file(bucket, &item.key, &staging, None)
                 .await?;
             let digest = if state.is_some() {
-                Some(digest_file(staging.path()).await?)
+                Some(digest_file(&staging).await?)
             } else {
                 None
             };
@@ -289,11 +292,10 @@ async fn download(
             // paths after the await before atomically committing the result.
             checked_directory(&parent, false)?;
             regular_file(&destination.path)?;
-            // get_to_file atomically replaces the staging pathname, so the
-            // original NamedTempFile handle no longer refers to its contents.
+            // Flush the downloaded file now occupying the staging pathname.
             fs::OpenOptions::new()
                 .write(true)
-                .open(staging.path())?
+                .open(&staging)?
                 .sync_all()?;
             staging
                 .persist(&destination.path)

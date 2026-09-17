@@ -28,7 +28,7 @@ percent-encoding = "2.3"
 rand = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 rpassword = "7"
-quick-xml = { version = "0.38", features = ["serialize"] }
+quick-xml = { version = "0.41", features = ["serialize"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["arbitrary_precision"] }
 sha2 = "0.10"

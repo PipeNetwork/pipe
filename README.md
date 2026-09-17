@@ -668,6 +668,6 @@ current configuration before restoring settings. Secrets and recovery journals
 retain their current state, including unresolved payment and transfer records.
 
 `pipe doctor --export /private/pipe-diagnostics.json` explicitly writes a private
-report with platform availability flags, client/platform version and journal file
-sizes. It excludes tokens, account identifiers and journal contents. Client
+report with platform availability flags, client version, OS, architecture and
+journal file sizes. It excludes tokens, account identifiers and journal contents. Client
 telemetry is off; the report is never uploaded automatically.
