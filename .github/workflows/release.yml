@@ -48,15 +48,16 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Verify contracts and source formatting
-        run: |
-          cargo fmt --all --check
-          python scripts/cli-coverage.py --check
-          python scripts/test-release-qualification.py
-      - name: Native tests and lint
-        run: |
-          cargo test --locked --workspace --target ${{ matrix.target }}
-          cargo clippy --locked --workspace --all-targets --target ${{ matrix.target }} -- -D warnings
+      - name: Verify source formatting
+        run: cargo fmt --all --check
+      - name: Verify pinned contracts
+        run: python scripts/cli-coverage.py --check
+      - name: Verify publication safeguards
+        run: python scripts/test-release-qualification.py
+      - name: Native tests
+        run: cargo test --locked --workspace --target ${{ matrix.target }}
+      - name: Native lint
+        run: cargo clippy --locked --workspace --all-targets --target ${{ matrix.target }} -- -D warnings
       - name: Build release binary
         run: cargo build --locked --release --workspace --target ${{ matrix.target }}
       - name: Verify installation, upgrade and rollback
