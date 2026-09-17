@@ -593,10 +593,19 @@ pub async fn run(mut cli: Cli) -> Result<()> {
         Commands::Storage { command } => match command {
             StorageCommands::Setup(args) => {
                 let (_, selected) = store.profile(Some(&name))?;
-                setup_s3_credential(&client, &name, &selected, args, cli.json, false).await
+                setup_s3_credential(
+                    &client,
+                    &name,
+                    &selected,
+                    args,
+                    cli.json,
+                    false,
+                    Some(&mut store),
+                )
+                .await
             }
             StorageCommands::Bucket { command } => {
-                bucket_command(&client, &store, &name, &profile, command, cli.json).await
+                bucket_command(&client, &mut store, &name, &profile, command, cli.json).await
             }
             StorageCommands::Object { command } => {
                 object_command(&client, &store, &name, &profile, command, cli.json).await
@@ -660,7 +669,7 @@ pub async fn run(mut cli: Cli) -> Result<()> {
         Commands::Payments { command } => payment_command(&client, command, cli.json).await,
         Commands::S3 { command } => s3_command(&client, &mut store, &name, command, cli.json).await,
         Commands::Bucket { command } => {
-            bucket_command(&client, &store, &name, &profile, command, cli.json).await
+            bucket_command(&client, &mut store, &name, &profile, command, cli.json).await
         }
         Commands::Object { command } => {
             object_command(&client, &store, &name, &profile, command, cli.json).await
@@ -932,7 +941,16 @@ async fn s3_command(
     match command {
         S3Commands::Setup(args) => {
             let (_, profile) = store.profile(Some(name))?;
-            setup_s3_credential(client, name, &profile, args, json_output, false).await
+            setup_s3_credential(
+                client,
+                name,
+                &profile,
+                args,
+                json_output,
+                false,
+                Some(store),
+            )
+            .await
         }
         S3Commands::List { location } => {
             let (_, profile) = store.profile(Some(name))?;
@@ -1352,18 +1370,27 @@ fn destination_string(bucket: String, key: String) -> String {
 
 async fn bucket_command(
     client: &ControlClient,
-    store: &ConfigStore,
+    store: &mut ConfigStore,
     name: &str,
     profile: &Profile,
     command: BucketCommands,
     json_output: bool,
 ) -> Result<()> {
+    let list_bucket = if matches!(&command, BucketCommands::List) && profile.bucket.is_none() {
+        if client.active_s3_access_key()?.is_some() {
+            Some(active_s3_bucket(client).await?)
+        } else {
+            None
+        }
+    } else {
+        profile.bucket.clone()
+    };
     let (access, bucket_hint) = match &command {
         BucketCommands::Create { bucket } | BucketCommands::Delete { bucket } => {
             (S3Access::Write, Some(bucket.as_str()))
         }
         BucketCommands::Head { bucket } => (S3Access::ReadOnly, Some(bucket.as_str())),
-        BucketCommands::List => (S3Access::ReadOnly, profile.bucket.as_deref()),
+        BucketCommands::List => (S3Access::ReadOnly, list_bucket.as_deref()),
     };
     let s3 = s3_client(client, store, name, profile, access, bucket_hint).await?;
     match command {
@@ -1380,11 +1407,59 @@ async fn bucket_command(
             output::print(&json!({"bucket":bucket,"deleted":true}), json_output)
         }
         BucketCommands::List => {
-            let bucket=profile.bucket.clone().ok_or_else(||anyhow!("Pipe's gateway does not support ListBuckets; specify a bucket or configure profile.bucket"))?;
+            let bucket = list_bucket.ok_or_else(|| {
+                anyhow!(
+                    "Pipe's gateway does not support ListBuckets; specify a bucket or configure profile.bucket"
+                )
+            })?;
             s3.head_bucket(&bucket).await?;
+            if profile.bucket.is_none() {
+                save_s3_profile_defaults(store, name, &bucket, None)?;
+            }
             output::print(&json!({"items":[bucket]}), json_output)
         }
     }
+}
+
+async fn active_s3_bucket(client: &ControlClient) -> Result<String> {
+    let access_key = client
+        .active_s3_access_key()?
+        .ok_or_else(|| anyhow!("no active S3 credential"))?;
+    let credentials = account::credentials(client).await?;
+    specific_s3_bucket(&credentials, &access_key)
+}
+
+fn specific_s3_bucket(credentials: &Value, access_key: &str) -> Result<String> {
+    let item = credentials["items"]
+        .as_array()
+        .and_then(|items| {
+            items
+                .iter()
+                .find(|item| item["access_key_id"] == access_key && item["revoked_at"].is_null())
+        })
+        .ok_or_else(|| {
+            anyhow!("the active S3 credential is no longer listed; create a new credential")
+        })?;
+    let buckets = item["buckets"]
+        .as_array()
+        .ok_or_else(|| anyhow!("the active S3 credential omitted its bucket scope"))?;
+    let bucket = buckets
+        .iter()
+        .filter_map(Value::as_str)
+        .find(|bucket| *bucket != "*")
+        .ok_or_else(|| {
+            anyhow!("the active S3 credential has no specific bucket; specify s3://BUCKET/")
+        })?;
+    if buckets
+        .iter()
+        .filter_map(Value::as_str)
+        .any(|value| value != bucket)
+    {
+        return Err(anyhow!(
+            "the active S3 credential covers multiple buckets; specify s3://BUCKET/"
+        ));
+    }
+    Ok(bucket.to_owned())
 }
 
 async fn object_command(
@@ -1789,7 +1864,7 @@ async fn s3_client(
         Some(pair) => pair,
         None if matches!(access_mode, S3Access::ReadOnly) => {
             let args = automatic_setup_args(profile, bucket_hint)?;
-            setup_s3_credential(client, name, profile, args, false, true).await?;
+            setup_s3_credential(client, name, profile, args, false, true, None).await?;
             client
                 .active_s3_credential()?
                 .ok_or_else(|| anyhow!("automatic storage setup did not activate a credential"))?
@@ -1846,6 +1921,7 @@ async fn setup_s3_credential(
     args: StorageSetupArgs,
     json_output: bool,
     automatic: bool,
+    mut store: Option<&mut ConfigStore>,
 ) -> Result<()> {
     anyhow::ensure!(
         (60..=30 * 24 * 60 * 60).contains(&args.expires_in),
@@ -1868,6 +1944,7 @@ async fn setup_s3_credential(
             && !bucket.ends_with('-'),
         "bucket must be a valid S3 bucket name"
     );
+    let explicit_prefix = args.prefix.is_some();
     let prefix = args
         .prefix
         .or_else(|| profile.prefix.clone())
@@ -1934,6 +2011,14 @@ async fn setup_s3_credential(
         )
     })?;
     store_credential(client, &value)?;
+    if let Some(store) = store.take() {
+        save_s3_profile_defaults(
+            store,
+            name,
+            &bucket,
+            explicit_prefix.then_some(prefix.as_str()),
+        )?;
+    }
     if automatic {
         eprintln!(
             "Storage credential saved securely for profile '{name}' ({} access, expires in {}).",
@@ -1948,6 +2033,25 @@ async fn setup_s3_credential(
     } else {
         output::print_credential(&value, json_output)
     }
+}
+
+fn save_s3_profile_defaults(
+    store: &mut ConfigStore,
+    name: &str,
+    bucket: &str,
+    prefix: Option<&str>,
+) -> Result<()> {
+    let profile = store
+        .file
+        .profiles
+        .get_mut(name)
+        .ok_or_else(|| anyhow!("profile '{name}' does not exist"))?;
+    profile.bucket = Some(bucket.to_owned());
+    if let Some(prefix) = prefix {
+        profile.prefix = Some(prefix.to_owned());
+    }
+    profile.validate()?;
+    store.save()
 }
 
 fn select_storage_wallet(owner: &str, account: &Value) -> Result<String> {
@@ -2425,6 +2529,34 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("--wallet WALLET"));
+    }
+
+    #[test]
+    fn storage_setup_remembers_bucket_and_active_bucket_is_unambiguous() {
+        let root = tempfile::tempdir().unwrap();
+        let config = root.path().join("config.json");
+        let mut store = ConfigStore::load(config.to_str()).unwrap();
+        save_s3_profile_defaults(&mut store, "default", "test", Some("backups/")).unwrap();
+        let (_, profile) = store.profile(Some("default")).unwrap();
+        assert_eq!(profile.bucket.as_deref(), Some("test"));
+        assert_eq!(profile.prefix.as_deref(), Some("backups/"));
+
+        let credentials = json!({
+            "items": [{
+                "access_key_id": "LTTEST",
+                "revoked_at": null,
+                "buckets": ["test"]
+            }]
+        });
+        assert_eq!(specific_s3_bucket(&credentials, "LTTEST").unwrap(), "test");
+        let broad = json!({
+            "items": [{
+                "access_key_id": "LTTEST",
+                "revoked_at": null,
+                "buckets": ["*"]
+            }]
+        });
+        assert!(specific_s3_bucket(&broad, "LTTEST").is_err());
     }
 
     #[test]

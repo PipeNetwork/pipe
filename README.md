@@ -554,9 +554,11 @@ pipe s3 rb my-bucket
 ```
 
 `pipe s3 setup` is an explicit action and creates the credential immediately;
-it does not ask for a second confirmation. Read-only S3 commands can also create
-their short-lived read/list credential automatically. Destructive commands and
-payment submissions still require their normal confirmation.
+it does not ask for a second confirmation. It also saves the selected bucket and
+explicit prefix as the profile defaults, so a later `pipe s3 ls` uses that
+bucket without trying global bucket discovery. Read-only S3 commands can also
+create their short-lived read/list credential automatically. Destructive commands
+and payment submissions still require their normal confirmation.
 
 Profiles contain only the control API URL, S3 endpoint, region, bucket and prefix
 defaults. `--config FILE` selects a separate configuration. Sessions and keys are
