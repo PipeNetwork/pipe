@@ -531,6 +531,7 @@ pipe auth logout
 pipe s3 credential list
 pipe s3 credential rotate ACCESS_KEY_ID
 pipe s3 credential revoke ACCESS_KEY_ID
+pipe s3 ls
 ```
 
 Profiles contain only the control API URL, S3 endpoint, region, bucket and prefix
@@ -576,8 +577,9 @@ pipe sync s3://my-bucket/backups ./restored
 
 `upload-file` and `download-file` are aliases for object put/get. Explicit
 locations accept `bucket/key` or `s3://bucket/key`. A bare filename uses the
-profile's bucket and prefix. `bucket list` reports the configured bucket after
-HEAD; Pipe does not support global `ListBuckets` enumeration.
+profile's bucket and prefix. `bucket list` and its `s3 ls` shortcut report the
+configured bucket after HEAD; Pipe does not support global `ListBuckets`
+enumeration. Use `object list` to list objects inside a bucket.
 
 Sync records local content digests and observed opaque remote ETags to skip
 unchanged files on later runs. It never deletes unrelated objects or local

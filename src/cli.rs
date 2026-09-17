@@ -327,6 +327,12 @@ pub enum PaymentCommands {
 
 #[derive(Subcommand, Debug)]
 pub enum S3Commands {
+    /// Show the configured bucket after a signed HEAD request.
+    ///
+    /// Pipe's customer gateway does not expose global ListBuckets enumeration,
+    /// so this is equivalent to `pipe bucket list`.
+    #[command(name = "ls", visible_alias = "list")]
+    List,
     Multipart {
         #[command(subcommand)]
         command: MultipartCommands,
@@ -736,6 +742,18 @@ async fn s3_command(
     json_output: bool,
 ) -> Result<()> {
     match command {
+        S3Commands::List => {
+            let (_, profile) = store.profile(Some(name))?;
+            bucket_command(
+                client,
+                store,
+                name,
+                &profile,
+                BucketCommands::List,
+                json_output,
+            )
+            .await
+        }
         S3Commands::Multipart { command } => {
             let (_, profile) = store.profile(Some(name))?;
             let s3 = s3_client(client, store, name, &profile).await?;
@@ -1449,6 +1467,8 @@ mod tests {
             &["pipe", "auth", "login"][..],
             &["pipe", "profile", "create", "personal"][..],
             &["pipe", "s3", "credential", "list"][..],
+            &["pipe", "s3", "ls"][..],
+            &["pipe", "s3", "list"][..],
             &["pipe", "object", "put", "file", "bucket/key"][..],
             &["pipe", "upload-file", "file", "bucket/key"][..],
         ] {
