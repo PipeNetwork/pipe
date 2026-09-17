@@ -31,9 +31,28 @@ fn capabilities(v: &Value) -> Value {
     }
     json!({"cli":flags(&v["cli"]),"features":features})
 }
+
+fn local_storage(c: &ControlClient) -> Result<Value> {
+    let active = c.secrets.get("s3_access_key")?;
+    let secret_available = active
+        .as_deref()
+        .map(|access| c.s3_secret(access).is_ok())
+        .unwrap_or(false);
+    Ok(json!({
+        "profile": &c.profile,
+        "endpoint_configured": c.profile.s3_endpoint.is_some(),
+        "active_credential": active.is_some(),
+        "secret_available": secret_available,
+        "setup_command": if active.is_some() && secret_available { Value::Null } else { json!("pipe s3 setup") },
+        "write_setup_command": if active.is_some() && secret_available { Value::Null } else { json!("pipe s3 setup --write") },
+    }))
+}
 pub async fn run(c: &ControlClient, export: Option<&Path>, j: bool) -> Result<()> {
     if export.is_none() {
-        return output::print(&c.get("/v1/cli/capabilities").await?, j);
+        let local = local_storage(c)?;
+        let mut remote = c.get("/v1/cli/capabilities").await?;
+        remote["local_storage"] = local;
+        return output::print(&remote, j);
     }
     let destination = export.unwrap();
     ensure!(
@@ -41,10 +60,10 @@ pub async fn run(c: &ControlClient, export: Option<&Path>, j: bool) -> Result<()
         "diagnostic destination already exists"
     );
     let status = match c.get("/v1/cli/capabilities").await {
-        Ok(v) => json!({"capabilities":capabilities(&v)}),
+        Ok(v) => json!({"capabilities":capabilities(&v),"local_storage":local_storage(c)?}),
         Err(e) => {
             let (code, exit) = crate::error::classification(&e);
-            json!({"error_code":code,"exit_status":exit})
+            json!({"error_code":code,"exit_status":exit,"local_storage":local_storage(c)?})
         }
     };
     let mut journals = Vec::new();

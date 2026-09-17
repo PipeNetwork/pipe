@@ -464,7 +464,10 @@ challenges. It never runs unrelated main migrations. Legacy `--legacy-wallet`
 requires the separate migration `0026_customer_cli_sessions.sql` and
 `LATTICE_CUSTOMER_CLI_ENABLED=true`. Configure `LATTICE_S3_ENDPOINT` and
 `LATTICE_S3_REGION` for gateway discovery. This checkout does not deploy or enable
-these routes in production.
+these routes in production. Automatic read onboarding also requires the additive
+`POST /v1/customer/cli/s3/session` route, which accepts `storage.read` and emits
+only a short-lived read/list credential; permanent write keys retain the existing
+credential-management permission requirements.
 
 ## First upload
 
@@ -477,9 +480,11 @@ pipe payments create 10.00
 # Use the invoice_id returned above. This command signs and submits the payment.
 pipe payments pay INVOICE_ID --yes
 pipe payments status INVOICE_ID
-# Wait until the invoice is credited before creating a key.
-pipe s3 credential create --bucket my-bucket
+# Wait until the invoice is credited before storage setup. Read-only listing
+# can create a short-lived key interactively; writes require explicit setup.
 pipe s3 endpoint
+pipe s3 setup --bucket my-bucket
+pipe s3 setup --write --bucket my-bucket
 pipe bucket create my-bucket
 pipe object put ./file.txt my-bucket/file.txt
 pipe object get my-bucket/file.txt ./downloaded.txt
@@ -531,6 +536,9 @@ pipe auth sessions
 pipe auth status
 pipe auth sessions --revoke SESSION_UUID
 pipe auth logout
+pipe s3 setup --bucket my-bucket
+pipe s3 setup --write --bucket my-bucket --expires-in 2592000
+pipe storage init --bucket my-bucket
 pipe s3 credential list
 pipe s3 credential rotate ACCESS_KEY_ID
 pipe s3 credential revoke ACCESS_KEY_ID
@@ -562,7 +570,12 @@ Rotation creates and stores a replacement before revoking the old key; a failed
 revocation is reported explicitly. `s3 credential import ACCESS_KEY_ID` securely
 prompts for an existing S3 secret, and `s3 credential use ACCESS_KEY_ID` selects a
 stored key. Configure the same endpoint, bucket and key to access existing
-PipeBox objects. No bucket or object migration is performed.
+PipeBox objects. No bucket or object migration is performed. If a read-only
+command such as `s3 ls`, `s3 head`, or `object list` has no local key, the CLI
+offers to create a seven-day `read/list` credential for the requested bucket,
+saves it in the OS keyring, and retries the original request once. This prompt
+never grants write access. Use `s3 setup --write` for uploads, deletes, bucket
+creation, or other mutations; `--no-input` prints the setup command instead.
 
 `pipe config migrate --legacy-path FILE` creates a timestamped private backup
 and imports compatible local configuration fields. It discards legacy
@@ -595,6 +608,11 @@ explicit form. `s3 cp` handles one file in either direction and directory
 transfers with `--recursive`; `s3 sync` is the familiar spelling for the
 existing top-level `sync` workflow. `s3 rm --recursive` deletes each listed
 object under a prefix and uses the existing destructive confirmation.
+
+`pipe doctor` reports endpoint configuration, whether an active storage key is
+present, and whether its secret is available locally. The gateway currently has
+no global `ListBuckets` operation, so automatic setup always scopes a key to the
+configured or explicitly supplied bucket.
 
 Sync records local content digests and observed opaque remote ETags to skip
 unchanged files on later runs. It never deletes unrelated objects or local

@@ -136,6 +136,51 @@
     {
       "advanced_access": false,
       "allowed_cli_credential_kinds": [],
+      "command": "pipe s3 ls / head / object list (automatic onboarding)",
+      "conditional_cli_scopes": {
+        "storage.read": [
+          "read-only delegated session"
+        ]
+      },
+      "credentials": [
+        {
+          "cliBearer": []
+        },
+        {
+          "platformCliBearer": []
+        }
+      ],
+      "disposition": "workflow-internal",
+      "feature_conditions": {
+        "anyOf": [
+          {
+            "feature": "LATTICE_CUSTOMER_CLI_ENABLED",
+            "schemaMinimum": 26
+          },
+          {
+            "accountAllowlist": true,
+            "feature": "LATTICE_PLATFORM_CLI_ENABLED",
+            "optionalSchema": "cli:3"
+          }
+        ],
+        "default": "disabled",
+        "deployed": "unverified"
+      },
+      "implementation_status": "implemented",
+      "method": "POST",
+      "operation_id": "cliCreateS3StorageSession",
+      "path": "/v1/customer/cli/s3/session",
+      "reason": "Short-lived least-privilege read onboarding for S3 metadata and listings.",
+      "required_cli_scopes": [
+        "storage.read"
+      ],
+      "retry_policy": "read-only",
+      "service": "control-plane",
+      "verification_fixture": "baseline cargo test"
+    },
+    {
+      "advanced_access": false,
+      "allowed_cli_credential_kinds": [],
       "command": "pipe auth / storage / usage",
       "conditional_cli_scopes": {},
       "credentials": [],

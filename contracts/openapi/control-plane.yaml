@@ -17734,6 +17734,189 @@
         "x-pipe-lifecycle": "implemented"
       }
     },
+    "/v1/customer/cli/s3/session": {
+      "post": {
+        "description": "Create a short-lived read/list-only storage session for an owned storage identity. This delegated session is the least-privilege bootstrap path for CLI reads and is not a long-lived credential-management operation.",
+        "operationId": "cliCreateS3StorageSession",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CustomerCredentialRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateS3CredentialResponse"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Invalid request or extractor rejection",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Missing, invalid or expired credential",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "CLI scope or account context denied",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Route unavailable when CLI feature is disabled (empty response body).",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "State conflict",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Internal service error",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Service or schema unavailable",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cliBearer": []
+          },
+          {
+            "platformCliBearer": []
+          }
+        ],
+        "tags": [
+          "Customer"
+        ],
+        "x-pipe-audience": "customer",
+        "x-pipe-availability": {
+          "anyOf": [
+            {
+              "feature": "LATTICE_CUSTOMER_CLI_ENABLED",
+              "schemaMinimum": 26
+            },
+            {
+              "accountAllowlist": true,
+              "feature": "LATTICE_PLATFORM_CLI_ENABLED",
+              "optionalSchema": "cli:3"
+            }
+          ],
+          "default": "disabled",
+          "deployed": "unverified"
+        },
+        "x-pipe-lifecycle": "implemented"
+      }
+    },
     "/v1/customer/cli/usage": {
       "get": {
         "description": "Read usage for owned identities. Defaults to the preceding 30 days. Requires from < to and an interval of at most 366 days. Byte and atom totals are decimal integer strings; unmeasured_events reports events without measured byte counts.",
@@ -42153,5 +42336,5 @@
     }
   ],
   "x-pipe-publication-status": "reference",
-  "x-pipe-source-revision": "sha256:b65ee50aacb613d7f6914c2869efed91f11df193208965d3de998be28ff6369e"
+  "x-pipe-source-revision": "sha256:26be3044fff96bf238e2bcd9586a899a000262c23a82e5d67c9c76d34a28106d"
 }

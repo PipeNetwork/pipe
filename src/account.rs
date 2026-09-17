@@ -42,6 +42,47 @@ pub async fn create_credential(
     client.post("/v1/customer/cli/s3/credentials", body).await
 }
 
+/// Request a short-lived read/list-only storage session used for automatic
+/// onboarding of interactive CLI reads. The control plane never treats this
+/// as a long-lived credential-management grant.
+pub async fn create_storage_session(
+    client: &ControlClient,
+    wallet: &str,
+    label: &str,
+    buckets: &[String],
+    prefix: &str,
+    expires_at: Option<u64>,
+) -> Result<Value> {
+    let mut body = json!({
+        "wallet": wallet,
+        "label": label,
+        "buckets": buckets,
+        "key_prefix": prefix,
+        "permissions": ["read", "list"]
+    });
+    if let Some(value) = expires_at {
+        body["expires_at"] = json!(value);
+    }
+    match client
+        .post("/v1/customer/cli/s3/session", body.clone())
+        .await
+    {
+        Ok(value) => Ok(value),
+        Err(error)
+            if error
+                .downcast_ref::<crate::error::ApiError>()
+                .is_some_and(|api| api.status == reqwest::StatusCode::NOT_FOUND) =>
+        {
+            // RC2 control planes do not know the additive session route yet.
+            // The same body is bounded to read/list and seven days, so the
+            // preserved customer credential route remains a safe compatibility
+            // fallback during a rolling backend deployment.
+            client.post("/v1/customer/cli/s3/credentials", body).await
+        }
+        Err(error) => Err(error),
+    }
+}
+
 pub async fn revoke_credential(client: &ControlClient, access_key_id: &str) -> Result<Value> {
     client
         .delete(&format!("/v1/customer/cli/s3/credentials/{access_key_id}"))

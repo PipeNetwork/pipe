@@ -7,7 +7,7 @@ use crate::{
     sync,
 };
 use anyhow::{anyhow, Result};
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
@@ -37,7 +37,7 @@ pub struct Cli {
     #[arg(
         long,
         global = true,
-        help = "Confirm resource deletion and payment submission without prompting"
+        help = "Confirm credential setup, resource deletion, and payment submission without prompting"
     )]
     pub yes: bool,
     #[arg(
@@ -221,6 +221,9 @@ pub enum Commands {
 
 #[derive(Subcommand, Debug)]
 pub enum StorageCommands {
+    /// Configure a secure S3 credential for the selected storage profile.
+    #[command(visible_alias = "init")]
+    Setup(StorageSetupArgs),
     Bucket {
         #[command(subcommand)]
         command: BucketCommands,
@@ -373,6 +376,8 @@ pub enum PaymentCommands {
 
 #[derive(Subcommand, Debug)]
 pub enum S3Commands {
+    /// Configure a secure S3 credential for the selected profile.
+    Setup(StorageSetupArgs),
     /// Show the configured bucket after a signed HEAD request.
     ///
     /// Pipe's customer gateway does not expose global ListBuckets enumeration,
@@ -426,6 +431,25 @@ pub enum S3Commands {
         command: CredentialCommands,
     },
     Endpoint,
+}
+
+#[derive(Args, Clone, Debug)]
+pub struct StorageSetupArgs {
+    /// Grant write access in addition to read/list access.
+    #[arg(long)]
+    write: bool,
+    /// Limit the credential to this bucket; defaults to the profile bucket.
+    #[arg(long)]
+    bucket: Option<String>,
+    /// Limit the credential to this object prefix; defaults to the profile prefix.
+    #[arg(long)]
+    prefix: Option<String>,
+    /// Credential lifetime in seconds (60 seconds to 30 days).
+    #[arg(long, default_value_t = 7 * 24 * 60 * 60)]
+    expires_in: u64,
+    /// Label recorded with the credential.
+    #[arg(long, default_value = "pipe-cli-auto")]
+    label: String,
 }
 
 #[derive(Subcommand, Debug)]
@@ -564,6 +588,10 @@ pub async fn run(mut cli: Cli) -> Result<()> {
         Commands::Durable { command } => crate::platform::durable(&client, command, cli.json).await,
         Commands::Hosting { command } => crate::platform::hosting(&client, command, cli.json).await,
         Commands::Storage { command } => match command {
+            StorageCommands::Setup(args) => {
+                let (_, selected) = store.profile(Some(&name))?;
+                setup_s3_credential(&client, &name, &selected, args, cli.json, false, cli.yes).await
+            }
             StorageCommands::Bucket { command } => {
                 bucket_command(&client, &store, &name, &profile, command, cli.json).await
             }
@@ -571,7 +599,7 @@ pub async fn run(mut cli: Cli) -> Result<()> {
                 object_command(&client, &store, &name, &profile, command, cli.json).await
             }
             StorageCommands::S3 { command } => {
-                s3_command(&client, &mut store, &name, command, cli.json).await
+                s3_command(&client, &mut store, &name, command, cli.json, cli.yes).await
             }
         },
         Commands::Auth { command } => auth_command(&client, command, cli.json).await,
@@ -627,7 +655,9 @@ pub async fn run(mut cli: Cli) -> Result<()> {
             output::print(&account::usage(&client, from, to).await?, cli.json)
         }
         Commands::Payments { command } => payment_command(&client, command, cli.json).await,
-        Commands::S3 { command } => s3_command(&client, &mut store, &name, command, cli.json).await,
+        Commands::S3 { command } => {
+            s3_command(&client, &mut store, &name, command, cli.json, cli.yes).await
+        }
         Commands::Bucket { command } => {
             bucket_command(&client, &store, &name, &profile, command, cli.json).await
         }
@@ -681,7 +711,15 @@ pub async fn run(mut cli: Cli) -> Result<()> {
             bucket,
             prefix,
         } => {
-            let s3 = s3_client(&client, &store, &name, &profile).await?;
+            let s3 = s3_client(
+                &client,
+                &store,
+                &name,
+                &profile,
+                S3Access::Write,
+                Some(&bucket),
+            )
+            .await?;
             let count =
                 sync::upload_directory(&s3, Path::new(&local_directory), &bucket, &prefix).await?;
             output::print(
@@ -694,7 +732,15 @@ pub async fn run(mut cli: Cli) -> Result<()> {
             prefix,
             local_directory,
         } => {
-            let s3 = s3_client(&client, &store, &name, &profile).await?;
+            let s3 = s3_client(
+                &client,
+                &store,
+                &name,
+                &profile,
+                S3Access::ReadOnly,
+                Some(&bucket),
+            )
+            .await?;
             let count =
                 sync::download_directory(&s3, &bucket, &prefix, Path::new(&local_directory))
                     .await?;
@@ -875,8 +921,19 @@ async fn s3_command(
     name: &str,
     command: S3Commands,
     json_output: bool,
+    confirmed: bool,
 ) -> Result<()> {
+    if !matches!(
+        &command,
+        S3Commands::Endpoint | S3Commands::Credential { .. } | S3Commands::Setup(_)
+    ) {
+        ensure_s3_endpoint(client, store, name).await?;
+    }
     match command {
+        S3Commands::Setup(args) => {
+            let (_, profile) = store.profile(Some(name))?;
+            setup_s3_credential(client, name, &profile, args, json_output, false, confirmed).await
+        }
         S3Commands::List { location } => {
             let (_, profile) = store.profile(Some(name))?;
             if let Some(location) = location {
@@ -1003,7 +1060,27 @@ async fn s3_command(
         }
         S3Commands::Multipart { command } => {
             let (_, profile) = store.profile(Some(name))?;
-            let s3 = s3_client(client, store, name, &profile).await?;
+            let (access, bucket_hint) = match &command {
+                MultipartCommands::List { bucket } => (S3Access::ReadOnly, Some(bucket.clone())),
+                MultipartCommands::Parts { remote, .. } => {
+                    let (bucket, _) = remote_location(&profile, remote)?;
+                    (S3Access::ReadOnly, Some(bucket))
+                }
+                MultipartCommands::Complete { remote, .. }
+                | MultipartCommands::Abort { remote, .. } => {
+                    let (bucket, _) = remote_location(&profile, remote)?;
+                    (S3Access::Write, Some(bucket))
+                }
+            };
+            let s3 = s3_client(
+                client,
+                store,
+                name,
+                &profile,
+                access,
+                bucket_hint.as_deref(),
+            )
+            .await?;
             match command {
                 MultipartCommands::List { bucket } => {
                     output::print(&s3.list_multipart_uploads(&bucket).await?, json_output)
@@ -1144,7 +1221,15 @@ async fn s3_copy_command(
         let destination = remote_location(profile, destination)?;
         if source_path.is_dir() {
             anyhow::ensure!(recursive, "copying a directory requires --recursive");
-            let s3 = s3_client(client, store, name, profile).await?;
+            let s3 = s3_client(
+                client,
+                store,
+                name,
+                profile,
+                S3Access::Write,
+                Some(&destination.0),
+            )
+            .await?;
             let count =
                 sync::upload_directory(&s3, source_path, &destination.0, &destination.1).await?;
             output::print(
@@ -1178,7 +1263,15 @@ async fn s3_copy_command(
         );
         if recursive {
             let (bucket, prefix) = remote_prefix(profile, source)?;
-            let s3 = s3_client(client, store, name, profile).await?;
+            let s3 = s3_client(
+                client,
+                store,
+                name,
+                profile,
+                S3Access::ReadOnly,
+                Some(&bucket),
+            )
+            .await?;
             let count =
                 sync::download_directory(&s3, &bucket, &prefix, Path::new(destination)).await?;
             output::print(
@@ -1223,9 +1316,9 @@ async fn s3_remove_command(
     recursive: bool,
     json_output: bool,
 ) -> Result<()> {
-    let s3 = s3_client(client, store, name, profile).await?;
     if recursive {
         let (bucket, prefix) = remote_prefix(profile, remote)?;
+        let s3 = s3_client(client, store, name, profile, S3Access::Write, Some(&bucket)).await?;
         let objects = s3.list_all_objects(&bucket, Some(&prefix)).await?;
         for object in &objects {
             s3.delete_object(&bucket, &object.key).await?;
@@ -1236,6 +1329,7 @@ async fn s3_remove_command(
         )
     } else {
         let (bucket, key) = remote_location(profile, remote)?;
+        let s3 = s3_client(client, store, name, profile, S3Access::Write, Some(&bucket)).await?;
         s3.delete_object(&bucket, &key).await?;
         output::print(
             &json!({"bucket":bucket,"key":key,"deleted":true}),
@@ -1264,7 +1358,14 @@ async fn bucket_command(
     command: BucketCommands,
     json_output: bool,
 ) -> Result<()> {
-    let s3 = s3_client(client, store, name, profile).await?;
+    let (access, bucket_hint) = match &command {
+        BucketCommands::Create { bucket } | BucketCommands::Delete { bucket } => {
+            (S3Access::Write, Some(bucket.as_str()))
+        }
+        BucketCommands::Head { bucket } => (S3Access::ReadOnly, Some(bucket.as_str())),
+        BucketCommands::List => (S3Access::ReadOnly, profile.bucket.as_deref()),
+    };
+    let s3 = s3_client(client, store, name, profile, access, bucket_hint).await?;
     match command {
         BucketCommands::Create { bucket } => {
             s3.create_bucket(&bucket).await?;
@@ -1339,12 +1440,21 @@ async fn object_command(
         }
         ObjectCommands::Head { remote } => {
             let (bucket, key) = remote_location(profile, &remote)?;
-            let s3 = s3_client(client, store, name, profile).await?;
+            let s3 = s3_client(
+                client,
+                store,
+                name,
+                profile,
+                S3Access::ReadOnly,
+                Some(&bucket),
+            )
+            .await?;
             output::print(&s3.head_object(&bucket, &key).await?, json_output)
         }
         ObjectCommands::Delete { remote } => {
             let (bucket, key) = remote_location(profile, &remote)?;
-            let s3 = s3_client(client, store, name, profile).await?;
+            let s3 =
+                s3_client(client, store, name, profile, S3Access::Write, Some(&bucket)).await?;
             s3.delete_object(&bucket, &key).await?;
             output::print(
                 &json!({"bucket":bucket,"key":key,"deleted":true}),
@@ -1352,7 +1462,15 @@ async fn object_command(
             )
         }
         ObjectCommands::List { bucket, prefix } => {
-            let s3 = s3_client(client, store, name, profile).await?;
+            let s3 = s3_client(
+                client,
+                store,
+                name,
+                profile,
+                S3Access::ReadOnly,
+                Some(&bucket),
+            )
+            .await?;
             let mut token = None;
             let mut seen = std::collections::HashSet::new();
             loop {
@@ -1385,7 +1503,7 @@ async fn put_file_command(
     json_output: bool,
 ) -> Result<()> {
     let (bucket, key) = remote_location(profile, destination)?;
-    let s3 = s3_client(client, store, name, profile).await?;
+    let s3 = s3_client(client, store, name, profile, S3Access::Write, Some(&bucket)).await?;
     let mut path = PathBuf::from(local);
     let mut temporary = None;
     if encrypt {
@@ -1452,7 +1570,15 @@ async fn get_file_command(
     json_output: bool,
 ) -> Result<()> {
     let (bucket, key) = remote_location(profile, remote)?;
-    let s3 = s3_client(client, store, name, profile).await?;
+    let s3 = s3_client(
+        client,
+        store,
+        name,
+        profile,
+        S3Access::ReadOnly,
+        Some(&bucket),
+    )
+    .await?;
     let parsed_range = parse_range(range)?;
     if decrypt && parsed_range.is_some() {
         return Err(anyhow!(
@@ -1604,7 +1730,7 @@ async fn sync_command(
 ) -> Result<()> {
     if Path::new(source).is_dir() {
         let (bucket, prefix) = remote_prefix(profile, destination)?;
-        let s3 = s3_client(client, store, name, profile).await?;
+        let s3 = s3_client(client, store, name, profile, S3Access::Write, Some(&bucket)).await?;
         let count = sync::sync_upload(
             &s3,
             Path::new(source),
@@ -1621,7 +1747,15 @@ async fn sync_command(
             ));
         }
         let (bucket, prefix) = remote_prefix(profile, source)?;
-        let s3 = s3_client(client, store, name, profile).await?;
+        let s3 = s3_client(
+            client,
+            store,
+            name,
+            profile,
+            S3Access::ReadOnly,
+            Some(&bucket),
+        )
+        .await?;
         let count = sync::sync_download(
             &s3,
             &bucket,
@@ -1637,19 +1771,256 @@ async fn sync_command(
 async fn s3_client(
     client: &ControlClient,
     _store: &ConfigStore,
-    _name: &str,
+    name: &str,
     profile: &Profile,
+    access_mode: S3Access,
+    bucket_hint: Option<&str>,
 ) -> Result<S3Client> {
-    let access = client.secrets.get("s3_access_key")?.ok_or_else(|| {
-        anyhow!("no active S3 credential; create one with 'pipe s3 credential create'")
-    })?;
-    let secret = client.s3_secret(&access)?;
+    let (access, secret) = match client.secrets.get("s3_access_key")? {
+        Some(access) => match client.s3_secret(&access) {
+            Ok(secret) => (access, secret),
+            Err(_error) if matches!(access_mode, S3Access::ReadOnly) => {
+                let args = automatic_setup_args(profile, bucket_hint)?;
+                setup_s3_credential(client, name, profile, args, false, true, false).await?;
+                let access = client.secrets.get("s3_access_key")?.ok_or_else(|| {
+                    anyhow!("automatic storage setup did not activate a credential")
+                })?;
+                let secret = client.s3_secret(&access)?;
+                (access, secret)
+            }
+            Err(_) => return Err(write_credential_help(profile, bucket_hint)),
+        },
+        None if matches!(access_mode, S3Access::ReadOnly) => {
+            let args = automatic_setup_args(profile, bucket_hint)?;
+            setup_s3_credential(client, name, profile, args, false, true, false).await?;
+            let access = client
+                .secrets
+                .get("s3_access_key")?
+                .ok_or_else(|| anyhow!("automatic storage setup did not activate a credential"))?;
+            let secret = client.s3_secret(&access)?;
+            (access, secret)
+        }
+        None => return Err(write_credential_help(profile, bucket_hint)),
+    };
     S3Client::from_parts(profile, &access, secret)?
         .with_conditions(client.if_match.clone(), client.if_none_match.clone())
         .map(|s3| {
             s3.with_progress(client.progress)
                 .with_state_directory(client.secrets.state_directory().join("uploads"))
         })
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum S3Access {
+    ReadOnly,
+    Write,
+}
+
+fn automatic_setup_args(profile: &Profile, bucket_hint: Option<&str>) -> Result<StorageSetupArgs> {
+    let bucket = bucket_hint
+        .map(str::to_owned)
+        .or_else(|| profile.bucket.clone())
+        .ok_or_else(|| {
+            anyhow!(
+                "no bucket is configured; use an explicit s3://BUCKET/ location or run 'pipe s3 setup --bucket BUCKET'"
+            )
+        })?;
+    Ok(StorageSetupArgs {
+        write: false,
+        bucket: Some(bucket),
+        prefix: profile.prefix.clone(),
+        expires_in: 7 * 24 * 60 * 60,
+        label: "pipe-cli-auto".into(),
+    })
+}
+
+fn write_credential_help(profile: &Profile, bucket_hint: Option<&str>) -> anyhow::Error {
+    let bucket = bucket_hint
+        .or(profile.bucket.as_deref())
+        .map(|value| format!(" --bucket {value}"))
+        .unwrap_or_default();
+    anyhow!(
+        "no active S3 credential; run 'pipe s3 setup --write{bucket}' to explicitly enable storage writes"
+    )
+}
+
+async fn setup_s3_credential(
+    client: &ControlClient,
+    name: &str,
+    profile: &Profile,
+    args: StorageSetupArgs,
+    json_output: bool,
+    automatic: bool,
+    confirmed: bool,
+) -> Result<()> {
+    anyhow::ensure!(
+        (60..=30 * 24 * 60 * 60).contains(&args.expires_in),
+        "credential expiry must be between 60 seconds and 30 days"
+    );
+    let bucket = args
+        .bucket
+        .or_else(|| profile.bucket.clone())
+        .ok_or_else(|| {
+            anyhow!(
+                "no bucket is configured; pass '--bucket BUCKET' to pipe s3 setup or use an explicit s3://BUCKET/ location"
+            )
+        })?;
+    anyhow::ensure!(
+        (3..=63).contains(&bucket.len())
+            && bucket
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+            && !bucket.starts_with('-')
+            && !bucket.ends_with('-'),
+        "bucket must be a valid S3 bucket name"
+    );
+    let prefix = args
+        .prefix
+        .or_else(|| profile.prefix.clone())
+        .unwrap_or_default();
+    let scope = if args.write {
+        "read/list/write"
+    } else {
+        "read/list"
+    };
+    let command = if args.write {
+        format!("pipe s3 setup --write --bucket {bucket}")
+    } else {
+        format!("pipe s3 setup --bucket {bucket}")
+    };
+    if !confirmed {
+        output::require_input().map_err(|_| {
+            anyhow!("storage credential is missing; run '{command}' in an interactive terminal")
+        })?;
+        if automatic {
+            eprint!(
+                "No storage credential is configured for profile '{name}'. Create a temporary read-only credential for bucket '{bucket}' ({})? [Y/n] ",
+                format_duration(args.expires_in)
+            );
+        } else {
+            eprint!(
+                "Create a {scope} S3 credential for bucket '{bucket}' ({}). Type yes to continue: ",
+                format_duration(args.expires_in)
+            );
+        }
+        use std::io::Write;
+        std::io::stderr().flush()?;
+        let mut answer = String::new();
+        std::io::stdin().read_line(&mut answer)?;
+        let accepted = if automatic {
+            !matches!(answer.trim().to_ascii_lowercase().as_str(), "n" | "no")
+        } else {
+            answer.trim().eq_ignore_ascii_case("yes")
+        };
+        anyhow::ensure!(accepted, "storage setup cancelled");
+    }
+    let wallet = if std::env::var_os("PIPE_CLI_TOKEN").is_some() {
+        let context = client
+            .get("/v1/cli/context")
+            .await
+            .map_err(|error| anyhow!("automation context could not be resolved: {error}"))?;
+        context["principal"]["owner_wallet"]
+            .as_str()
+            .or_else(|| context["owner_wallet"].as_str())
+            .ok_or_else(|| anyhow!("automation context did not include an owner wallet"))?
+            .to_owned()
+    } else {
+        client.current_wallet().map_err(|error| {
+            anyhow!(
+                "storage setup needs the account wallet context; run 'pipe auth login' again with storage.write if write access is required ({error})"
+            )
+        })?
+    };
+    let mut permissions = vec!["read".to_owned(), "list".to_owned()];
+    if args.write {
+        permissions.push("write".to_owned());
+    }
+    let expires_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| anyhow!("system clock is before Unix epoch"))?
+        .as_secs()
+        .checked_add(args.expires_in)
+        .ok_or_else(|| anyhow!("credential expiry overflow"))?;
+    let value = if args.write {
+        account::create_credential(
+            client,
+            &wallet,
+            &args.label,
+            std::slice::from_ref(&bucket),
+            &prefix,
+            &permissions,
+            Some(expires_at),
+        )
+        .await
+    } else {
+        account::create_storage_session(
+            client,
+            &wallet,
+            &args.label,
+            std::slice::from_ref(&bucket),
+            &prefix,
+            Some(expires_at),
+        )
+        .await
+    }
+    .map_err(|error| {
+        anyhow!(
+            "could not create the storage credential; check storage permission and available credit: {error}"
+        )
+    })?;
+    store_credential(client, &value)?;
+    if automatic {
+        eprintln!(
+            "Storage credential saved securely for profile '{name}' ({} access, expires in {}).",
+            if args.write {
+                "read/list/write"
+            } else {
+                "read/list"
+            },
+            format_duration(args.expires_in)
+        );
+        Ok(())
+    } else {
+        output::print_credential(&value, json_output)
+    }
+}
+
+fn format_duration(seconds: u64) -> String {
+    if seconds.is_multiple_of(24 * 60 * 60) {
+        format!("{} days", seconds / (24 * 60 * 60))
+    } else if seconds.is_multiple_of(60 * 60) {
+        format!("{} hours", seconds / (60 * 60))
+    } else {
+        format!("{} seconds", seconds)
+    }
+}
+
+async fn ensure_s3_endpoint(
+    client: &ControlClient,
+    store: &mut ConfigStore,
+    name: &str,
+) -> Result<()> {
+    let (_, profile) = store.profile(Some(name))?;
+    if profile.s3_endpoint.is_some() {
+        return Ok(());
+    }
+    let value = account::endpoint(client).await?;
+    let endpoint = value
+        .get("endpoint")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("storage endpoint was not returned by the control plane"))?;
+    let profile = store
+        .file
+        .profiles
+        .get_mut(name)
+        .ok_or_else(|| anyhow!("profile '{name}' does not exist"))?;
+    profile.s3_endpoint = Some(endpoint.to_owned());
+    if let Some(region) = value.get("region").and_then(Value::as_str) {
+        profile.region = region.to_owned();
+    }
+    profile.validate()?;
+    store.save()?;
+    Ok(())
 }
 
 fn remote_location(profile: &Profile, value: &str) -> Result<(String, String)> {
@@ -1937,6 +2308,10 @@ mod tests {
             &["pipe", "profile", "create", "personal"][..],
             &["pipe", "profile", "show"][..],
             &["pipe", "profile", "set", "--bucket", "bucket"][..],
+            &["pipe", "s3", "setup", "--bucket", "bucket"][..],
+            &["pipe", "s3", "setup", "--write", "--bucket", "bucket"][..],
+            &["pipe", "storage", "setup", "--bucket", "bucket"][..],
+            &["pipe", "storage", "init", "--bucket", "bucket"][..],
             &["pipe", "s3", "credential", "list"][..],
             &["pipe", "s3", "credentials", "list"][..],
             &["pipe", "s3", "ls"][..],
