@@ -33,10 +33,14 @@ credential rotation/use/revocation and cleanup. These origin results do not
 qualify the public cache path. No global DNS, admission, backend binary, schema,
 account ownership, or customer resource was changed.
 
-PostgreSQL independently attributed 181 USDC atoms ($0.000181) to the test keys.
+The final release binary also passed 15 public-path checks: write setup, upload
+of the actual CLI executable to a bucket root, multipart download with an exact
+SHA-256 match, list/head, deletion and credential/session cleanup.
+
+PostgreSQL independently attributed 621 USDC atoms ($0.000621) across both campaigns.
 It reported zero live objects, active credentials/sessions, open credit leases,
 or pending reservations. The original persistent $100 budget now records
-$45.000581 spent and $54.999419 remaining; no funds were added or transferred.
+$45.001021 spent and $54.998979 remaining; no funds were added or transferred.
 
 The signed-S3 cache-bypass rule and guarded deployment script are already
 prepared in the Lattice repository. Applying it requires Cloudflare configuration

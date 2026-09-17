@@ -458,15 +458,162 @@
   },
   "budget": {
     "reservation_id": "s3-write-fix-20260918",
-    "actual_atoms": 181,
+    "actual_atoms": 621,
     "maximum_atoms": 100000000,
-    "total_exposure_atoms": 45000581,
-    "remaining_atoms": 54999419
+    "total_exposure_atoms": 45001021,
+    "remaining_atoms": 54998979,
+    "additional_final_binary_reservation_id": "s3-write-final-binary-20260917"
   },
   "backend_deployed_by_this_change": false,
   "public_edge_fully_qualified": false,
   "remaining_requirement": "Apply the prepared signed-S3 cache-bypass rule to pipedev.network and repeat public-path HEAD, ranged GET and sync checks for cacheable filenames. No Cloudflare API credential was available.",
   "live_test_binary_sha256": "e8d0bf12e79d9391b59640583aec968113f841fe0ad37d0a0f387a473e101b05",
   "final_release_build_sha256": "c502e47529e3016e3f9b70370786f4b191561872d5b85c10fb01148092e4fb0a",
-  "final_build_live_retest": false
+  "final_build_live_retest": true,
+  "final_build_public_smoke": {
+    "passed": true,
+    "binary_sha256": "c502e47529e3016e3f9b70370786f4b191561872d5b85c10fb01148092e4fb0a",
+    "actual_executable_uploaded_and_download_sha256_verified": true,
+    "checks": [
+      {
+        "args": [
+          "profile",
+          "create",
+          "verification",
+          "--control-api-url",
+          "https://api.pipedev.network/control-api"
+        ],
+        "exit_status": 0
+      },
+      {
+        "args": [
+          "profile",
+          "use",
+          "verification"
+        ],
+        "exit_status": 0
+      },
+      {
+        "args": [
+          "auth",
+          "login",
+          "--wallet",
+          "/home/david/.config/solana/id.json",
+          "--scope",
+          "account.read storage.read storage.write credentials.write",
+          "--device-label",
+          "Pipe CLI final binary copy verification"
+        ],
+        "exit_status": 0
+      },
+      {
+        "args": [
+          "account"
+        ],
+        "exit_status": 0
+      },
+      {
+        "args": [
+          "s3",
+          "setup",
+          "--write",
+          "--bucket",
+          "cli3-final-91e990b3ace04e08"
+        ],
+        "exit_status": 0
+      },
+      {
+        "args": [
+          "s3",
+          "cp",
+          "/home/david/pipe-storage/pipe/target/release/pipe",
+          "s3://cli3-final-91e990b3ace04e08/"
+        ],
+        "exit_status": 0
+      },
+      {
+        "args": [
+          "s3",
+          "ls",
+          "s3://cli3-final-91e990b3ace04e08/"
+        ],
+        "exit_status": 0
+      },
+      {
+        "args": [
+          "s3",
+          "head",
+          "s3://cli3-final-91e990b3ace04e08/pipe"
+        ],
+        "exit_status": 0
+      },
+      {
+        "args": [
+          "s3",
+          "cp",
+          "s3://cli3-final-91e990b3ace04e08/pipe",
+          "<private-evidence>/final-binary/downloaded-pipe"
+        ],
+        "exit_status": 0
+      },
+      {
+        "args": [
+          "s3",
+          "rm",
+          "s3://cli3-final-91e990b3ace04e08/pipe"
+        ],
+        "exit_status": 0
+      },
+      {
+        "args": [
+          "s3",
+          "ls",
+          "s3://cli3-final-91e990b3ace04e08/"
+        ],
+        "exit_status": 0
+      },
+      {
+        "args": [
+          "s3",
+          "multipart",
+          "list",
+          "cli3-final-91e990b3ace04e08"
+        ],
+        "exit_status": 0
+      },
+      {
+        "args": [
+          "account"
+        ],
+        "exit_status": 0
+      },
+      {
+        "args": [
+          "s3",
+          "credential",
+          "revoke",
+          "LT9A11E35209282C99C8"
+        ],
+        "exit_status": 0
+      },
+      {
+        "args": [
+          "auth",
+          "logout"
+        ],
+        "exit_status": 0
+      }
+    ],
+    "accounting": {
+      "captured_at": "2026-09-17T23:30:51.246162+00:00",
+      "consumed_atoms": "440",
+      "usage_atoms": "440",
+      "active_leases": 0,
+      "pending_reservations": 0,
+      "active_credentials": 0,
+      "live_objects": 0,
+      "active_test_sessions": 0,
+      "wallet_reserved_atoms": "0"
+    }
+  }
 }
