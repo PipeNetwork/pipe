@@ -1,25 +1,50 @@
 [package]
 name = "pipe"
-version = "1.0.0"
+version = "3.0.0-rc.2"
 edition = "2021"
 
 [dependencies]
-anyhow = "1.0"
-base64 = "0.21"
+pipe-api = { path = "crates/pipe-api" }
+pipe-transports = { path = "crates/pipe-transports" }
+aes-gcm = "0.10"
+anyhow = "1"
+argon2 = "0.5"
+base64 = "0.22"
+bytes = "1"
 bs58 = "0.5"
-chrono = { version = "0.4", features = ["serde"] }
-clap = { version = "4.4.0", features = ["derive", "env"] }
-dirs = "5.0.1"
+blake3 = "1"
+curve25519-dalek = "4"
+fs2 = "0.4"
+chrono = { version = "0.4", features = ["serde", "clock"] }
+clap = { version = "4.5", features = ["derive", "env"] }
+dirs = "5"
 ed25519-dalek = { version = "2", features = ["rand_core"] }
+futures-util = "0.3"
+hex = "0.4"
+hmac = "0.12"
+indicatif = "0.17"
+keyring = { version = "3.6", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust", "vendored"] }
+percent-encoding = "2.3"
 rand = "0.8"
-reqwest = { version = "0.12", features = ["json"] }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-tokio = { version = "1.43.0", features = ["rt-multi-thread", "macros"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+rpassword = "7"
+quick-xml = { version = "0.41", features = ["serialize"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["arbitrary_precision"] }
+sha2 = "0.10"
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "io-util", "sync", "time"] }
+tokio-util = { version = "0.7", features = ["io"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+walkdir = "2"
+zeroize = { version = "1", features = ["derive"] }
+tempfile = "3"
 
-[features]
-e2e = []
+jsonschema = { version = "=0.48.5", default-features = false }
+
+[workspace]
+members = [".", "crates/pipe-api", "crates/pipe-transports"]
+resolver = "2"
 
 [dev-dependencies]
-tempfile = "3.7.0"
 wiremock = "0.6"

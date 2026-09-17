@@ -1,0 +1,170 @@
+{
+  "backend": {
+    "admission": "qualification-account-only",
+    "application_build_commit": "6f27d15ce6a9cf7273fa2a58fa07c9a47b84a4ff",
+    "binary_sha256": "539fe53b543d591d0be04822b4790262fc92a2b97c07d9996df01a685d3628ea",
+    "compatibility": {
+      "base_migration_max": 25,
+      "cli_contract_revision": "cli-3-draft-3",
+      "optional_cli_schema_version": 3,
+      "service_revision": "0.1.0"
+    },
+    "deployed": true,
+    "router": {
+      "binary_sha256": "580ff0b3a0fa934cb93b747ec1fe69148fcbf7525b640e63615c4d48215b4298",
+      "deployed": true,
+      "deployment_receipt_sha256": "cc5b6eff2f263968abe08cb7637758b87dd24f651ec40b98d4798055a3e363a8",
+      "source_commit": "9ad1b1c263b21b2dc28b8de648440044d37756e2"
+    },
+    "source_commit": "05c9a83051e43eeb15b36772f644b4e5af0889b1"
+  },
+  "baseline_release": {
+    "original_tag_and_twenty_assets_preserved": true,
+    "paid_workflows_executed_with": "3.0.0-rc.1",
+    "source_commit": "dfb07e696f322382a4dbb329d0023f199426c4ca",
+    "supplement_sha256": "a356c3ee796290d52b2219722fd2b33a8dce9dd47e224709eb4893d1c9fd3fb3",
+    "supplement_url": "https://github.com/PipeNetwork/pipe/releases/download/v3.0.0-rc.1/qualification-services-2026-09-17.json",
+    "tag": "v3.0.0-rc.1",
+    "tested_linux_binary_sha256": "e8fbed1dcaa6f5362d83f079b4cea13007ccdc46b83a10177cf434f3762da5fd"
+  },
+  "canary": {
+    "automatic_funding": false,
+    "ledger_sha256": "9168be00106975ec0c5648f51c6003ced506f4c0ba232ad2fd484f2240c41f96",
+    "maximum_atoms": 100000000,
+    "rc2_incremental_spent_atoms": 0,
+    "real_payment_transfers": false,
+    "record_scope": "Closed RC1 live-service campaign and DELETE regression checkpoint; RC2 focused production checks have not run.",
+    "remaining_atoms": 54999600,
+    "reserved_atoms": 0,
+    "same_persistent_budget": true,
+    "spent_atoms": 45000400,
+    "test_credit_grant_count": 1,
+    "user_authorized_test_credit_grant_atoms": 100000000
+  },
+  "cli_source_tree_sha256": "afff77136ed0449818db70a2d53708576334cd076ef502cc4534ef357f2af979",
+  "contracts": {
+    "control_plane_sha256": "5fea353dea79f855fc451b0d17ffb71f15de69350aaaa65ef1ad750134533812",
+    "documents": {
+      "control-plane": "5fea353dea79f855fc451b0d17ffb71f15de69350aaaa65ef1ad750134533812",
+      "s3": "ad2c802b939d990f9e1977c894e37067499288d2bcbf1ba4511c7853b7b178ad",
+      "storage": "9793f5a7fec36fe27ba7cd8878d1ff72b3e612a8e9b2354298b923381eef669b"
+    },
+    "immutable_catalog": "https://api.pipedev.network/openapi/releases/b65ee50aacb613d7f6914c2869efed91f11df193208965d3de998be28ff6369e/index.json",
+    "published": true,
+    "source_revision": "sha256:b65ee50aacb613d7f6914c2869efed91f11df193208965d3de998be28ff6369e"
+  },
+  "date": "2026-09-17",
+  "evidence": [
+    {
+      "path": "docs/release/evidence/deployment-publication.json",
+      "scope": "Unchanged backend/frontend deployment baseline from RC1.",
+      "sha256": "5fb8d417be829d24d5f3ff56a2660985d8dc69c550ed0399c96085c753e1c17b"
+    },
+    {
+      "path": "docs/release/evidence/frontend.json",
+      "scope": "Unchanged browser frontend fixture qualification from RC1.",
+      "sha256": "2466ea4291697af3d9eb03aa014e57d7a4a02e260445f2f6154f4c7878bc1ad1"
+    },
+    {
+      "path": "docs/release/evidence/staging.json",
+      "scope": "Full platform staging baseline from RC1; changed S3 error code is qualified separately.",
+      "sha256": "b7f1ebcaab51553ded2bb1b9d038cf9128dd7d843dcf6cc63cc17728817169b9"
+    },
+    {
+      "path": "docs/release/evidence/rc1-auth.json",
+      "scope": "Actual published RC1 Linux binary production authentication history.",
+      "sha256": "35bd3297ef16220d2062bd4355f000682f753292a496f17fd88799b18de857af"
+    },
+    {
+      "path": "docs/release/evidence/rc1-services.json",
+      "scope": "Published RC1 paid selected-service compatibility history and final budget checkpoint.",
+      "sha256": "a356c3ee796290d52b2219722fd2b33a8dce9dd47e224709eb4893d1c9fd3fb3"
+    },
+    {
+      "path": "docs/release/evidence/rc2-focused-staging.json",
+      "scope": "Reviewed S3 error code checkpoint before RC2 version/metadata changes.",
+      "sha256": "bfcae995ac6c77fe9eb50f5e25a653c776d7dafe61c89503f6bb9470c38adc02"
+    },
+    {
+      "path": "docs/release/evidence/rc2-production-pending.json",
+      "scope": "Explicit pending RC2 native-artifact and focused production qualification requirements.",
+      "sha256": "d98e2b9b24e5316dc380cafeb7afcc63e8f50d6282f20143b269ca4decd84e1c"
+    }
+  ],
+  "format_version": 1,
+  "frontend": {
+    "deployed": true,
+    "source_commit": "59180308642f50a329efd601177e4c70c813f110"
+  },
+  "metadata_verification": {
+    "budget_script_sha256": {
+      "scripts/canary-budget.py": "127b947397b89b1ffe6b14a76dc45d489c15e8c718053577a7f68904f12f1b48",
+      "scripts/test-canary-budget.py": "599d3beb47046cf0fd873d31b1b7a358386dece420faf4d3d2f62c580167f3aa",
+      "scripts/test-release-qualification.py": "64a8dac7feb950def5b81bb8a5305f46a87fe5208cae48f0d16412f4bc22399c",
+      "scripts/verify-release-qualification.py": "8039773eb81fc767b1e48cd285ef2a8326d213cea87c981bbe388916d6cec085"
+    },
+    "contracts_workflow_installers_unchanged": true,
+    "format_passed": true,
+    "locked_workspace_metadata_valid": true,
+    "lockfile_changes": "Only the three workspace package versions changed from RC1 to RC2.",
+    "operation_coverage": {
+      "operations": 209,
+      "pending": 0
+    },
+    "persistent_budget_guard_tests_passed": 2,
+    "recorded_at": "2026-09-17T17:39:18.932246+00:00",
+    "release_guard_tests_passed": 7,
+    "whitespace_passed": true
+  },
+  "native_qualification": {
+    "actual_rc1_to_rc2_upgrade_rollback": "pending_verified_rc2_artifact",
+    "policy": "All five native jobs, installers, packaging and tag-ref attestations must pass before publishing this RC. Exact outcomes are attached in the final release record.",
+    "status": "pending_rc2_tagged_builds",
+    "targets": [
+      "x86_64-unknown-linux-gnu",
+      "aarch64-unknown-linux-gnu",
+      "x86_64-apple-darwin",
+      "aarch64-apple-darwin",
+      "x86_64-pc-windows-msvc"
+    ]
+  },
+  "production_pending": true,
+  "qualification": {
+    "cleanup_complete": false,
+    "enabled_workflows_passed": false,
+    "intentionally_unavailable": [
+      {
+        "feature": "general CLI admission",
+        "reason": "Qualification account allowlist retained until production acceptance."
+      },
+      {
+        "feature": "public KV creation",
+        "reason": "Existing launch gate remains closed; supported management reads remain enabled."
+      },
+      {
+        "feature": "platform Solana address creation",
+        "reason": "Existing platform_solana_create runtime gate is closed."
+      },
+      {
+        "feature": "operator/internal and privileged native Durable Objects APIs",
+        "reason": "Excluded from customer CLI authority and public advanced calls."
+      }
+    ],
+    "real_browser_login": false,
+    "remaining_acceptance": [
+      "Complete all five RC2 native build/test/install/provenance jobs and verify the exact tagged artifacts.",
+      "Verify actual RC1-to-RC2 installation and rollback in a disposable prefix.",
+      "Verify legitimate production login, typed S3 authorization denial, credential/session cleanup and zero charge using the exact attested RC2 Linux binary.",
+      "Apply and verify the reviewed Cloudflare signed-request cache rule, including public S3 HEAD and ranged GET.",
+      "Complete legitimate Google browser authorization for canonical account and organization workflows.",
+      "Qualify settlement with legitimate provider-hosted payment sandbox configuration."
+    ],
+    "scope": "Reviewed S3 error-handling code passed the focused executable matrix and full local workspace suite. Backend/frontend deployment and paid product results are explicitly retained RC1 compatibility evidence. Final RC2 native artifact, upgrade/rollback and focused production authentication/denial qualification remain pending.",
+    "staging_passed": true
+  },
+  "qualification_complete": false,
+  "reviewed_code_commit": "334ab7055b78ea6683b509e8e9c6d62c99dabf1d",
+  "stable_promotion_permitted": false,
+  "status": "staging-qualified-production-pending",
+  "version": "3.0.0-rc.2"
+}

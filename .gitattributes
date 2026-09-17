@@ -1,0 +1,10 @@
+# Pinned contract checksums and generated metadata must be identical on every OS.
+* text=auto eol=lf
+*.png -text
+*.jpg -text
+*.jpeg -text
+*.gif -text
+*.bin -text
+*.enc -text
+*.zip -text
+*.gz -text

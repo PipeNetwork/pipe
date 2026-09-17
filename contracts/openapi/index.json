@@ -1,0 +1,34 @@
+{
+  "contract_version": "0.2.0",
+  "documents": [
+    {
+      "immutable_json": "/openapi/releases/b65ee50aacb613d7f6914c2869efed91f11df193208965d3de998be28ff6369e/control-plane.json",
+      "immutable_yaml": "/openapi/releases/b65ee50aacb613d7f6914c2869efed91f11df193208965d3de998be28ff6369e/control-plane.yaml",
+      "json": "/openapi/control-plane.json",
+      "name": "control-plane",
+      "sha256": "5fea353dea79f855fc451b0d17ffb71f15de69350aaaa65ef1ad750134533812",
+      "version": "0.2.0",
+      "yaml": "/openapi/control-plane.yaml"
+    },
+    {
+      "immutable_json": "/openapi/releases/b65ee50aacb613d7f6914c2869efed91f11df193208965d3de998be28ff6369e/storage.json",
+      "immutable_yaml": "/openapi/releases/b65ee50aacb613d7f6914c2869efed91f11df193208965d3de998be28ff6369e/storage.yaml",
+      "json": "/openapi/storage.json",
+      "name": "storage",
+      "sha256": "9793f5a7fec36fe27ba7cd8878d1ff72b3e612a8e9b2354298b923381eef669b",
+      "version": "0.2.0",
+      "yaml": "/openapi/storage.yaml"
+    },
+    {
+      "immutable_json": "/openapi/releases/b65ee50aacb613d7f6914c2869efed91f11df193208965d3de998be28ff6369e/s3.json",
+      "immutable_yaml": "/openapi/releases/b65ee50aacb613d7f6914c2869efed91f11df193208965d3de998be28ff6369e/s3.yaml",
+      "json": "/openapi/s3.json",
+      "name": "s3",
+      "sha256": "ad2c802b939d990f9e1977c894e37067499288d2bcbf1ba4511c7853b7b178ad",
+      "version": "0.2.0",
+      "yaml": "/openapi/s3.yaml"
+    }
+  ],
+  "source_revision": "sha256:b65ee50aacb613d7f6914c2869efed91f11df193208965d3de998be28ff6369e",
+  "status": "reference"
+}

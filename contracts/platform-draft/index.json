@@ -1,0 +1,12 @@
+{
+  "status": "release-candidate",
+  "source_revision": "sha256:b65ee50aacb613d7f6914c2869efed91f11df193208965d3de998be28ff6369e",
+  "documents": [
+    {
+      "name": "control-plane",
+      "file": "control-plane.json",
+      "sha256": "5fea353dea79f855fc451b0d17ffb71f15de69350aaaa65ef1ad750134533812"
+    }
+  ],
+  "immutable_index_url": "https://api.pipedev.network/openapi/releases/b65ee50aacb613d7f6914c2869efed91f11df193208965d3de998be28ff6369e/index.json"
+}

@@ -1,0 +1,317 @@
+{
+  "format_version": 1,
+  "passed": true,
+  "scope": "Actual production authentication, authorization and management reads; paid workflow acceptance remains pending",
+  "first_cli_binary_sha256": "85d2cddcb2c3a1226e6d8327e7a194fb9448e9b226ecc1b8652d6a051e04a33f",
+  "first_cli_build_source_commit": "989cabeae106296402fb7a95ee9fde6db543fff1",
+  "frontend_source_commit": "59180308642f50a329efd601177e4c70c813f110",
+  "backend_binary_sha256": "539fe53b543d591d0be04822b4790262fc92a2b97c07d9996df01a685d3628ea",
+  "backend_source_commit": "6f27d15ce6a9cf7273fa2a58fa07c9a47b84a4ff",
+  "browser": {
+    "real_browser_wallet_login": true,
+    "real_wallet_signature_count": 1,
+    "http_only_secure_browser_session": true,
+    "explicit_device_denial": true,
+    "explicit_device_approval": true,
+    "wallet_principal_matches_browser": true,
+    "canonical_platform_account_linked": false,
+    "owned_context_count": 1,
+    "granted_scopes": [
+      "account.read",
+      "billing.read",
+      "compute.read",
+      "durable.read",
+      "hosting.read",
+      "kv.read",
+      "storage.read",
+      "usage.read"
+    ],
+    "cli_logout_passed": true,
+    "post_logout_refused": true,
+    "browser_logout_passed": true
+  },
+  "capabilities": {
+    "account": {
+      "authorized": true,
+      "enabled": true,
+      "supported": true
+    },
+    "account_api_keys": {
+      "authorized": false,
+      "enabled": true,
+      "supported": true
+    },
+    "billing": {
+      "authorized": true,
+      "enabled": true,
+      "supported": true
+    },
+    "compute": {
+      "authorized": true,
+      "enabled": true,
+      "management_enabled": true,
+      "supported": true
+    },
+    "credentials": {
+      "authorized": false,
+      "enabled": true,
+      "supported": true
+    },
+    "durable": {
+      "authorized": true,
+      "enabled": true,
+      "management_enabled": true,
+      "supported": true
+    },
+    "hosting": {
+      "authorized": true,
+      "enabled": true,
+      "management_enabled": true,
+      "supported": true
+    },
+    "infrastructure_card": {
+      "authorized": false,
+      "enabled": true,
+      "supported": true
+    },
+    "kv": {
+      "authorized": true,
+      "enabled": false,
+      "management_enabled": true,
+      "supported": true
+    },
+    "organizations": {
+      "authorized": false,
+      "enabled": true,
+      "supported": true
+    },
+    "platform_account": {
+      "authorized": false,
+      "enabled": true,
+      "supported": true
+    },
+    "platform_billing": {
+      "authorized": false,
+      "enabled": true,
+      "supported": true
+    },
+    "platform_solana_create": {
+      "authorized": false,
+      "enabled": false,
+      "supported": true
+    },
+    "storage": {
+      "authorized": true,
+      "enabled": true,
+      "supported": true
+    },
+    "usage": {
+      "authorized": true,
+      "enabled": true,
+      "supported": true
+    }
+  },
+  "management_reads": [
+    {
+      "command": "pricing",
+      "exit_status": 0,
+      "passed": true
+    },
+    {
+      "command": "usage",
+      "exit_status": 0,
+      "passed": true,
+      "result_count": 0
+    },
+    {
+      "command": "storage s3 credential list",
+      "exit_status": 0,
+      "passed": true,
+      "result_count": 0
+    },
+    {
+      "command": "compute pricing",
+      "exit_status": 0,
+      "passed": true
+    },
+    {
+      "command": "compute projects",
+      "exit_status": 0,
+      "passed": true,
+      "result_count": 1
+    },
+    {
+      "command": "compute images",
+      "exit_status": 0,
+      "passed": true,
+      "result_count": 1
+    },
+    {
+      "command": "compute flavors",
+      "exit_status": 0,
+      "passed": true,
+      "result_count": 4
+    },
+    {
+      "command": "compute vms list --limit 5",
+      "exit_status": 0,
+      "passed": true,
+      "result_count": 0
+    },
+    {
+      "command": "hosting pricing",
+      "exit_status": 0,
+      "passed": true
+    },
+    {
+      "command": "hosting account get",
+      "exit_status": 1,
+      "error_code": "api_error",
+      "http_status": 404,
+      "passed": false,
+      "expected_outcome": "wallet has no registered hosting account; hosting capability remains enabled"
+    },
+    {
+      "command": "hosting sites list",
+      "exit_status": 1,
+      "error_code": "api_error",
+      "http_status": 404,
+      "passed": false,
+      "expected_outcome": "wallet has no registered hosting account; hosting capability remains enabled"
+    },
+    {
+      "command": "kv pricing",
+      "exit_status": 0,
+      "passed": true
+    },
+    {
+      "command": "kv instances list",
+      "exit_status": 0,
+      "passed": true,
+      "result_count": 0
+    },
+    {
+      "command": "durable pricing",
+      "exit_status": 0,
+      "passed": true
+    },
+    {
+      "command": "durable namespaces list",
+      "exit_status": 0,
+      "passed": true,
+      "result_count": 0
+    },
+    {
+      "command": "auth sessions",
+      "exit_status": 4,
+      "error_code": "authorization",
+      "http_status": 403,
+      "passed": false,
+      "expected_outcome": "first login did not request credentials.read; positive inspection passed in the second session"
+    }
+  ],
+  "automation": {
+    "passed": true,
+    "spent_atoms": 0,
+    "reserved_atoms": 0,
+    "payment_operations": 0,
+    "paid_resources_created": 0,
+    "explicit_wallet_login": true,
+    "session_inspection_with_scope_passed": true,
+    "credential_created_without_secret_output": true,
+    "secure_save_and_activation_passed": true,
+    "automation_context_passed": true,
+    "credential_expiry_seconds": 300,
+    "credential_scopes": [
+      "account.read",
+      "storage.read"
+    ],
+    "account_context_matches_issuer": true,
+    "automation_account_read_passed": true,
+    "automation_storage_metadata_read_passed": true,
+    "read_only_storage_write_refused": true,
+    "automation_rejected_by_session_only_endpoint": true,
+    "automation_rejected_by_browser_session_endpoint": true,
+    "credential_revoked": true,
+    "revoked_automation_refused": true,
+    "issuer_logout": true,
+    "logged_out_session_refused": true
+  },
+  "server_side_cleanup": {
+    "active_cli_sessions": 0,
+    "active_browser_sessions": 0,
+    "unrevoked_automation_credentials": 0,
+    "pending_qualification_devices": 0,
+    "credit": {
+      "account_exists": false,
+      "granted_atoms": "0",
+      "spent_atoms": "0",
+      "reserved_atoms": "0"
+    },
+    "production_read_only": true,
+    "passed": true
+  },
+  "service_health": {
+    "format_version": 1,
+    "checked_at": "2026-09-17T07:18:37.602763+00:00",
+    "read_only": true,
+    "services": {
+      "lattice-control-api": {
+        "active": "active",
+        "since_activation": "Thu 2026-09-17 07:10:28 UTC",
+        "health_status": 200,
+        "structured_error_records": 0,
+        "structured_warning_records": 0,
+        "unstructured_error_lines": 0,
+        "raw_logs_exported": false
+      },
+      "pipe-network-landing": {
+        "active": "active",
+        "since_activation": "Thu 2026-09-17 07:09:43 UTC",
+        "health_status": 200,
+        "structured_error_records": 0,
+        "structured_warning_records": 0,
+        "unstructured_error_lines": 1,
+        "raw_logs_exported": false
+      }
+    },
+    "passed": true,
+    "zero_error_records": false,
+    "health_passed": true,
+    "frontend_error_classification": {
+      "malformed_server_reference_id_rejected": 1,
+      "uncaught_exceptions": 0,
+      "unhandled_rejections": 0,
+      "application_server_actions_defined": false,
+      "classification_is_input_rejection": true
+    },
+    "evaluation": "Both services are active and healthy; the one frontend malformed server-reference rejection is retained in error counts and classified separately from service failure."
+  },
+  "production_spend_atoms": 0,
+  "production_reserved_atoms": 0,
+  "production_paid_workflows_pending": true,
+  "funded_identity_available": false,
+  "raw_customer_identifiers_or_secrets_exported": false,
+  "evidence": [
+    {
+      "file": "production-frontend-deployment.json",
+      "sha256": "9405286ec2506f754a5b4547fa4a153c499a2152784e23eda09198b03d5dbd05"
+    },
+    {
+      "file": "production-browser-cli-qualification.json",
+      "sha256": "e2e085513f996e51188100e3a6f3549e98125cd22e0a802e488f916294879090"
+    },
+    {
+      "file": "production-automation-qualification.json",
+      "sha256": "05dcbb939c3c28e2ad58c8695521b83ee1130c2beb92b8335a401111bc16cb9d"
+    },
+    {
+      "file": "production-auth-cleanup.json",
+      "sha256": "ec3c596f1353a5456f66f6b5cf6d0f293a2fbeb9034d2bc726ecb46f6d685ca8"
+    },
+    {
+      "file": "production-postdeployment-health.json",
+      "sha256": "98f8f4a92bde7ef7199def4a30d2aeb2b8374c688c3828761ba384233f7b31cf"
+    }
+  ]
+}

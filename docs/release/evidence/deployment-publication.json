@@ -1,0 +1,53 @@
+{
+  "backend": {
+    "additive_migration_rehearsed_twice": true,
+    "admission": "qualification-account-only",
+    "application_build_commit": "6f27d15ce6a9cf7273fa2a58fa07c9a47b84a4ff",
+    "base_migration_max": 25,
+    "base_migrations_unchanged": true,
+    "binary_sha256": "539fe53b543d591d0be04822b4790262fc92a2b97c07d9996df01a685d3628ea",
+    "cli_schema": {
+      "checksum": "54dea9a9096f3cd630d74b4e0fa14cb593f921f1b52cff3078040797dca2814b",
+      "name": "cli",
+      "version": 3
+    },
+    "deployed": true,
+    "full_database_backup_restore_verified": true,
+    "other_optional_schemas_unchanged": true,
+    "previous_binary_and_configuration_retained": true,
+    "qualification_account_count": 1,
+    "source_commit": "05c9a83051e43eeb15b36772f644b4e5af0889b1"
+  },
+  "contracts": {
+    "all_public_bytes_verified": true,
+    "browser_verified": true,
+    "immutable_catalog": "https://api.pipedev.network/openapi/releases/b65ee50aacb613d7f6914c2869efed91f11df193208965d3de998be28ff6369e/index.json",
+    "previous_immutable_release_preserved": true,
+    "private_files_excluded": true,
+    "source_revision": "sha256:b65ee50aacb613d7f6914c2869efed91f11df193208965d3de998be28ff6369e"
+  },
+  "date": "2026-09-17",
+  "evidence_sha256": {
+    "deploy-enable.json": "e4c8672cb37cf304a6c8d84bf38e1a0c2f0f28be16c7574597fe95ef1894757d",
+    "deploy-install.json": "9cebe68f6060693eb6d9a69ac22c0a63c71f5746082cf63199ff4c853640bd69",
+    "production-backup-candidate-migration.json": "15f65caed27d706fc5aecf77ffc26ef4428473f54669eb3a38f42b7c65d8d2ab",
+    "production-backup-restore.json": "8325d6f74e043c59ec57d60c27d2a33b3e33add214a45f5517d9fc860feac55c",
+    "production-frontend-deployment.json": "9405286ec2506f754a5b4547fa4a153c499a2152784e23eda09198b03d5dbd05",
+    "summary.json": "72b32adfaaf256c4bbc82bdb9df3b52bf5910f0d30594eaf3c532339f8ac0156"
+  },
+  "format_version": 1,
+  "frontend": {
+    "deployed": true,
+    "previous_releases_retained": true,
+    "public_authorization_page_passed": true,
+    "runtime_configuration_unchanged": true,
+    "source_commit": "59180308642f50a329efd601177e4c70c813f110",
+    "unauthenticated_bff_rejected": true
+  },
+  "limitations": [
+    "CLI admission is restricted to one qualification account.",
+    "Deployment and read-only production checks do not qualify paid production workflows.",
+    "No production credit was spent or reserved."
+  ],
+  "passed": true
+}
