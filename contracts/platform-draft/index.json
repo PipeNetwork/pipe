@@ -1,12 +1,12 @@
 {
   "status": "release-candidate",
-  "source_revision": "sha256:301c8160c91b87c9e873a1860548f6a262312597ee085d2d03e28d6cf3c19e4a",
+  "source_revision": "sha256:b65ee50aacb613d7f6914c2869efed91f11df193208965d3de998be28ff6369e",
   "documents": [
     {
       "name": "control-plane",
       "file": "control-plane.json",
-      "sha256": "9f271db7b566cb5ede84ade81beec290556abaac8748cd4c97750e22a2beffa9"
+      "sha256": "5fea353dea79f855fc451b0d17ffb71f15de69350aaaa65ef1ad750134533812"
     }
   ],
-  "immutable_index_url": "https://api.pipedev.network/openapi/releases/301c8160c91b87c9e873a1860548f6a262312597ee085d2d03e28d6cf3c19e4a/index.json"
+  "immutable_index_url": "https://api.pipedev.network/openapi/releases/b65ee50aacb613d7f6914c2869efed91f11df193208965d3de998be28ff6369e/index.json"
 }

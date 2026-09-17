@@ -6202,9 +6202,9 @@
   ],
   "release_ready": true,
   "specifications": {
-    "control-plane": "9f271db7b566cb5ede84ade81beec290556abaac8748cd4c97750e22a2beffa9",
-    "s3": "9ad375bbc2f1745be13cfc60e6f39ac413c770e58a4e51a2fc18cc142e7d4cdd",
-    "storage": "3e0c7bd5845dd2d77de5e34d56cef580a129acceff71702f6be827c6cf7e208c"
+    "control-plane": "5fea353dea79f855fc451b0d17ffb71f15de69350aaaa65ef1ad750134533812",
+    "s3": "ad2c802b939d990f9e1977c894e37067499288d2bcbf1ba4511c7853b7b178ad",
+    "storage": "9793f5a7fec36fe27ba7cd8878d1ff72b3e612a8e9b2354298b923381eef669b"
   },
   "version": 1
 }
