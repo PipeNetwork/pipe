@@ -481,7 +481,7 @@ pipe payments create 10.00
 pipe payments pay INVOICE_ID --yes
 pipe payments status INVOICE_ID
 # Wait until the invoice is credited before storage setup. Read-only listing
-# can create a short-lived key interactively; writes require explicit setup.
+# can create a short-lived key automatically; writes require explicit setup.
 pipe s3 endpoint
 pipe s3 setup --bucket my-bucket
 pipe s3 setup --write --bucket my-bucket
@@ -552,6 +552,11 @@ pipe s3 rm s3://my-bucket/file.txt
 pipe s3 mb my-bucket
 pipe s3 rb my-bucket
 ```
+
+`pipe s3 setup` is an explicit action and creates the credential immediately;
+it does not ask for a second confirmation. Read-only S3 commands can also create
+their short-lived read/list credential automatically. Destructive commands and
+payment submissions still require their normal confirmation.
 
 Profiles contain only the control API URL, S3 endpoint, region, bucket and prefix
 defaults. `--config FILE` selects a separate configuration. Sessions and keys are

@@ -37,7 +37,7 @@ pub struct Cli {
     #[arg(
         long,
         global = true,
-        help = "Confirm credential setup, resource deletion, and payment submission without prompting"
+        help = "Confirm resource deletion and payment submission without prompting"
     )]
     pub yes: bool,
     #[arg(
@@ -593,7 +593,7 @@ pub async fn run(mut cli: Cli) -> Result<()> {
         Commands::Storage { command } => match command {
             StorageCommands::Setup(args) => {
                 let (_, selected) = store.profile(Some(&name))?;
-                setup_s3_credential(&client, &name, &selected, args, cli.json, false, cli.yes).await
+                setup_s3_credential(&client, &name, &selected, args, cli.json, false).await
             }
             StorageCommands::Bucket { command } => {
                 bucket_command(&client, &store, &name, &profile, command, cli.json).await
@@ -602,7 +602,7 @@ pub async fn run(mut cli: Cli) -> Result<()> {
                 object_command(&client, &store, &name, &profile, command, cli.json).await
             }
             StorageCommands::S3 { command } => {
-                s3_command(&client, &mut store, &name, command, cli.json, cli.yes).await
+                s3_command(&client, &mut store, &name, command, cli.json).await
             }
         },
         Commands::Auth { command } => auth_command(&client, command, cli.json).await,
@@ -658,9 +658,7 @@ pub async fn run(mut cli: Cli) -> Result<()> {
             output::print(&account::usage(&client, from, to).await?, cli.json)
         }
         Commands::Payments { command } => payment_command(&client, command, cli.json).await,
-        Commands::S3 { command } => {
-            s3_command(&client, &mut store, &name, command, cli.json, cli.yes).await
-        }
+        Commands::S3 { command } => s3_command(&client, &mut store, &name, command, cli.json).await,
         Commands::Bucket { command } => {
             bucket_command(&client, &store, &name, &profile, command, cli.json).await
         }
@@ -924,7 +922,6 @@ async fn s3_command(
     name: &str,
     command: S3Commands,
     json_output: bool,
-    confirmed: bool,
 ) -> Result<()> {
     if !matches!(
         &command,
@@ -935,7 +932,7 @@ async fn s3_command(
     match command {
         S3Commands::Setup(args) => {
             let (_, profile) = store.profile(Some(name))?;
-            setup_s3_credential(client, name, &profile, args, json_output, false, confirmed).await
+            setup_s3_credential(client, name, &profile, args, json_output, false).await
         }
         S3Commands::List { location } => {
             let (_, profile) = store.profile(Some(name))?;
@@ -1792,7 +1789,7 @@ async fn s3_client(
         Some(pair) => pair,
         None if matches!(access_mode, S3Access::ReadOnly) => {
             let args = automatic_setup_args(profile, bucket_hint)?;
-            setup_s3_credential(client, name, profile, args, false, true, false).await?;
+            setup_s3_credential(client, name, profile, args, false, true).await?;
             client
                 .active_s3_credential()?
                 .ok_or_else(|| anyhow!("automatic storage setup did not activate a credential"))?
@@ -1849,7 +1846,6 @@ async fn setup_s3_credential(
     args: StorageSetupArgs,
     json_output: bool,
     automatic: bool,
-    confirmed: bool,
 ) -> Result<()> {
     anyhow::ensure!(
         (60..=30 * 24 * 60 * 60).contains(&args.expires_in),
@@ -1876,42 +1872,6 @@ async fn setup_s3_credential(
         .prefix
         .or_else(|| profile.prefix.clone())
         .unwrap_or_default();
-    let scope = if args.write {
-        "read/list/write"
-    } else {
-        "read/list"
-    };
-    let command = if args.write {
-        format!("pipe s3 setup --write --bucket {bucket}")
-    } else {
-        format!("pipe s3 setup --bucket {bucket}")
-    };
-    if !confirmed {
-        output::require_input().map_err(|_| {
-            anyhow!("storage credential is missing; run '{command}' in an interactive terminal")
-        })?;
-        if automatic {
-            eprint!(
-                "No storage credential is configured for profile '{name}'. Create a temporary read-only credential for bucket '{bucket}' ({})? [Y/n] ",
-                format_duration(args.expires_in)
-            );
-        } else {
-            eprint!(
-                "Create a {scope} S3 credential for bucket '{bucket}' ({}). Type yes to continue: ",
-                format_duration(args.expires_in)
-            );
-        }
-        use std::io::Write;
-        std::io::stderr().flush()?;
-        let mut answer = String::new();
-        std::io::stdin().read_line(&mut answer)?;
-        let accepted = if automatic {
-            !matches!(answer.trim().to_ascii_lowercase().as_str(), "n" | "no")
-        } else {
-            answer.trim().eq_ignore_ascii_case("yes")
-        };
-        anyhow::ensure!(accepted, "storage setup cancelled");
-    }
     let wallet = if let Some(wallet) = args.wallet.clone() {
         wallet
     } else if std::env::var_os("PIPE_CLI_TOKEN").is_some() {
@@ -2386,6 +2346,18 @@ mod tests {
             &["pipe", "upload-file", "file", "bucket/key"][..],
         ] {
             Cli::try_parse_from(args).expect("current command should parse");
+        }
+    }
+
+    #[test]
+    fn s3_setup_does_not_require_redundant_confirmation() {
+        for args in [
+            &["pipe", "s3", "setup", "--bucket", "bucket"][..],
+            &["pipe", "s3", "setup", "--write", "--bucket", "bucket"][..],
+            &["pipe", "storage", "setup", "--bucket", "bucket"][..],
+        ] {
+            let cli = Cli::try_parse_from(args).expect("setup command should parse");
+            assert!(!destructive(&cli.command));
         }
     }
 
