@@ -1050,10 +1050,10 @@ async fn s3_command(
         }
         S3Commands::Head { remote } => {
             let (_, profile) = store.profile(Some(name))?;
-            if remote
-                .strip_prefix("s3://")
-                .unwrap_or(&remote)
-                .contains('/')
+            let location = remote.strip_prefix("s3://").unwrap_or(&remote);
+            if location
+                .split_once('/')
+                .is_some_and(|(_, key)| !key.is_empty())
             {
                 object_command(
                     client,
@@ -1236,9 +1236,9 @@ async fn s3_copy_command(
             destination_is_remote,
             "copy destination must be an S3 location; use s3://bucket/key for clarity"
         );
-        let destination = remote_location(profile, destination)?;
         if source_path.is_dir() {
             anyhow::ensure!(recursive, "copying a directory requires --recursive");
+            let destination = remote_prefix(profile, destination)?;
             let s3 = s3_client(
                 client,
                 store,
@@ -1259,6 +1259,14 @@ async fn s3_copy_command(
                 source_path.is_file(),
                 "copy source must be a regular file or directory"
             );
+            let destination = remote_copy_destination(
+                profile,
+                destination,
+                source_path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .ok_or_else(|| anyhow!("copy source must have a valid filename"))?,
+            )?;
             let destination = destination_string(destination.0, destination.1);
             put_file_command(
                 client,
@@ -1357,6 +1365,10 @@ async fn s3_remove_command(
 }
 
 fn looks_like_remote(value: &str) -> bool {
+    if let Some(value) = value.strip_prefix("s3://") {
+        let bucket = value.split('/').next().unwrap_or_default();
+        return (3..=63).contains(&bucket.len());
+    }
     let value = value.strip_prefix("s3://").unwrap_or(value);
     let Some((bucket, key)) = value.split_once('/') else {
         return false;
@@ -1368,6 +1380,44 @@ fn destination_string(bucket: String, key: String) -> String {
     format!("s3://{bucket}/{key}")
 }
 
+/// Resolve the familiar copy-to-bucket spelling. A destination with
+/// no object key, or with a trailing slash, is a prefix and receives the
+/// source filename. A non-trailing key remains an explicit object name.
+fn remote_copy_destination(
+    profile: &Profile,
+    value: &str,
+    source_filename: &str,
+) -> Result<(String, String)> {
+    let explicit_scheme = value.starts_with("s3://");
+    let value = value.strip_prefix("s3://").unwrap_or(value);
+    let (bucket, key) = value
+        .split_once('/')
+        .map(|(bucket, key)| (bucket.to_owned(), key.to_owned()))
+        .unwrap_or_else(|| {
+            (
+                if explicit_scheme {
+                    value.to_owned()
+                } else {
+                    profile.bucket.clone().unwrap_or_else(|| value.to_owned())
+                },
+                String::new(),
+            )
+        });
+    if bucket.len() < 3 || bucket.len() > 63 {
+        return Err(anyhow!("object location must be bucket/key"));
+    }
+    if key.is_empty() || key.ends_with('/') {
+        let prefix = key.trim_end_matches('/');
+        let object_key = if prefix.is_empty() {
+            source_filename.to_owned()
+        } else {
+            format!("{prefix}/{source_filename}")
+        };
+        return Ok((bucket, object_key));
+    }
+    Ok((bucket, key))
+}
+
 async fn bucket_command(
     client: &ControlClient,
     store: &mut ConfigStore,
@@ -1376,6 +1426,18 @@ async fn bucket_command(
     command: BucketCommands,
     json_output: bool,
 ) -> Result<()> {
+    let command = match command {
+        BucketCommands::Create { bucket } => BucketCommands::Create {
+            bucket: normalize_bucket_name(&bucket)?,
+        },
+        BucketCommands::Head { bucket } => BucketCommands::Head {
+            bucket: normalize_bucket_name(&bucket)?,
+        },
+        BucketCommands::Delete { bucket } => BucketCommands::Delete {
+            bucket: normalize_bucket_name(&bucket)?,
+        },
+        BucketCommands::List => BucketCommands::List,
+    };
     let list_bucket = if matches!(&command, BucketCommands::List) && profile.bucket.is_none() {
         if client.active_s3_access_key()?.is_some() {
             Some(active_s3_bucket(client).await?)
@@ -2162,6 +2224,15 @@ fn remote_prefix(profile: &Profile, value: &str) -> Result<(String, String)> {
     }
     remote_location(profile, value)
 }
+
+fn normalize_bucket_name(value: &str) -> Result<String> {
+    let value = value.strip_prefix("s3://").unwrap_or(value);
+    let value = value.strip_suffix('/').unwrap_or(value);
+    if value.is_empty() || value.contains('/') || !(3..=63).contains(&value.len()) {
+        return Err(anyhow!("bucket must be a valid bucket name"));
+    }
+    Ok(value.to_owned())
+}
 fn parse_range(value: Option<&str>) -> Result<Option<(u64, u64)>> {
     let Some(value) = value else { return Ok(None) };
     let (a, b) = value
@@ -2582,5 +2653,30 @@ mod tests {
             remote_location(&profile, "one").unwrap(),
             ("default".into(), "root/one".into())
         );
+    }
+
+    #[test]
+    fn s3_copy_accepts_bucket_prefix_destinations() {
+        let profile = Profile::new("https://example.test");
+        assert_eq!(
+            remote_copy_destination(&profile, "s3://test/", "pipe").unwrap(),
+            ("test".into(), "pipe".into())
+        );
+        assert_eq!(
+            remote_copy_destination(&profile, "s3://test/backups/", "pipe").unwrap(),
+            ("test".into(), "backups/pipe".into())
+        );
+        assert_eq!(
+            remote_copy_destination(&profile, "s3://test/object", "pipe").unwrap(),
+            ("test".into(), "object".into())
+        );
+        assert_eq!(
+            remote_copy_destination(&profile, "s3://test", "pipe").unwrap(),
+            ("test".into(), "pipe".into())
+        );
+        assert!(looks_like_remote("s3://test"));
+        assert!(looks_like_remote("s3://test/"));
+        assert_eq!(normalize_bucket_name("s3://test/").unwrap(), "test");
+        assert!(normalize_bucket_name("s3://test/object").is_err());
     }
 }

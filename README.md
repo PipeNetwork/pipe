@@ -622,7 +622,9 @@ prefix. Pipe does not support global `ListBuckets` enumeration, so no-argument
 `s3 ls` cannot discover every bucket in an account. Use `object list` for the
 explicit form. `s3 cp` handles one file in either direction and directory
 transfers with `--recursive`; `s3 sync` is the familiar spelling for the
-existing top-level `sync` workflow. `s3 rm --recursive` deletes each listed
+existing top-level `sync` workflow. A destination such as `s3://my-bucket/`
+uploads a file under its local filename; add a key to choose a different name.
+`s3 rm --recursive` deletes each listed
 object under a prefix and uses the existing destructive confirmation.
 
 `pipe doctor` reports endpoint configuration, whether an active storage key is
