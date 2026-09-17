@@ -72,6 +72,26 @@ pub enum Commands {
         #[command(subcommand)]
         command: AuthCommands,
     },
+    /// Shortcut for `auth login`.
+    Login {
+        #[arg(
+            long,
+            default_value = "account.read org.read billing.read storage.read usage.read compute.read hosting.read kv.read durable.read"
+        )]
+        scope: String,
+        #[arg(long)]
+        no_browser: bool,
+        #[arg(long)]
+        wallet: Option<String>,
+        #[arg(long, requires = "wallet")]
+        legacy_wallet: bool,
+        #[arg(long)]
+        device_label: Option<String>,
+    },
+    /// Shortcut for `auth logout`.
+    Logout,
+    /// Show the authenticated CLI context.
+    Whoami,
     Profile {
         #[command(subcommand)]
         command: ProfileCommands,
@@ -246,6 +266,8 @@ pub enum AuthCommands {
         device_label: Option<String>,
     },
     Logout,
+    /// Show local session status without printing tokens.
+    Status,
     Sessions {
         #[arg(long)]
         revoke: Option<Uuid>,
@@ -269,6 +291,30 @@ pub enum ProfileCommands {
     },
     Use {
         name: String,
+    },
+    #[command(visible_alias = "get")]
+    Show {
+        name: Option<String>,
+    },
+    #[command(visible_alias = "update")]
+    Set {
+        name: Option<String>,
+        #[arg(long)]
+        control_api_url: Option<String>,
+        #[arg(long)]
+        s3_endpoint: Option<String>,
+        #[arg(long)]
+        region: Option<String>,
+        #[arg(long)]
+        bucket: Option<String>,
+        #[arg(long)]
+        prefix: Option<String>,
+        #[arg(long)]
+        clear_bucket: bool,
+        #[arg(long)]
+        clear_prefix: bool,
+        #[arg(long)]
+        clear_s3_endpoint: bool,
     },
     List,
 }
@@ -332,11 +378,49 @@ pub enum S3Commands {
     /// Pipe's customer gateway does not expose global ListBuckets enumeration,
     /// so this is equivalent to `pipe bucket list`.
     #[command(name = "ls", visible_alias = "list")]
-    List,
+    List {
+        location: Option<String>,
+    },
+    /// Copy one object, or a directory with `--recursive`.
+    #[command(name = "cp", visible_alias = "copy")]
+    Copy {
+        source: String,
+        destination: String,
+        #[arg(long)]
+        recursive: bool,
+    },
+    /// Synchronize a local directory and an S3 prefix.
+    Sync {
+        source: String,
+        destination: String,
+    },
+    /// Delete one object, or every object under a prefix with `--recursive`.
+    #[command(name = "rm", visible_alias = "delete")]
+    Remove {
+        remote: String,
+        #[arg(long)]
+        recursive: bool,
+    },
+    /// Create a bucket.
+    #[command(name = "mb", visible_alias = "make-bucket")]
+    MakeBucket {
+        bucket: String,
+    },
+    /// Delete an empty bucket.
+    #[command(name = "rb", visible_alias = "remove-bucket")]
+    RemoveBucket {
+        bucket: String,
+    },
+    /// Inspect a bucket or object.
+    #[command(name = "head", visible_alias = "stat")]
+    Head {
+        remote: String,
+    },
     Multipart {
         #[command(subcommand)]
         command: MultipartCommands,
     },
+    #[command(visible_alias = "credentials")]
     Credential {
         #[command(subcommand)]
         command: CredentialCommands,
@@ -385,10 +469,19 @@ pub enum CredentialCommands {
 
 #[derive(Subcommand, Debug)]
 pub enum BucketCommands {
-    Create { bucket: String },
+    Create {
+        bucket: String,
+    },
+    #[command(visible_alias = "ls")]
     List,
-    Head { bucket: String },
-    Delete { bucket: String },
+    #[command(visible_alias = "stat")]
+    Head {
+        bucket: String,
+    },
+    #[command(visible_alias = "rm")]
+    Delete {
+        bucket: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -419,12 +512,10 @@ pub enum ObjectCommands {
         #[arg(long)]
         range: Option<String>,
     },
-    Head {
-        remote: String,
-    },
-    Delete {
-        remote: String,
-    },
+    #[command(visible_alias = "stat")]
+    Head { remote: String },
+    #[command(visible_alias = "rm")]
+    Delete { remote: String },
     List {
         bucket: String,
         #[arg(default_value = "")]
@@ -484,6 +575,28 @@ pub async fn run(mut cli: Cli) -> Result<()> {
             }
         },
         Commands::Auth { command } => auth_command(&client, command, cli.json).await,
+        Commands::Login {
+            scope,
+            no_browser,
+            wallet,
+            legacy_wallet,
+            device_label,
+        } => {
+            auth_command(
+                &client,
+                AuthCommands::Login {
+                    scope,
+                    no_browser,
+                    wallet,
+                    legacy_wallet,
+                    device_label,
+                },
+                cli.json,
+            )
+            .await
+        }
+        Commands::Logout => auth_command(&client, AuthCommands::Logout, cli.json).await,
+        Commands::Whoami => output::print(&client.get("/v1/cli/context").await?, cli.json),
         Commands::Account { command: None } => {
             output::print(&account::account(&client).await?, cli.json)
         }
@@ -664,6 +777,28 @@ async fn auth_command(
             output::print(&result, json_output)
         }
         AuthCommands::Logout => output::print(&client.logout().await?, json_output),
+        AuthCommands::Status => {
+            let session = client.session()?;
+            let automation = std::env::var_os("PIPE_CLI_TOKEN").is_some();
+            let value = if let Some(session) = session {
+                json!({
+                    "authenticated": true,
+                    "credential_kind": if session.access_token.starts_with("pcli_a_") { "platform_session" } else { "website_session" },
+                    "owner_wallet": session.owner_wallet,
+                    "account_id": session.account_id,
+                    "session_id": session.session_id,
+                    "scope": session.scope,
+                    "expires_in": session.expires_in,
+                    "refresh_expires_in": session.refresh_expires_in,
+                })
+            } else {
+                json!({
+                    "authenticated": automation,
+                    "credential_kind": if automation { "automation" } else { "none" },
+                })
+            };
+            output::print(&value, json_output)
+        }
         AuthCommands::Sessions { revoke } => {
             let value = if let Some(id) = revoke {
                 client
@@ -742,17 +877,129 @@ async fn s3_command(
     json_output: bool,
 ) -> Result<()> {
     match command {
-        S3Commands::List => {
+        S3Commands::List { location } => {
+            let (_, profile) = store.profile(Some(name))?;
+            if let Some(location) = location {
+                let (bucket, prefix) = remote_prefix(&profile, &location)?;
+                object_command(
+                    client,
+                    store,
+                    name,
+                    &profile,
+                    ObjectCommands::List { bucket, prefix },
+                    json_output,
+                )
+                .await
+            } else {
+                bucket_command(
+                    client,
+                    store,
+                    name,
+                    &profile,
+                    BucketCommands::List,
+                    json_output,
+                )
+                .await
+            }
+        }
+        S3Commands::Copy {
+            source,
+            destination,
+            recursive,
+        } => {
+            let (_, profile) = store.profile(Some(name))?;
+            s3_copy_command(
+                client,
+                store,
+                name,
+                &profile,
+                &source,
+                &destination,
+                recursive,
+                json_output,
+            )
+            .await
+        }
+        S3Commands::Sync {
+            source,
+            destination,
+        } => {
+            let (_, profile) = store.profile(Some(name))?;
+            sync_command(
+                client,
+                store,
+                name,
+                &profile,
+                &source,
+                &destination,
+                json_output,
+            )
+            .await
+        }
+        S3Commands::Remove { remote, recursive } => {
+            let (_, profile) = store.profile(Some(name))?;
+            s3_remove_command(
+                client,
+                store,
+                name,
+                &profile,
+                &remote,
+                recursive,
+                json_output,
+            )
+            .await
+        }
+        S3Commands::MakeBucket { bucket } => {
             let (_, profile) = store.profile(Some(name))?;
             bucket_command(
                 client,
                 store,
                 name,
                 &profile,
-                BucketCommands::List,
+                BucketCommands::Create { bucket },
                 json_output,
             )
             .await
+        }
+        S3Commands::RemoveBucket { bucket } => {
+            let (_, profile) = store.profile(Some(name))?;
+            bucket_command(
+                client,
+                store,
+                name,
+                &profile,
+                BucketCommands::Delete { bucket },
+                json_output,
+            )
+            .await
+        }
+        S3Commands::Head { remote } => {
+            let (_, profile) = store.profile(Some(name))?;
+            if remote
+                .strip_prefix("s3://")
+                .unwrap_or(&remote)
+                .contains('/')
+            {
+                object_command(
+                    client,
+                    store,
+                    name,
+                    &profile,
+                    ObjectCommands::Head { remote },
+                    json_output,
+                )
+                .await
+            } else {
+                bucket_command(
+                    client,
+                    store,
+                    name,
+                    &profile,
+                    BucketCommands::Head { bucket: remote },
+                    json_output,
+                )
+                .await
+            }
         }
         S3Commands::Multipart { command } => {
             let (_, profile) = store.profile(Some(name))?;
@@ -867,6 +1114,146 @@ async fn s3_command(
             }
         },
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn s3_copy_command(
+    client: &ControlClient,
+    store: &ConfigStore,
+    name: &str,
+    profile: &Profile,
+    source: &str,
+    destination: &str,
+    recursive: bool,
+    json_output: bool,
+) -> Result<()> {
+    let source_path = Path::new(source);
+    let source_is_local = source_path.exists();
+    let destination_is_remote = looks_like_remote(destination);
+    let source_is_remote = looks_like_remote(source);
+    anyhow::ensure!(
+        source_is_local != source_is_remote,
+        "copy requires one local path and one S3 location; use s3://bucket/key for clarity"
+    );
+
+    if source_is_local {
+        anyhow::ensure!(
+            destination_is_remote,
+            "copy destination must be an S3 location; use s3://bucket/key for clarity"
+        );
+        let destination = remote_location(profile, destination)?;
+        if source_path.is_dir() {
+            anyhow::ensure!(recursive, "copying a directory requires --recursive");
+            let s3 = s3_client(client, store, name, profile).await?;
+            let count =
+                sync::upload_directory(&s3, source_path, &destination.0, &destination.1).await?;
+            output::print(
+                &json!({"uploaded":count,"bucket":destination.0,"prefix":destination.1}),
+                json_output,
+            )
+        } else {
+            anyhow::ensure!(
+                source_path.is_file(),
+                "copy source must be a regular file or directory"
+            );
+            let destination = destination_string(destination.0, destination.1);
+            put_file_command(
+                client,
+                store,
+                name,
+                profile,
+                source,
+                &destination,
+                false,
+                None,
+                None,
+                json_output,
+            )
+            .await
+        }
+    } else {
+        anyhow::ensure!(
+            !destination_is_remote,
+            "copy requires one local path and one S3 location"
+        );
+        if recursive {
+            let (bucket, prefix) = remote_prefix(profile, source)?;
+            let s3 = s3_client(client, store, name, profile).await?;
+            let count =
+                sync::download_directory(&s3, &bucket, &prefix, Path::new(destination)).await?;
+            output::print(
+                &json!({"downloaded":count,"bucket":bucket,"prefix":prefix}),
+                json_output,
+            )
+        } else {
+            let output_path = if Path::new(destination).is_dir() {
+                let (_, key) = remote_location(profile, source)?;
+                let filename = Path::new(&key)
+                    .file_name()
+                    .ok_or_else(|| anyhow!("S3 object has no filename"))?;
+                Path::new(destination).join(filename)
+            } else {
+                PathBuf::from(destination)
+            };
+            get_file_command(
+                client,
+                store,
+                name,
+                profile,
+                source,
+                output_path
+                    .to_str()
+                    .ok_or_else(|| anyhow!("destination path is not valid UTF-8"))?,
+                false,
+                None,
+                None,
+                json_output,
+            )
+            .await
+        }
+    }
+}
+
+async fn s3_remove_command(
+    client: &ControlClient,
+    store: &ConfigStore,
+    name: &str,
+    profile: &Profile,
+    remote: &str,
+    recursive: bool,
+    json_output: bool,
+) -> Result<()> {
+    let s3 = s3_client(client, store, name, profile).await?;
+    if recursive {
+        let (bucket, prefix) = remote_prefix(profile, remote)?;
+        let objects = s3.list_all_objects(&bucket, Some(&prefix)).await?;
+        for object in &objects {
+            s3.delete_object(&bucket, &object.key).await?;
+        }
+        output::print(
+            &json!({"bucket":bucket,"prefix":prefix,"deleted":objects.len()}),
+            json_output,
+        )
+    } else {
+        let (bucket, key) = remote_location(profile, remote)?;
+        s3.delete_object(&bucket, &key).await?;
+        output::print(
+            &json!({"bucket":bucket,"key":key,"deleted":true}),
+            json_output,
+        )
+    }
+}
+
+fn looks_like_remote(value: &str) -> bool {
+    let value = value.strip_prefix("s3://").unwrap_or(value);
+    let Some((bucket, key)) = value.split_once('/') else {
+        return false;
+    };
+    !key.is_empty() && (3..=63).contains(&bucket.len()) && !Path::new(value).exists()
+}
+
+fn destination_string(bucket: String, key: String) -> String {
+    format!("s3://{bucket}/{key}")
 }
 
 async fn bucket_command(
@@ -1365,6 +1752,78 @@ async fn profile_command(cli: &Cli, command: &ProfileCommands) -> Result<()> {
             store.save()?;
             output::print(&json!({"profile":name,"active":true}), cli.json)
         }
+        ProfileCommands::Show { name } => {
+            let selected = store.active_name(name.as_deref());
+            let profile = store
+                .file
+                .profiles
+                .get(&selected)
+                .ok_or_else(|| anyhow!("profile '{selected}' does not exist"))?;
+            profile.validate()?;
+            output::print(
+                &json!({"active":store.file.active_profile.as_deref() == Some(selected.as_str()),"profile":selected,"settings":profile}),
+                cli.json,
+            )
+        }
+        ProfileCommands::Set {
+            name,
+            control_api_url,
+            s3_endpoint,
+            region,
+            bucket,
+            prefix,
+            clear_bucket,
+            clear_prefix,
+            clear_s3_endpoint,
+        } => {
+            anyhow::ensure!(
+                control_api_url.is_some()
+                    || s3_endpoint.is_some()
+                    || region.is_some()
+                    || bucket.is_some()
+                    || prefix.is_some()
+                    || *clear_bucket
+                    || *clear_prefix
+                    || *clear_s3_endpoint,
+                "profile set requires at least one setting"
+            );
+            let selected = store.active_name(name.as_deref());
+            let profile = store
+                .file
+                .profiles
+                .get(&selected)
+                .cloned()
+                .ok_or_else(|| anyhow!("profile '{selected}' does not exist"))?;
+            let mut updated = profile;
+            if let Some(value) = control_api_url {
+                updated.control_api_url = value.clone();
+            }
+            if let Some(value) = s3_endpoint {
+                updated.s3_endpoint = Some(value.clone());
+            }
+            if let Some(value) = region {
+                updated.region = value.clone();
+            }
+            if let Some(value) = bucket {
+                updated.bucket = Some(value.clone());
+            }
+            if let Some(value) = prefix {
+                updated.prefix = Some(value.clone());
+            }
+            if *clear_bucket {
+                updated.bucket = None;
+            }
+            if *clear_prefix {
+                updated.prefix = None;
+            }
+            if *clear_s3_endpoint {
+                updated.s3_endpoint = None;
+            }
+            updated.validate()?;
+            store.file.profiles.insert(selected.clone(), updated);
+            store.save()?;
+            output::print(&json!({"profile":selected,"updated":true}), cli.json)
+        }
         ProfileCommands::List => {
             let items = store.file.profiles.keys().collect::<Vec<_>>();
             output::print(
@@ -1446,6 +1905,12 @@ fn destructive(command: &Commands) -> bool {
             command: StorageCommands::Object {
                 command: ObjectCommands::Delete { .. },
             },
+        } | Commands::S3 {
+            command: S3Commands::Remove { .. } | S3Commands::RemoveBucket { .. },
+        } | Commands::Storage {
+            command: StorageCommands::S3 {
+                command: S3Commands::Remove { .. } | S3Commands::RemoveBucket { .. },
+            },
         } | Commands::Payments {
             command: PaymentCommands::Pay { .. }
                 | PaymentCommands::Submit { .. }
@@ -1465,10 +1930,27 @@ mod tests {
     fn current_command_surface_parses() {
         for args in [
             &["pipe", "auth", "login"][..],
+            &["pipe", "login"][..],
+            &["pipe", "logout"][..],
+            &["pipe", "whoami"][..],
+            &["pipe", "auth", "status"][..],
             &["pipe", "profile", "create", "personal"][..],
+            &["pipe", "profile", "show"][..],
+            &["pipe", "profile", "set", "--bucket", "bucket"][..],
             &["pipe", "s3", "credential", "list"][..],
+            &["pipe", "s3", "credentials", "list"][..],
             &["pipe", "s3", "ls"][..],
+            &["pipe", "s3", "ls", "s3://bucket/prefix"][..],
             &["pipe", "s3", "list"][..],
+            &["pipe", "s3", "cp", "file", "s3://bucket/key"][..],
+            &["pipe", "s3", "sync", "./local", "s3://bucket/prefix"][..],
+            &["pipe", "s3", "rm", "s3://bucket/key"][..],
+            &["pipe", "s3", "mb", "bucket"][..],
+            &["pipe", "s3", "rb", "bucket"][..],
+            &["pipe", "s3", "stat", "s3://bucket/key"][..],
+            &["pipe", "bucket", "ls"][..],
+            &["pipe", "bucket", "rm", "bucket"][..],
+            &["pipe", "object", "rm", "bucket/key"][..],
             &["pipe", "object", "put", "file", "bucket/key"][..],
             &["pipe", "upload-file", "file", "bucket/key"][..],
         ] {

@@ -8,7 +8,7 @@ When upgrading from RC1, account for the corrected S3 error reporting in automat
 | --- | --- |
 | `wallet-auth --keypair FILE` | `auth login --wallet FILE` |
 | `logout`; `sessions --revoke ID` | `auth logout`; `auth sessions --revoke ID` |
-| `profile` / `whoami` | `account infrastructure`; use `account get` for a linked platform account |
+| `profile` / `whoami` | `profile show` / `whoami`; use `account infrastructure` or `account get` for detailed identity |
 | `credits-status` / `check-deposit` / `credits` | `credits` for the selected infrastructure balance |
 | `usage` / its former `billing` alias | `usage`; use `--from` and `--to` instead of `--period`/`--detailed` |
 | `s3-key-create`; `s3-key-list`; `s3-key-delete ID` | `s3 credential create`; `s3 credential list`; `s3 credential revoke ID --yes` |
@@ -20,7 +20,19 @@ When upgrading from RC1, account for the corrected S3 error reporting in automat
 
 `profile` now manages local named profiles: `create`, `list`, and `use`. Platform commands are grouped under `account`, `org`, `credentials`, `billing`, `payments`, `usage`, `pricing`, `storage`, `compute`, `hosting`, `kv`, and `durable`; `auth`, `context`, and `doctor` handle access and diagnostics. `api list`, `api describe OPERATION_ID`, and `api call OPERATION_ID` expose eligible advanced reads. They do not replace managed payment workflows.
 
+The familiar shortcuts `login`, `logout`, and `whoami` map to the corresponding
+authentication/context workflows. `auth status` reports local session metadata
+without exposing tokens. `profile show` and `profile set` inspect and update the
+selected profile; `profile get` and `profile update` are aliases.
+
 Existing storage spellings remain available: `bucket`, `object`, and `s3` also work under `storage`. `upload-file FILE BUCKET/KEY` and `download-file BUCKET/KEY FILE` retain object put/get behavior. `upload-directory`, `download-directory`, and `sync` remain top-level commands; for example, `pipe sync ./local s3://my-bucket/prefix`. Object downloads require a destination. Encryption passwords use `--password-file FILE` or a terminal prompt. Existing `PIPEENC2` ciphertext remains supported; unsupported historical encryption formats are not converted.
+
+S3 compatibility spellings are also available: `s3 ls`, `s3 cp`, `s3 sync`,
+`s3 rm`, `s3 mb`, `s3 rb`, and `s3 head`/`s3 stat`. Recursive copy and removal
+are explicit with `--recursive`; removal retains the normal confirmation and
+unknown-outcome handling. `s3 ls` without a location checks the configured
+profile bucket. Global `ListBuckets` enumeration is not part of the customer
+gateway contract; use `s3 ls s3://BUCKET/PREFIX` for object listing.
 
 Existing named profiles retain their explicit endpoints. Ordinary command configuration resolves `--control-api-url`, `PIPE_CONTROL_API_URL`, the selected profile, then `https://api.pipedev.network/control-api`. Storage discovers its customer endpoint; the documented default is `https://gw-001.pipedev.network`. Use `--profile NAME` or `profile use NAME`; `--config FILE` / `PIPE_CLI_CONFIG` select the configuration file. Context changes never transfer ownership or combine infrastructure and platform billing balances.
 

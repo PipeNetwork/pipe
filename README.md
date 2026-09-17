@@ -524,14 +524,24 @@ value; its terms must match the saved invoice.
 ```sh
 pipe profile list
 pipe profile use personal
+pipe profile show
+pipe profile set --bucket my-bucket --prefix backups/
 pipe --profile personal config show
 pipe auth sessions
+pipe auth status
 pipe auth sessions --revoke SESSION_UUID
 pipe auth logout
 pipe s3 credential list
 pipe s3 credential rotate ACCESS_KEY_ID
 pipe s3 credential revoke ACCESS_KEY_ID
 pipe s3 ls
+pipe s3 ls s3://my-bucket/backups/
+pipe s3 cp ./file.txt s3://my-bucket/file.txt
+pipe s3 cp s3://my-bucket/file.txt ./file.txt
+pipe s3 sync ./local s3://my-bucket/backups/
+pipe s3 rm s3://my-bucket/file.txt
+pipe s3 mb my-bucket
+pipe s3 rb my-bucket
 ```
 
 Profiles contain only the control API URL, S3 endpoint, region, bucket and prefix
@@ -578,8 +588,13 @@ pipe sync s3://my-bucket/backups ./restored
 `upload-file` and `download-file` are aliases for object put/get. Explicit
 locations accept `bucket/key` or `s3://bucket/key`. A bare filename uses the
 profile's bucket and prefix. `bucket list` and its `s3 ls` shortcut report the
-configured bucket after HEAD; Pipe does not support global `ListBuckets`
-enumeration. Use `object list` to list objects inside a bucket.
+configured bucket after HEAD; `s3 ls s3://BUCKET/PREFIX` lists objects under a
+prefix. Pipe does not support global `ListBuckets` enumeration, so no-argument
+`s3 ls` cannot discover every bucket in an account. Use `object list` for the
+explicit form. `s3 cp` handles one file in either direction and directory
+transfers with `--recursive`; `s3 sync` is the familiar spelling for the
+existing top-level `sync` workflow. `s3 rm --recursive` deletes each listed
+object under a prefix and uses the existing destructive confirmation.
 
 Sync records local content digests and observed opaque remote ETags to skip
 unchanged files on later runs. It never deletes unrelated objects or local
