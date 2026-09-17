@@ -35,6 +35,7 @@ pub async fn create_credential(
     permissions: &[String],
     expires_at: Option<u64>,
 ) -> Result<Value> {
+    client.authorize_storage_writes(false).await?;
     let mut body = json!({"wallet":wallet,"label":label,"buckets":buckets,"key_prefix":prefix,"permissions":permissions});
     if let Some(value) = expires_at {
         body["expires_at"] = json!(value);
@@ -84,6 +85,7 @@ pub async fn create_storage_session(
 }
 
 pub async fn revoke_credential(client: &ControlClient, access_key_id: &str) -> Result<Value> {
+    client.authorize_storage_writes(false).await?;
     client
         .delete(&format!("/v1/customer/cli/s3/credentials/{access_key_id}"))
         .await

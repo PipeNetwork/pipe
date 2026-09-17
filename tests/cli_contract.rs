@@ -18,6 +18,7 @@ fn pipe(root: &Path, args: &[&str]) -> Output {
 
 fn pipe_format(root: &Path, args: &[&str], format: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_pipe"))
+        .current_dir(root)
         .env("PIPE_DISABLE_KEYRING", "1")
         .env("PIPE_CLI_SECRET_PASSWORD", "executable-fixture-password")
         .env("PIPE_CLI_STATE_DIR", root.join("state"))
@@ -171,6 +172,7 @@ async fn executable_wallet_to_storage_across_processes() {
     assert_eq!(std::fs::read(output).unwrap(), b"hello");
     for (verb, status, s3_code, code, exit) in [
         ("delete", 403, "AccessDenied", "authorization", 4),
+        ("put", 403, "AccessDenied", "authorization", 4),
         ("put", 412, "PreconditionFailed", "conflict", 6),
         ("put", 402, "HttpError", "payment_required", 1),
         ("put", 503, "ServiceUnavailable", "unknown_outcome", 8),
@@ -614,4 +616,200 @@ async fn executable_billing_json_bound_preserves_the_unemitted_page_cursor() {
         pages.len() + 1,
         "the fetched but unemitted page must remain resumable"
     );
+}
+
+async fn device_fixture(server: &MockServer, owner: &str, account: &str, scope: &str, token: char) {
+    Mock::given(method("POST")).and(path("/v1/cli/auth/device"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"device_code":"fixture-device","user_code":"BCDFG-HJKLM","verification_uri":"https://pipe.network/cli/authorize","verification_uri_complete":"https://pipe.network/cli/authorize?user_code=BCDFG-HJKLM","expires_in":600,"interval":5})))
+        .mount(server).await;
+    Mock::given(method("POST")).and(path("/v1/cli/auth/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"access_token":format!("pcli_a_{}",token.to_string().repeat(64)),"refresh_token":format!("pcli_r_{}",token.to_string().repeat(128)),"token_type":"Bearer","scope":scope,"account_id":account,"owner_wallet":owner,"session_id":Uuid::new_v4(),"expires_in":900,"refresh_expires_in":2592000})))
+        .mount(server).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn executable_storage_setup_requests_missing_scopes_and_preserves_account() {
+    let root = tempfile::tempdir().unwrap();
+    let server = MockServer::start().await;
+    let owner = "c".repeat(64);
+    let scope = "account.read storage.read";
+    let expanded = "account.read credentials.write storage.read storage.write";
+    success(pipe(
+        root.path(),
+        &[
+            "profile",
+            "create",
+            "test",
+            "--control-api-url",
+            &server.uri(),
+        ],
+    ));
+    success(pipe(root.path(), &["profile", "use", "test"]));
+    device_fixture(&server, &owner, "original", scope, 'a').await;
+    success(pipe(
+        root.path(),
+        &["auth", "login", "--scope", scope, "--no-browser"],
+    ));
+    server.reset().await;
+    let denied = pipe(
+        root.path(),
+        &["s3", "setup", "--write", "--bucket", "test", "--no-input"],
+    );
+    assert_eq!(denied.status.code(), Some(4));
+    assert!(String::from_utf8_lossy(&denied.stdout).contains("credentials.write"));
+    assert!(server.received_requests().await.unwrap().is_empty());
+
+    // A different canonical account, even for the same owner, must never
+    // replace the original session or receive a pending storage mutation.
+    device_fixture(&server, &owner, "different-account", expanded, 'b').await;
+    Mock::given(method("POST"))
+        .and(path("/v1/cli/auth/logout"))
+        .and(header(
+            "authorization",
+            format!("Bearer pcli_a_{}", "b".repeat(64)),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let wrong = pipe(
+        root.path(),
+        &["s3", "setup", "--write", "--bucket", "test", "--no-browser"],
+    );
+    assert!(!wrong.status.success());
+    assert!(String::from_utf8_lossy(&wrong.stdout).contains("different account"));
+    assert_eq!(
+        success(pipe(root.path(), &["auth", "status"]))["scope"],
+        scope
+    );
+    assert!(!server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .any(|r| r.url.path().contains("/s3/credentials")));
+    server.verify().await;
+    server.reset().await;
+
+    device_fixture(&server, &owner, "original", expanded, 'd').await;
+    Mock::given(method("GET"))
+        .and(path("/v1/customer/cli/account"))
+        .and(header(
+            "authorization",
+            format!("Bearer pcli_a_{}", "d".repeat(64)),
+        ))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(
+                json!({"identities":[{"wallet":owner,"available_atoms":"1000000"}]}),
+            ),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST")).and(path("/v1/customer/cli/s3/credentials"))
+        .and(header("authorization", format!("Bearer pcli_a_{}", "d".repeat(64))))
+        .and(body_partial_json(json!({"wallet":owner,"buckets":["test"],"permissions":["read","list","write"]})))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"access_key_id":"LTWRITE","secret_access_key":"fixture-write-secret","wallet":owner,"buckets":["test"],"permissions":["read","list","write"]})))
+        .expect(1).mount(&server).await;
+    let setup = success(pipe(
+        root.path(),
+        &["s3", "setup", "--write", "--bucket", "test", "--no-browser"],
+    ));
+    assert!(!setup.to_string().contains("fixture-write-secret"));
+    assert_eq!(
+        success(pipe(root.path(), &["auth", "status"]))["scope"],
+        expanded
+    );
+    let requests = server.received_requests().await.unwrap();
+    let requested = requests
+        .iter()
+        .find(|r| r.url.path() == "/v1/cli/auth/device")
+        .unwrap();
+    let form: std::collections::HashMap<_, _> = reqwest::Url::parse(&format!(
+        "https://example.test/?{}",
+        String::from_utf8_lossy(&requested.body)
+    ))
+    .unwrap()
+    .query_pairs()
+    .into_owned()
+    .collect();
+    assert_eq!(form["scope"], expanded);
+    server.verify().await;
+    server.reset().await;
+
+    Mock::given(method("GET"))
+        .and(path("/v1/customer/cli/s3/endpoint"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"endpoint":server.uri(),"region":"us-east-1"})),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("PUT"))
+        .and(path("/test/pipe"))
+        .and(header(
+            "x-amz-content-sha256",
+            "STREAMING-AWS4-HMAC-SHA256-PAYLOAD",
+        ))
+        .respond_with(ResponseTemplate::new(200).insert_header("etag", "opaque"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let input = root.path().join("pipe");
+    std::fs::write(&input, b"binary\0payload").unwrap();
+    let uploaded = success(pipe(
+        root.path(),
+        &["s3", "cp", input.to_str().unwrap(), "s3://test/"],
+    ));
+    assert_eq!(uploaded["key"], "pipe");
+    Mock::given(method("GET"))
+        .and(path("/test/pipe"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(b"binary\0payload".to_vec()))
+        .expect(2)
+        .mount(&server)
+        .await;
+    let dir = root.path().join("downloads");
+    std::fs::create_dir(&dir).unwrap();
+    success(pipe(
+        root.path(),
+        &["s3", "cp", "s3://test/pipe", dir.to_str().unwrap()],
+    ));
+    assert_eq!(std::fs::read(dir.join("pipe")).unwrap(), b"binary\0payload");
+    success(pipe(
+        root.path(),
+        &["s3", "cp", "s3://test/pipe", "downloads/renamed.bin"],
+    ));
+    assert_eq!(
+        std::fs::read(dir.join("renamed.bin")).unwrap(),
+        b"binary\0payload"
+    );
+    for verb in ["PUT", "HEAD", "DELETE"] {
+        Mock::given(method(verb))
+            .and(path("/test"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+    }
+    for args in [
+        vec!["s3", "mb", "s3://test/"],
+        vec!["s3", "head", "s3://test/"],
+        vec!["s3", "ls"],
+        vec!["s3", "rb", "s3://test/", "--yes"],
+    ] {
+        success(pipe(root.path(), &args));
+    }
+    Mock::given(method("DELETE"))
+        .and(path("/test/pipe"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+    success(pipe(root.path(), &["s3", "rm", "s3://test/pipe", "--yes"]));
+    assert!(!server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .any(|r| r.url.path().starts_with("/v1/cli/auth")));
 }

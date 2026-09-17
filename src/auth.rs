@@ -390,6 +390,53 @@ impl ControlClient {
             .get("owner_wallet")?
             .ok_or_else(|| anyhow!("not logged in; run 'pipe auth login'"))
     }
+
+    /// Explicit write workflows can ask the browser for missing permissions.
+    /// Automation never inherits or replaces an interactive session.
+    pub(crate) async fn authorize_storage_writes(&self, no_browser: bool) -> Result<()> {
+        if std::env::var_os("PIPE_CLI_TOKEN").is_some() {
+            return Ok(()); // The server validates the automation grant.
+        }
+        let session = self
+            .session()?
+            .ok_or_else(|| anyhow!("not logged in; run 'pipe auth login'"))?;
+        if !session.access_token.starts_with("pcli_a_") {
+            return Ok(()); // Preserve legacy wallet authentication.
+        }
+        let scope = session.scope.as_deref().unwrap_or_default();
+        let required = [
+            "account.read",
+            "storage.read",
+            "storage.write",
+            "credentials.write",
+        ];
+        if required
+            .iter()
+            .all(|required| scope.split_ascii_whitespace().any(|s| s == *required))
+        {
+            return Ok(());
+        }
+        let expanded =
+            crate::wallet_auth::normalized_scope(&format!("{scope} {}", required.join(" ")));
+        if crate::output::no_input() {
+            return Err(crate::error::ApiError {
+                status: StatusCode::FORBIDDEN,
+                code: "insufficient_scope".into(),
+                message: format!("storage writes need browser approval; run 'pipe auth login --scope \"{expanded}\"', then retry setup"),
+                request_id: None,
+            }.into());
+        }
+        eprintln!("Approve storage write access in your browser to finish setup. Use the same Pipe account as this terminal.");
+        crate::device::login_for_account(
+            self,
+            "Pipe CLI storage write access",
+            &expanded,
+            no_browser,
+            Some(&session),
+        )
+        .await?;
+        Ok(())
+    }
     /// Save the active S3 credential as one keyring item. Older profiles that
     /// stored the access key and secret separately remain readable.
     pub fn save_active_s3_credential(&self, access_key: &str, secret: &str) -> Result<()> {

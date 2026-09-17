@@ -435,6 +435,9 @@ pub enum S3Commands {
 
 #[derive(Args, Clone, Debug)]
 pub struct StorageSetupArgs {
+    /// Print the authorization URL instead of opening a browser when new permissions are needed.
+    #[arg(long)]
+    no_browser: bool,
     /// Grant write access in addition to read/list access.
     #[arg(long)]
     write: bool,
@@ -1284,7 +1287,7 @@ async fn s3_copy_command(
         }
     } else {
         anyhow::ensure!(
-            !destination_is_remote,
+            !destination.starts_with("s3://"),
             "copy requires one local path and one S3 location"
         );
         if recursive {
@@ -1388,32 +1391,9 @@ fn remote_copy_destination(
     value: &str,
     source_filename: &str,
 ) -> Result<(String, String)> {
-    let explicit_scheme = value.starts_with("s3://");
-    let value = value.strip_prefix("s3://").unwrap_or(value);
-    let (bucket, key) = value
-        .split_once('/')
-        .map(|(bucket, key)| (bucket.to_owned(), key.to_owned()))
-        .unwrap_or_else(|| {
-            (
-                if explicit_scheme {
-                    value.to_owned()
-                } else {
-                    profile.bucket.clone().unwrap_or_else(|| value.to_owned())
-                },
-                String::new(),
-            )
-        });
-    if bucket.len() < 3 || bucket.len() > 63 {
-        return Err(anyhow!("object location must be bucket/key"));
-    }
+    let (bucket, key) = remote_prefix(profile, value)?;
     if key.is_empty() || key.ends_with('/') {
-        let prefix = key.trim_end_matches('/');
-        let object_key = if prefix.is_empty() {
-            source_filename.to_owned()
-        } else {
-            format!("{prefix}/{source_filename}")
-        };
-        return Ok((bucket, object_key));
+        return Ok((bucket, format!("{key}{source_filename}")));
     }
     Ok((bucket, key))
 }
@@ -1957,6 +1937,7 @@ fn automatic_setup_args(profile: &Profile, bucket_hint: Option<&str>) -> Result<
             )
         })?;
     Ok(StorageSetupArgs {
+        no_browser: false,
         write: false,
         bucket: Some(bucket),
         prefix: profile.prefix.clone(),
@@ -1977,13 +1958,14 @@ fn write_credential_help(profile: &Profile, bucket_hint: Option<&str>) -> anyhow
 }
 
 fn explain_s3_write_error(error: anyhow::Error, bucket: &str) -> anyhow::Error {
+    if error.downcast_ref::<crate::s3::MutationUnknown>().is_some() {
+        return error;
+    }
     let denied = error
         .downcast_ref::<crate::s3::S3Error>()
         .is_some_and(|s3| s3.status == reqwest::StatusCode::FORBIDDEN && s3.code == "AccessDenied");
     if denied {
-        anyhow!(
-            "S3 write access is denied for bucket '{bucket}'; the active credential is probably read/list-only. Run `pipe s3 setup --write --bucket {bucket}` once, then retry. The upload was not retried."
-        )
+        error.context(format!("S3 write access is denied for bucket '{bucket}'; check the credential's write permission, bucket and prefix scope. Run `pipe s3 setup --write --bucket {bucket}` to configure write access"))
     } else {
         error
     }
@@ -2024,6 +2006,9 @@ async fn setup_s3_credential(
         .prefix
         .or_else(|| profile.prefix.clone())
         .unwrap_or_default();
+    if args.write {
+        client.authorize_storage_writes(args.no_browser).await?;
+    }
     let wallet = if let Some(wallet) = args.wallet.clone() {
         wallet
     } else if std::env::var_os("PIPE_CLI_TOKEN").is_some() {
@@ -2081,9 +2066,8 @@ async fn setup_s3_credential(
         .await
     }
     .map_err(|error| {
-        anyhow!(
-            "could not create the storage credential for linked identity {wallet_for_error}; check `pipe account infrastructure`, CLI admission, storage permission, and available credit: {error}"
-        )
+        let message = format!("could not create the storage credential for linked identity {wallet_for_error}: {error}");
+        error.context(message)
     })?;
     store_credential(client, &value)?;
     if let Some(store) = store.take() {
@@ -2210,6 +2194,14 @@ async fn ensure_s3_endpoint(
 }
 
 fn remote_location(profile: &Profile, value: &str) -> Result<(String, String)> {
+    if value.starts_with("s3://") {
+        let (bucket, key) = remote_prefix(profile, value)?;
+        anyhow::ensure!(
+            !key.is_empty(),
+            "an object key is required after s3://{bucket}/"
+        );
+        return Ok((bucket, key));
+    }
     let value = value.strip_prefix("s3://").unwrap_or(value);
     let (bucket, key) = if let Some((bucket, key)) = value.split_once('/') {
         (bucket.to_owned(), key.to_owned())
@@ -2700,9 +2692,17 @@ mod tests {
             code: "AccessDenied".into(),
             message: "Forbidden".into(),
         });
-        let message = explain_s3_write_error(error, "test").to_string();
-        assert!(message.contains("read/list-only"));
+        let error = explain_s3_write_error(error, "test");
+        let message = error.to_string();
+        assert!(message.contains("write permission"));
         assert!(message.contains("pipe s3 setup --write --bucket test"));
-        assert!(message.contains("not retried"));
+        assert_eq!(crate::error::classification(&error), ("authorization", 4));
+        assert_eq!(crate::error::document(&error)["error"]["http_status"], 403);
+        let unknown = explain_s3_write_error(error.context(crate::s3::MutationUnknown), "test");
+        assert_eq!(
+            crate::error::classification(&unknown),
+            ("unknown_outcome", 8)
+        );
+        assert!(unknown.downcast_ref::<crate::s3::S3Error>().is_some());
     }
 }

@@ -136,12 +136,8 @@
     {
       "advanced_access": false,
       "allowed_cli_credential_kinds": [],
-      "command": "pipe s3 ls / head / object list (automatic onboarding)",
-      "conditional_cli_scopes": {
-        "storage.read": [
-          "read-only delegated session"
-        ]
-      },
+      "command": "pipe s3 setup / ls / head / object list (read onboarding)",
+      "conditional_cli_scopes": {},
       "credentials": [
         {
           "cliBearer": []
@@ -170,13 +166,13 @@
       "method": "POST",
       "operation_id": "cliCreateS3StorageSession",
       "path": "/v1/customer/cli/s3/session",
-      "reason": "Short-lived least-privilege read onboarding for S3 metadata and listings.",
+      "reason": "Short-lived delegated read/list storage credential; write setup uses cliCreateS3Credential after obtaining storage.write and credentials.write.",
       "required_cli_scopes": [
         "storage.read"
       ],
-      "retry_policy": "read-only",
+      "retry_policy": "never-replay",
       "service": "control-plane",
-      "verification_fixture": "baseline cargo test"
+      "verification_fixture": "tests/cli_contract.rs; openapi_contract tests"
     },
     {
       "advanced_access": false,
@@ -6247,9 +6243,9 @@
   ],
   "release_ready": true,
   "specifications": {
-    "control-plane": "5fea353dea79f855fc451b0d17ffb71f15de69350aaaa65ef1ad750134533812",
-    "s3": "ad2c802b939d990f9e1977c894e37067499288d2bcbf1ba4511c7853b7b178ad",
-    "storage": "9793f5a7fec36fe27ba7cd8878d1ff72b3e612a8e9b2354298b923381eef669b"
+    "control-plane": "357b65a9b07f5c3008eafac954ae46ce4dc3a0fe63a9ddf47cb043eec326cfc1",
+    "s3": "32be014fa21a480b5a5ba939fce5b0b5369ccfc45630ec98667fac299db6016d",
+    "storage": "5ff1a2a9c9faf21a59c74e4d9f470db4b9d35c6b32a3af6009a7726171a4d6ca"
   },
   "version": 1
 }

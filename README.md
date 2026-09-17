@@ -560,6 +560,15 @@ bucket without trying global bucket discovery. Read-only S3 commands can also
 create their short-lived read/list credential automatically. Destructive commands
 and payment submissions still require their normal confirmation.
 
+If your login has read access, `pipe s3 setup --write --bucket my-bucket`
+opens browser authorization for the missing `storage.write` and
+`credentials.write` permissions, then finishes setup in the same command.
+Approve using the same Pipe account; selecting another account leaves the
+existing session unchanged. Existing permissions are retained. Use `--no-browser`
+to print the authorization URL for a remote terminal. With `--no-input`, setup
+returns an actionable permission error instead of starting browser authorization.
+Credential creation, rotation and revocation use the same permission check.
+
 Profiles contain only the control API URL, S3 endpoint, region, bucket and prefix
 defaults. `--config FILE` selects a separate configuration. Sessions and keys are
 scoped to the configuration/profile and control API endpoint. A command lock
