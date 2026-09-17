@@ -50,10 +50,7 @@ pub async fn run_cli() -> anyhow::Result<()> {
             Err(error)
         }
         Err(error) if json => {
-            output::print(
-                &serde_json::json!({"error":{"code":error::classification(&error).0,"message":error.to_string()}}),
-                true,
-            )?;
+            output::print(&error::document(&error), true)?;
             Err(error.context("command failed; see JSON output"))
         }
         Err(error) => Err(error),
@@ -62,6 +59,10 @@ pub async fn run_cli() -> anyhow::Result<()> {
 
 pub fn exit_status(error: &anyhow::Error) -> u8 {
     error::classification(error).1
+}
+
+pub fn error_message(error: &anyhow::Error) -> String {
+    error::message(error)
 }
 
 mod billing_workflows;

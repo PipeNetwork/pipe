@@ -113,7 +113,39 @@ pub struct WaitTimeout {
 pub struct SshExit {
     pub status: u8,
 }
+
+/// Include only the already-sanitized S3 error, never an arbitrary cause chain.
+pub fn message(error: &anyhow::Error) -> String {
+    let mut message = error.to_string();
+    if error.downcast_ref::<crate::s3::MutationUnknown>().is_some() {
+        let guidance = crate::s3::MutationUnknown.to_string();
+        if !message.contains(&guidance) {
+            message.push_str("; ");
+            message.push_str(&guidance);
+        }
+    }
+    match error.downcast_ref::<crate::s3::S3Error>() {
+        Some(s3) if message != s3.to_string() => format!("{message}: {s3}"),
+        _ => message,
+    }
+}
+
+pub fn document(error: &anyhow::Error) -> Value {
+    let mut detail = serde_json::json!({
+        "code": classification(error).0,
+        "message": message(error),
+    });
+    if let Some(s3) = error.downcast_ref::<crate::s3::S3Error>() {
+        detail["http_status"] = s3.status.as_u16().into();
+        detail["s3_code"] = s3.code.clone().into();
+    }
+    serde_json::json!({"error":detail})
+}
+
 pub fn classification(error: &anyhow::Error) -> (&'static str, u8) {
+    if error.downcast_ref::<crate::s3::MutationUnknown>().is_some() {
+        return ("unknown_outcome", 8);
+    }
     if error
         .downcast_ref::<crate::platform::ActivationUnknown>()
         .is_some()
@@ -176,6 +208,16 @@ pub fn classification(error: &anyhow::Error) -> (&'static str, u8) {
     if error.downcast_ref::<WaitTimeout>().is_some() {
         return ("wait_timeout", 9);
     }
+    if let Some(s3) = error.downcast_ref::<crate::s3::S3Error>() {
+        return match s3.status.as_u16() {
+            401 => ("authentication", 3),
+            402 => ("payment_required", 1),
+            403 => ("authorization", 4),
+            409 | 412 => ("conflict", 6),
+            429 | 500..=599 => ("unavailable", 5),
+            _ => ("s3_error", 1),
+        };
+    }
     if let Some(api) = error.downcast_ref::<ApiError>() {
         return match api.status.as_u16() {
             401 => ("authentication", 3),
@@ -185,7 +227,11 @@ pub fn classification(error: &anyhow::Error) -> (&'static str, u8) {
             _ => ("api_error", 1),
         };
     }
-    if error.downcast_ref::<reqwest::Error>().is_some() {
+    if error.downcast_ref::<reqwest::Error>().is_some()
+        || error
+            .downcast_ref::<tokio::time::error::Elapsed>()
+            .is_some()
+    {
         return ("transport", 7);
     }
     ("command_failed", 1)

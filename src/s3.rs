@@ -63,6 +63,33 @@ impl S3Error {
     }
 }
 
+/// A submitted mutation did not yield a definitive acknowledgment. Retain the
+/// underlying typed error and any existing multipart recovery context.
+#[derive(Debug, thiserror::Error)]
+#[error("S3 mutation outcome is unknown; reconcile the original operation before retrying")]
+pub(crate) struct MutationUnknown;
+
+fn mutation_failure(error: anyhow::Error, previously_unknown: &mut bool) -> anyhow::Error {
+    *previously_unknown |= error.downcast_ref::<MutationUnknown>().is_some()
+        || error.downcast_ref::<S3Error>().is_some_and(|s3| {
+            s3.status == StatusCode::REQUEST_TIMEOUT
+                || (s3.status.is_server_error() && s3.status != StatusCode::NOT_IMPLEMENTED)
+        })
+        || error.downcast_ref::<reqwest::Error>().is_some_and(|error| {
+            // Builder/connect refusal precedes forwarding. Other send/body
+            // failures cannot prove that the server did not apply the request.
+            !error.is_builder() && !error.is_connect()
+        })
+        || error
+            .downcast_ref::<tokio::time::error::Elapsed>()
+            .is_some();
+    if *previously_unknown && error.downcast_ref::<MutationUnknown>().is_none() {
+        error.context(MutationUnknown)
+    } else {
+        error
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ObjectInfo {
     #[serde(rename(deserialize = "Key"))]
@@ -343,6 +370,8 @@ impl S3Client {
         retry_safe: bool,
     ) -> Result<Response> {
         // Streaming bodies cannot be replayed. Byte bodies use send_replayable.
+        let mutation = !matches!(method, Method::GET | Method::HEAD);
+        let mut unknown = false;
         let mut body = body;
         let retries = if retry_safe && body.is_none() {
             MAX_RETRIES
@@ -373,8 +402,15 @@ impl S3Client {
             }
             let result = match request.send().await {
                 Ok(response) => self.check_response(response).await,
-                Err(error) => Err(error.into()),
-            };
+                Err(error) => Err(error.without_url().into()),
+            }
+            .map_err(|error| {
+                if mutation {
+                    mutation_failure(error, &mut unknown)
+                } else {
+                    error
+                }
+            });
             match result {
                 Err(error) if attempt < retries && retryable(&error) => {
                     tokio::time::sleep(backoff(attempt + 1)).await
@@ -392,6 +428,7 @@ impl S3Client {
         headers: BTreeMap<String, String>,
         body: Bytes,
     ) -> Result<Response> {
+        let mut unknown = false;
         for attempt in 0..=MAX_RETRIES {
             match self
                 .send(
@@ -402,6 +439,7 @@ impl S3Client {
                     false,
                 )
                 .await
+                .map_err(|error| mutation_failure(error, &mut unknown))
             {
                 Err(error) if attempt < MAX_RETRIES && retryable(&error) => {
                     tokio::time::sleep(backoff(attempt + 1)).await
@@ -851,8 +889,12 @@ impl S3Client {
         for (name, value) in signed {
             request = request.header(name, value);
         }
-        self.check_response(request.body(Body::wrap_stream(stream)).send().await?)
-            .await
+        let result = match request.body(Body::wrap_stream(stream)).send().await {
+            Ok(response) => self.check_response(response).await,
+            Err(error) => Err(error.without_url().into()),
+        };
+        let mut unknown = false;
+        result.map_err(|error| mutation_failure(error, &mut unknown))
     }
 
     pub async fn get_object(
@@ -1019,9 +1061,11 @@ impl S3Client {
                 false,
             )
             .await?;
-        let created: Initiated = read_xml(response, "InitiateMultipartUploadResult").await?;
+        let created: Initiated = read_xml(response, "InitiateMultipartUploadResult")
+            .await
+            .context(MutationUnknown)?;
         if created.upload_id.is_empty() {
-            bail!("S3 returned an empty upload ID");
+            return Err(anyhow!("S3 returned an empty upload ID").context(MutationUnknown));
         }
         Ok(created.upload_id)
     }
@@ -1051,7 +1095,7 @@ impl S3Client {
             .and_then(|v| v.to_str().ok())
             .filter(|s| !s.is_empty())
             .map(str::to_owned)
-            .ok_or_else(|| anyhow!("S3 omitted multipart ETag"))
+            .ok_or_else(|| anyhow!("S3 omitted multipart ETag").context(MutationUnknown))
     }
 
     pub async fn list_parts(&self, bucket: &str, key: &str, upload_id: &str) -> Result<Vec<Part>> {
@@ -1150,6 +1194,7 @@ impl S3Client {
         // Pipe's completion fingerprint includes the ordered parts and conditions.
         // Replay exactly those after transient/ambiguous failures; HEAD is not
         // proof of this completion and must never suppress a precondition error.
+        let mut unknown = false;
         for attempt in 0..=MAX_RETRIES {
             let result = async {
                 let response = self
@@ -1161,14 +1206,16 @@ impl S3Client {
                         false,
                     )
                     .await?;
-                let completed: Completed =
-                    read_xml(response, "CompleteMultipartUploadResult").await?;
+                let completed: Completed = read_xml(response, "CompleteMultipartUploadResult")
+                    .await
+                    .context(MutationUnknown)?;
                 if completed.etag.is_empty() {
-                    bail!("completion omitted ETag");
+                    return Err(anyhow!("completion omitted ETag").context(MutationUnknown));
                 }
                 Ok(completed.etag)
             }
-            .await;
+            .await
+            .map_err(|error| mutation_failure(error, &mut unknown));
             match result {
                 Err(error) if attempt < MAX_RETRIES && retryable(&error) => tokio::time::sleep(backoff(attempt + 1)).await,
                 result => return result.context("multipart completion was not acknowledged; retry the same part list and conditions"),
@@ -1572,6 +1619,10 @@ impl<S: Stream<Item = Result<Bytes, std::io::Error>> + Unpin> Stream for AwsChun
 #[cfg(test)]
 #[path = "s3_contract_tests.rs"]
 mod contract_tests;
+
+#[cfg(test)]
+#[path = "s3_error_tests.rs"]
+mod error_tests;
 
 #[cfg(test)]
 mod receipt_tests {

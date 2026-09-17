@@ -13,6 +13,10 @@ use wiremock::{
 };
 
 fn pipe(root: &Path, args: &[&str]) -> Output {
+    pipe_format(root, args, &["--json"])
+}
+
+fn pipe_format(root: &Path, args: &[&str], format: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_pipe"))
         .env("PIPE_DISABLE_KEYRING", "1")
         .env("PIPE_CLI_SECRET_PASSWORD", "executable-fixture-password")
@@ -21,7 +25,7 @@ fn pipe(root: &Path, args: &[&str]) -> Output {
         .env("APPDATA", root)
         .arg("--config")
         .arg(root.join("config.json"))
-        .arg("--json")
+        .args(format)
         .args(args)
         .output()
         .unwrap()
@@ -165,6 +169,62 @@ async fn executable_wallet_to_storage_across_processes() {
         &["object", "get", "bucket/key", output.to_str().unwrap()],
     ));
     assert_eq!(std::fs::read(output).unwrap(), b"hello");
+    for (verb, status, s3_code, code, exit) in [
+        ("delete", 403, "AccessDenied", "authorization", 4),
+        ("put", 412, "PreconditionFailed", "conflict", 6),
+        ("put", 402, "HttpError", "payment_required", 1),
+        ("put", 503, "ServiceUnavailable", "unknown_outcome", 8),
+    ] {
+        let key = format!("/bucket/error-{status}");
+        Mock::given(method(if verb == "delete" { "DELETE" } else { "PUT" }))
+            .and(path(&key))
+            .respond_with(ResponseTemplate::new(status).set_body_string(format!(
+                "<Error><Code>{s3_code}</Code><Message>test-s3-secret</Message></Error>"
+            )))
+            .expect(3)
+            .mount(&server)
+            .await;
+        let remote = key.trim_start_matches('/');
+        let args = if verb == "delete" {
+            vec!["--yes", "storage", "object", "delete", remote]
+        } else {
+            vec!["storage", "object", "put", input.to_str().unwrap(), remote]
+        };
+        for mode in ["json", "jsonl", "table"] {
+            let failure = pipe_format(root.path(), &args, &["--output", mode]);
+            assert_eq!(failure.status.code(), Some(exit));
+            let stderr = String::from_utf8_lossy(&failure.stderr);
+            assert!(stderr.contains(&status.to_string()));
+            if exit == 8 {
+                assert!(stderr.contains("S3 mutation outcome is unknown"));
+                assert!(stderr.contains("reconcile the original operation"));
+            }
+            assert!(!stderr.contains("test-s3-secret"));
+            assert!(!String::from_utf8_lossy(&failure.stdout).contains("test-s3-secret"));
+            if mode == "table" {
+                assert!(failure.stdout.is_empty());
+            } else {
+                let document: Value = serde_json::from_slice(&failure.stdout).unwrap();
+                assert_eq!(document["schema_version"], 1);
+                assert_eq!(document["result"]["error"]["code"], code);
+                assert_eq!(document["result"]["error"]["http_status"], status);
+                assert_eq!(document["result"]["error"]["s3_code"], s3_code);
+                assert!(document["result"]["error"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains(&status.to_string()));
+                if exit == 8 {
+                    assert!(document["result"]["error"]["message"]
+                        .as_str()
+                        .unwrap()
+                        .contains("S3 mutation outcome is unknown"));
+                }
+                if mode == "jsonl" {
+                    assert_eq!(String::from_utf8_lossy(&failure.stdout).lines().count(), 1);
+                }
+            }
+        }
+    }
     let rejected = pipe(root.path(), &["new-user", "legacy"]);
     assert!(!rejected.status.success());
 }
