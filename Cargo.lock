@@ -1918,7 +1918,7 @@ checksum = "8b870d8c151b6f2fb93e84a13146138f05d02ed11c7e7c54f8826aaaf7c9f184"
 
 [[package]]
 name = "pipe"
-version = "3.0.0-rc.1"
+version = "3.0.0-rc.2"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -1961,7 +1961,7 @@ dependencies = [
 
 [[package]]
 name = "pipe-api"
-version = "3.0.0-rc.1"
+version = "3.0.0-rc.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -1970,7 +1970,7 @@ dependencies = [
 
 [[package]]
 name = "pipe-transports"
-version = "3.0.0-rc.1"
+version = "3.0.0-rc.2"
 dependencies = [
  "anyhow",
  "base64",

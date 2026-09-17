@@ -4,12 +4,12 @@ class Budget(unittest.TestCase):
  def test_outstanding_reservations_survive_reruns_and_settlement_is_exact(self):
   with tempfile.TemporaryDirectory() as d:
    path=pathlib.Path(d)/'budget.json'
-   budget.update(path,'reserve','vm',8_000_000)
-   self.assertEqual(budget.update(path,'status')['remaining_atoms'],2_000_000)
-   with self.assertRaises(ValueError):budget.update(path,'reserve','replacement',3_000_000)
+   budget.update(path,'reserve','vm',80_000_000)
+   self.assertEqual(budget.update(path,'status')['remaining_atoms'],20_000_000)
+   with self.assertRaises(ValueError):budget.update(path,'reserve','replacement',30_000_000)
    with self.assertRaises(ValueError):budget.update(path,'reserve','vm',1)
-   budget.update(path,'settle','vm',1_000_000)
-   self.assertEqual(budget.update(path,'reserve','hosting',9_000_000)['remaining_atoms'],0)
+   budget.update(path,'settle','vm',10_000_000)
+   self.assertEqual(budget.update(path,'reserve','hosting',90_000_000)['remaining_atoms'],0)
    with self.assertRaises(ValueError):budget.update(path,'settle','vm',0)
  def test_unknown_or_non_integer_exposure_is_rejected(self):
   with tempfile.TemporaryDirectory() as d:

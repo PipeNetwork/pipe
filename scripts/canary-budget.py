@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Persistent CLI 3 production qualification budget. This never funds or pays accounts."""
 import argparse,fcntl,json,os,pathlib,tempfile
-MAX_ATOMS=10_000_000  # USDC atomic units, including unresolved reservations.
+MAX_ATOMS=100_000_000  # User authorized $100 in test credits on 2026-09-17; includes unresolved reservations.
 STATE=pathlib.Path.home()/'.local/state/pipe/cli3-canary-budget.json'
 
 def update(path,action,operation=None,atoms=None):
@@ -15,7 +15,7 @@ def update(path,action,operation=None,atoms=None):
   if action=='reserve':
    if type(atoms)!=int or atoms<0:raise ValueError('maximum exposure must be nonnegative integer atoms')
    if not operation or operation in records:raise ValueError('operation already recorded; reconcile it instead of reserving again')
-   if exposure()+atoms>MAX_ATOMS:raise ValueError('operation cannot fit within the persistent $10 budget')
+   if exposure()+atoms>MAX_ATOMS:raise ValueError('operation cannot fit within the persistent $100 budget')
    records[operation]={'state':'reserved','maximum_atoms':atoms}
   elif action=='settle':
    if operation not in records or type(atoms)!=int or atoms<0:raise ValueError('known reservation and exact nonnegative settlement required')

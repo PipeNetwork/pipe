@@ -1,6 +1,8 @@
 # Migrating to Pipe CLI 3.0
 
-This guide covers the 1.0.0 command interface at `b18eb5d` and existing profile/state files when upgrading to `3.0.0-rc.1`. Keep the previous binary and private local state until outstanding operations are resolved. Run `pipe doctor --output json` to inspect the deployment's supported, enabled and authorized features.
+This guide covers the 1.0.0 command interface at `b18eb5d` and existing profile/state files when upgrading to `3.0.0-rc.2`. Keep the previous binary and private local state until outstanding operations are resolved. Run `pipe doctor --output json` to inspect the deployment's supported, enabled and authorized features.
+
+When upgrading from RC1, account for the corrected S3 error reporting in automation. A definitive `403` now reports `authorization` with exit `4`, and a definitive `409` or `412` reports `conflict` with exit `6`. Versioned output includes `result.error.http_status` and `result.error.s3_code`; streaming upload failures also retain those details. Unknown submitted mutations take precedence and return exit `8`, even if a later retry receives a refusal. Reconcile the original operation before retrying it. RC2 preserves existing signing, retry counts, ciphertext, profiles, secret storage and operation journals, so the version update requires no state conversion.
 
 | Previous command | Current command or workflow |
 | --- | --- |
