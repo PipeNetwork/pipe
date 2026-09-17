@@ -70,7 +70,8 @@ try {
         if (-not (Test-Path -LiteralPath $backup)) { Copy-Item -LiteralPath $destination -Destination $backup }
         if ((Hash $backup) -ne $oldHash) { throw 'Backup checksum differs.' }
         # Atomic same-volume replacement; failure (including an in-use executable) preserves the old file.
-        [IO.File]::Replace($temporary, $destination, $null)
+        # Preserve a CLR null; PowerShell otherwise binds an empty backup path.
+        [IO.File]::Replace($temporary, $destination, [NullString]::Value)
         @{ sha256 = $oldHash } | ConvertTo-Json | Set-Content -LiteralPath $previous -Encoding UTF8
     } else { [IO.File]::Move($temporary, $destination) }
     Write-Host "Installed $(& $destination --version) at $destination"
