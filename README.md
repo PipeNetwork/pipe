@@ -565,6 +565,14 @@ directory's `pipe` folder; it includes payment journals and transfer recovery
 records. Preserve this state when recovering an interrupted payment.
 `PIPE_CLI_STATE_DIR` selects a different private state directory for automation.
 
+Each command caches secret lookups for its lifetime, so a macOS Keychain item is
+opened at most once per command. A denied or locked Keychain lookup is latched
+for that command instead of being retried for every API request. New active S3
+credentials are stored as one item, which avoids separate Keychain prompts for
+the access key and secret. If the Keychain is unavailable, explicitly choose
+the encrypted fallback with `PIPE_DISABLE_KEYRING=1` and a password of at least
+12 characters.
+
 New S3 secrets are saved before local use and are exported only with `--show-secret`.
 Rotation creates and stores a replacement before revoking the old key; a failed
 revocation is reported explicitly. `s3 credential import ACCESS_KEY_ID` securely

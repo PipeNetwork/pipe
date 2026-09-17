@@ -47,6 +47,12 @@ pub struct Session {
     pub scope: Option<String>,
 }
 
+#[derive(Deserialize, Serialize)]
+struct StoredS3Credential {
+    access_key_id: String,
+    secret_access_key: String,
+}
+
 impl ControlClient {
     pub fn new(profile: Profile, profile_name: impl Into<String>) -> Result<Self> {
         profile.validate()?;
@@ -297,15 +303,13 @@ impl ControlClient {
             return Err(anyhow!("invalid CLI session response"));
         }
         if self
-            .secrets
-            .get("owner_wallet")?
-            .is_some_and(|wallet| wallet != session.owner_wallet)
+            .session()?
+            .is_some_and(|old| old.owner_wallet != session.owner_wallet)
         {
             self.secrets.delete("s3_access_key")?;
         }
         self.secrets
             .set("session", &serde_json::to_string(session)?)?;
-        self.secrets.set("owner_wallet", &session.owner_wallet)?;
         Ok(())
     }
     pub async fn login(
@@ -379,14 +383,63 @@ impl ControlClient {
             std::env::var_os("PIPE_CLI_TOKEN").is_none(),
             "select an explicit wallet for automation; stored wallet context is not inherited"
         );
+        if let Some(session) = self.session()? {
+            return Ok(session.owner_wallet);
+        }
         self.secrets
             .get("owner_wallet")?
             .ok_or_else(|| anyhow!("not logged in; run 'pipe auth login'"))
     }
-    pub fn save_s3_secret(&self, access_key: &str, secret: &str) -> Result<()> {
-        self.secrets.set(&format!("s3:{access_key}"), secret)
+    /// Save the active S3 credential as one keyring item. Older profiles that
+    /// stored the access key and secret separately remain readable.
+    pub fn save_active_s3_credential(&self, access_key: &str, secret: &str) -> Result<()> {
+        self.secrets.set(
+            "s3_access_key",
+            &serde_json::to_string(&StoredS3Credential {
+                access_key_id: access_key.to_owned(),
+                secret_access_key: secret.to_owned(),
+            })?,
+        )
     }
+
+    pub(crate) fn active_s3_access_key(&self) -> Result<Option<String>> {
+        let Some(active) = self.secrets.get("s3_access_key")? else {
+            return Ok(None);
+        };
+        if let Ok(stored) = serde_json::from_str::<StoredS3Credential>(&active) {
+            return Ok(Some(stored.access_key_id));
+        }
+        Ok(Some(active))
+    }
+
+    pub fn active_s3_credential(&self) -> Result<Option<(String, String)>> {
+        let Some(active_key) = self.active_s3_access_key()? else {
+            return Ok(None);
+        };
+        let active = self
+            .secrets
+            .get("s3_access_key")?
+            .ok_or_else(|| anyhow!("active S3 credential disappeared while reading it"))?;
+        if let Ok(stored) = serde_json::from_str::<StoredS3Credential>(&active) {
+            if stored.access_key_id.is_empty() || stored.secret_access_key.is_empty() {
+                return Err(anyhow!(
+                    "stored active S3 credential is incomplete; create a new credential"
+                ));
+            }
+            return Ok(Some((stored.access_key_id, stored.secret_access_key)));
+        }
+        let secret = self.s3_secret(&active_key)?;
+        Ok(Some((active_key, secret)))
+    }
+
     pub fn s3_secret(&self, access_key: &str) -> Result<String> {
+        if let Some(active) = self.secrets.get("s3_access_key")? {
+            if let Ok(stored) = serde_json::from_str::<StoredS3Credential>(&active) {
+                if stored.access_key_id == access_key {
+                    return Ok(stored.secret_access_key);
+                }
+            }
+        }
         self.secrets.get(&format!("s3:{access_key}"))?.ok_or_else(|| anyhow!("secret for S3 credential {access_key} is not available; create a new credential"))
     }
 }

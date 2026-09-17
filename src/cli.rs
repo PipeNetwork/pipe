@@ -1133,8 +1133,7 @@ async fn s3_command(
                 if secret.is_empty() {
                     return Err(anyhow!("S3 secret cannot be empty"));
                 }
-                client.save_s3_secret(&access_key_id, &secret)?;
-                client.secrets.set("s3_access_key", &access_key_id)?;
+                client.save_active_s3_credential(&access_key_id, &secret)?;
                 output::print(
                     &json!({"access_key_id":access_key_id,"imported":true}),
                     json_output,
@@ -1142,8 +1141,8 @@ async fn s3_command(
             }
             CredentialCommands::Use { access_key_id } => {
                 validate_access_key(&access_key_id)?;
-                client.s3_secret(&access_key_id)?;
-                client.secrets.set("s3_access_key", &access_key_id)?;
+                let secret = client.s3_secret(&access_key_id)?;
+                client.save_active_s3_credential(&access_key_id, &secret)?;
                 output::print(
                     &json!({"access_key_id":access_key_id,"active":true}),
                     json_output,
@@ -1157,9 +1156,10 @@ async fn s3_command(
             }
             CredentialCommands::Revoke { access_key_id } => {
                 validate_access_key(&access_key_id)?;
+                let active = client.active_s3_access_key()?;
                 let value = account::revoke_credential(client, &access_key_id).await?;
                 client.secrets.delete(&format!("s3:{access_key_id}"))?;
-                if client.secrets.get("s3_access_key")?.as_deref() == Some(&access_key_id) {
+                if active.as_deref() == Some(&access_key_id) {
                     client.secrets.delete("s3_access_key")?;
                 }
                 output::print(&value, json_output)
@@ -1671,8 +1671,7 @@ fn store_credential(client: &ControlClient, value: &Value) -> Result<()> {
         .as_str()
         .filter(|s| !s.is_empty())
         .ok_or_else(|| anyhow!("credential response omitted secret"))?;
-    client.save_s3_secret(access, secret)?;
-    client.secrets.set("s3_access_key", access)
+    client.save_active_s3_credential(access, secret)
 }
 
 async fn rotate_credential(client: &ControlClient, access: &str, json_output: bool) -> Result<()> {
@@ -1776,29 +1775,24 @@ async fn s3_client(
     access_mode: S3Access,
     bucket_hint: Option<&str>,
 ) -> Result<S3Client> {
-    let (access, secret) = match client.secrets.get("s3_access_key")? {
-        Some(access) => match client.s3_secret(&access) {
-            Ok(secret) => (access, secret),
-            Err(_error) if matches!(access_mode, S3Access::ReadOnly) => {
-                let args = automatic_setup_args(profile, bucket_hint)?;
-                setup_s3_credential(client, name, profile, args, false, true, false).await?;
-                let access = client.secrets.get("s3_access_key")?.ok_or_else(|| {
-                    anyhow!("automatic storage setup did not activate a credential")
-                })?;
-                let secret = client.s3_secret(&access)?;
-                (access, secret)
-            }
-            Err(_) => return Err(write_credential_help(profile, bucket_hint)),
-        },
+    let configured = match client.active_s3_credential() {
+        Ok(value) => value,
+        Err(error)
+            if matches!(access_mode, S3Access::ReadOnly)
+                && error.to_string().starts_with("secret for S3 credential") =>
+        {
+            None
+        }
+        Err(error) => return Err(error),
+    };
+    let (access, secret) = match configured {
+        Some(pair) => pair,
         None if matches!(access_mode, S3Access::ReadOnly) => {
             let args = automatic_setup_args(profile, bucket_hint)?;
             setup_s3_credential(client, name, profile, args, false, true, false).await?;
-            let access = client
-                .secrets
-                .get("s3_access_key")?
-                .ok_or_else(|| anyhow!("automatic storage setup did not activate a credential"))?;
-            let secret = client.s3_secret(&access)?;
-            (access, secret)
+            client
+                .active_s3_credential()?
+                .ok_or_else(|| anyhow!("automatic storage setup did not activate a credential"))?
         }
         None => return Err(write_credential_help(profile, bucket_hint)),
     };

@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 const SERVICE: &str = "pipe-cli-v2";
 
@@ -13,11 +14,19 @@ struct FallbackFile {
     secrets: BTreeMap<String, String>,
 }
 
+#[derive(Clone)]
+enum CachedSecret {
+    Value(Option<String>),
+    Error(String),
+}
+
 pub struct SecretStore {
     profile: String,
     fallback: PathBuf,
     directory: PathBuf,
     native: bool,
+    cache: Mutex<BTreeMap<String, CachedSecret>>,
+    native_error: Mutex<Option<String>>,
 }
 
 impl SecretStore {
@@ -43,6 +52,8 @@ impl SecretStore {
             fallback: root.join("secrets.json"),
             directory: root.join("state").join(namespace),
             native,
+            cache: Mutex::new(BTreeMap::new()),
+            native_error: Mutex::new(None),
         }
     }
     pub fn state_directory(&self) -> &Path {
@@ -61,48 +72,172 @@ impl SecretStore {
     fn entry(&self, key: &str) -> Result<keyring::Entry> {
         keyring::Entry::new(SERVICE, &self.name(key)).map_err(|_| anyhow!("OS keyring unavailable"))
     }
+
+    fn cached(&self, key: &str) -> Result<Option<CachedSecret>> {
+        self.cache
+            .lock()
+            .map_err(|_| anyhow!("secret cache unavailable"))
+            .map(|cache| cache.get(key).cloned())
+    }
+
+    fn cache_value(&self, key: &str, value: Option<String>) -> Result<()> {
+        self.cache
+            .lock()
+            .map_err(|_| anyhow!("secret cache unavailable"))?
+            .insert(key.to_owned(), CachedSecret::Value(value));
+        Ok(())
+    }
+
+    fn cache_error(&self, key: &str, message: String) -> Result<()> {
+        self.cache
+            .lock()
+            .map_err(|_| anyhow!("secret cache unavailable"))?
+            .insert(key.to_owned(), CachedSecret::Error(message));
+        Ok(())
+    }
+
+    fn native_failure(&self, operation: &str, error: &keyring::Error) -> String {
+        let message = format!(
+            "OS keychain access failed while {operation} Pipe CLI credentials ({error}); unlock the keychain item once and retry, or explicitly select encrypted fallback with PIPE_DISABLE_KEYRING=1 and PIPE_CLI_SECRET_PASSWORD"
+        );
+        if let Ok(mut failure) = self.native_error.lock() {
+            if failure.is_none() {
+                *failure = Some(message.clone());
+            }
+            return failure.clone().unwrap_or(message);
+        }
+        message
+    }
+
+    fn native_failure_message(&self) -> Option<String> {
+        self.native_error
+            .lock()
+            .ok()
+            .and_then(|failure| failure.clone())
+    }
+
     pub fn get(&self, key: &str) -> Result<Option<String>> {
+        if let Some(cached) = self.cached(key)? {
+            return match cached {
+                CachedSecret::Value(value) => Ok(value),
+                CachedSecret::Error(message) => Err(anyhow!(message)),
+            };
+        }
         // A fallback record may be newer than a keyring entry whose update failed.
         if let Some(value) = self.load_fallback()?.secrets.get(&self.name(key)).cloned() {
+            self.cache_value(key, Some(value.clone()))?;
             return Ok(Some(value));
         }
         if self.native {
-            if let Ok(entry) = self.entry(key) {
-                if let Ok(value) = entry.get_password() {
+            if let Some(message) = self.native_failure_message() {
+                self.cache_error(key, message.clone())?;
+                return Err(anyhow!(message));
+            }
+            let entry = match self.entry(key) {
+                Ok(entry) => entry,
+                Err(error) => {
+                    let message = error.to_string();
+                    self.cache_error(key, message.clone())?;
+                    return Err(anyhow!(message));
+                }
+            };
+            match entry.get_password() {
+                Ok(value) => {
+                    self.cache_value(key, Some(value.clone()))?;
                     return Ok(Some(value));
+                }
+                Err(keyring::Error::NoEntry) => {
+                    self.cache_value(key, None)?;
+                    return Ok(None);
+                }
+                Err(error) => {
+                    let message = self.native_failure("reading", &error);
+                    self.cache_error(key, message.clone())?;
+                    return Err(anyhow!(message));
                 }
             }
         }
+        self.cache_value(key, None)?;
         Ok(None)
     }
     pub fn set(&self, key: &str, value: &str) -> Result<()> {
-        if self.native {
-            if let Ok(entry) = self.entry(key) {
-                if entry.set_password(value).is_ok() {
+        if let Some(cached) = self.cached(key)? {
+            match cached {
+                CachedSecret::Value(Some(existing)) if existing == value => return Ok(()),
+                CachedSecret::Error(message) => {
+                    if self.password().is_none() {
+                        return Err(anyhow!(message));
+                    }
+                }
+                CachedSecret::Value(_) => {}
+            }
+        }
+        if self.native && self.native_failure_message().is_none() {
+            let entry = match self.entry(key) {
+                Ok(entry) => entry,
+                Err(error) => {
+                    let message = error.to_string();
+                    self.cache_error(key, message.clone())?;
+                    return if self.password().is_none() {
+                        Err(anyhow!(message))
+                    } else {
+                        self.update_fallback(key, Some(value))?;
+                        self.cache_value(key, Some(value.to_owned()))
+                    };
+                }
+            };
+            match entry.set_password(value) {
+                Ok(()) => {
                     if self.fallback.exists() {
                         self.update_fallback(key, None)?;
                     }
+                    self.cache_value(key, Some(value.to_owned()))?;
                     return Ok(());
+                }
+                Err(error) => {
+                    let message = self.native_failure("saving", &error);
+                    self.cache_error(key, message.clone())?;
+                    if self.password().is_none() {
+                        return Err(anyhow!(message));
+                    }
                 }
             }
         }
         if self.password().is_none() {
+            if let Some(message) = self.native_failure_message() {
+                return Err(anyhow!(message));
+            }
             return Err(anyhow!("OS keyring unavailable; explicitly select encrypted fallback with PIPE_CLI_SECRET_PASSWORD before saving credentials"));
         }
-        self.update_fallback(key, Some(value))
+        self.update_fallback(key, Some(value))?;
+        self.cache_value(key, Some(value.to_owned()))
     }
     pub fn delete(&self, key: &str) -> Result<()> {
-        if self.native {
-            if let Ok(entry) = self.entry(key) {
+        let already_missing = matches!(self.cached(key)?, Some(CachedSecret::Value(None)));
+        if self.native && !already_missing {
+            if let Some(message) = self.native_failure_message() {
+                if !self.fallback.exists() {
+                    return Err(anyhow!(message));
+                }
+            } else {
+                let entry = self
+                    .entry(key)
+                    .map_err(|error| anyhow!(error.to_string()))?;
                 match entry.delete_credential() {
                     Ok(()) | Err(keyring::Error::NoEntry) => {}
-                    Err(_) => return Err(anyhow!("could not remove credential from OS keyring")),
+                    Err(error) => {
+                        let message = self.native_failure("removing", &error);
+                        if !self.fallback.exists() {
+                            return Err(anyhow!(message));
+                        }
+                    }
                 }
             }
         }
         if self.fallback.exists() {
             self.update_fallback(key, None)?;
         }
+        self.cache_value(key, None)?;
         Ok(())
     }
     fn password(&self) -> Option<zeroize::Zeroizing<String>> {
@@ -235,5 +370,19 @@ mod tests {
         }
         a.delete("token").unwrap();
         assert!(a.get("token").unwrap().is_none());
+    }
+
+    #[test]
+    fn cached_values_survive_backing_file_changes_until_deleted() {
+        let root = tempfile::tempdir().unwrap();
+        let store = SecretStore::at(root.path().into(), "cache".into(), false);
+        store.set("token", "cached-token").unwrap();
+        assert_eq!(store.get("token").unwrap().as_deref(), Some("cached-token"));
+
+        fs::remove_file(&store.fallback).unwrap();
+        assert_eq!(store.get("token").unwrap().as_deref(), Some("cached-token"));
+
+        store.delete("token").unwrap();
+        assert!(store.get("token").unwrap().is_none());
     }
 }

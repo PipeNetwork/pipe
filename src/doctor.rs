@@ -33,18 +33,16 @@ fn capabilities(v: &Value) -> Value {
 }
 
 fn local_storage(c: &ControlClient) -> Result<Value> {
-    let active = c.secrets.get("s3_access_key")?;
-    let secret_available = active
-        .as_deref()
-        .map(|access| c.s3_secret(access).is_ok())
-        .unwrap_or(false);
+    let active = c.active_s3_credential()?;
+    let active_id = active.as_ref().map(|(access, _)| access.as_str());
+    let secret_available = active.is_some();
     Ok(json!({
         "profile": &c.profile,
         "endpoint_configured": c.profile.s3_endpoint.is_some(),
-        "active_credential": active.is_some(),
+        "active_credential": active_id.is_some(),
         "secret_available": secret_available,
-        "setup_command": if active.is_some() && secret_available { Value::Null } else { json!("pipe s3 setup") },
-        "write_setup_command": if active.is_some() && secret_available { Value::Null } else { json!("pipe s3 setup --write") },
+        "setup_command": if active_id.is_some() && secret_available { Value::Null } else { json!("pipe s3 setup") },
+        "write_setup_command": if active_id.is_some() && secret_available { Value::Null } else { json!("pipe s3 setup --write") },
     }))
 }
 pub async fn run(c: &ControlClient, export: Option<&Path>, j: bool) -> Result<()> {
