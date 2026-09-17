@@ -1,0 +1,3 @@
+Pipe CLI 3.0 introduces browser and wallet login, scoped automation credentials, explicit account/resource context, and dedicated platform commands alongside the preserved storage and payment mechanisms.
+
+See [verification and installation instructions](https://github.com/PipeNetwork/pipe/blob/main/docs/release/VERIFY.md) and the qualification record attached to the matching source release. This draft release candidate has matching immutable contracts and local/staging qualification. Production acceptance is pending unless its matching qualification record explicitly marks it complete. Stable promotion requires native target qualification, production browser and enabled-product acceptance, cleanup, and the persistent $10 canary budget record.

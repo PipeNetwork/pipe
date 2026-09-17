@@ -1,0 +1,123 @@
+name: Release qualification
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['cli3/**']
+    tags: ['v3.*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            binary: pipe
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            binary: pipe
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            binary: pipe
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            binary: pipe
+          - runner: windows-2025
+            target: x86_64-pc-windows-msvc
+            binary: pipe.exe
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+          components: rustfmt, clippy
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify contracts and source formatting
+        run: |
+          cargo fmt --all --check
+          python scripts/cli-coverage.py --check
+          python scripts/test-release-qualification.py
+      - name: Native tests and lint
+        run: |
+          cargo test --locked --workspace --target ${{ matrix.target }}
+          cargo clippy --locked --workspace --all-targets --target ${{ matrix.target }} -- -D warnings
+      - name: Build release binary
+        run: cargo build --locked --release --workspace --target ${{ matrix.target }}
+      - name: Verify installation, upgrade and rollback
+        run: python scripts/test-release-install.py --binary target/${{ matrix.target }}/release/${{ matrix.binary }}
+      - name: Package the tested binary
+        run: python scripts/package-release.py --target ${{ matrix.target }} --binary target/${{ matrix.target }}/release/${{ matrix.binary }} --source ${{ github.sha }} --output dist
+      - name: Attest exact archives
+        uses: actions/attest@v4
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pipe-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  assemble:
+    needs: native
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: pipe-*
+          merge-multiple: true
+          path: dist
+      - name: Collect checksums, installers and verification instructions
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat dist/*.sha256 | LC_ALL=C sort -k2 > dist/SHA256SUMS
+          test "$(wc -l < dist/SHA256SUMS)" -eq 5
+          (cd dist && sha256sum --check SHA256SUMS)
+          cp install.sh install.ps1 docs/release/VERIFY.md dist/
+          sha256sum dist/install.sh dist/install.ps1 dist/VERIFY.md | sed 's@  dist/@  @' >> dist/SHA256SUMS
+      - uses: actions/attest@v4
+        with:
+          subject-path: |
+            dist/SHA256SUMS
+            dist/install.sh
+            dist/install.ps1
+            dist/VERIFY.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qualified-release-set
+          path: dist/*
+      - name: Require staging qualification and immutable contracts before RC publication
+        if: startsWith(github.ref, 'refs/tags/')
+        run: python scripts/verify-release-qualification.py --stage candidate
+      - name: Publish a reviewable draft release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release create "$RELEASE_TAG" dist/*.tar.gz dist/*.zip dist/SHA256SUMS dist/install.sh dist/install.ps1 dist/VERIFY.md --repo PipeNetwork/pipe --verify-tag --draft --prerelease --title "Pipe CLI $RELEASE_TAG" --notes-file docs/release/RELEASE_NOTES.md

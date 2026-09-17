@@ -1,0 +1,22 @@
+[package]
+name = "pipe-transports"
+version = "3.0.0-rc.1"
+edition = "2021"
+
+[dependencies]
+pipe-api = { path = "../pipe-api" }
+anyhow = "1"
+base64 = "0.22"
+sha2 = "0.10"
+tokio = { version = "1", features = ["process", "time", "io-util", "net"] }
+
+thiserror = "2"
+url = "2"
+uuid = "1"
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+rustls-pemfile = "2"
+webpki-roots = "1"
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["rt", "macros", "net"] }
