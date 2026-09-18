@@ -14,7 +14,7 @@ and an explicit `LATTICE_PLATFORM_CLI_ACCOUNTS` allowlist. Those settings do not
 apply migrations or open product launch gates automatically.
 
 ```sh
-pipe auth login --no-browser
+pipe auth login
 pipe context --output json
 pipe doctor --output json
 pipe compute vms list --limit 50
@@ -26,8 +26,9 @@ pipe api describe getComputeVm
 pipe api call getComputeVm --path id=VM_UUID
 ```
 
-`auth login` opens browser authorization by default; `--no-browser` prints the
-URL and code for a remote terminal. Opening the link does not approve it. Use
+`auth login` opens browser authorization on a local desktop and automatically
+prints the URL and code for a remote or headless terminal. `--no-browser` remains
+available when an explicit printed URL is preferred. Opening the link does not approve it. Use
 `--scope "compute.read compute.write credentials.read credentials.write"` to
 request explicit additional permissions. `auth login --wallet /private/key.json`
 signs a platform challenge that binds its exact scopes and canonical account. Use

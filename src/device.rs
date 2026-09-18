@@ -5,6 +5,7 @@ use crate::{
 use anyhow::{anyhow, ensure, Result};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::io::IsTerminal;
 use std::time::Duration;
 #[derive(Deserialize)]
 struct Device {
@@ -77,8 +78,10 @@ pub(crate) async fn login_for_account(
         "Open {} and enter {}. Approve only the request from this terminal.",
         device.verification_uri, device.user_code
     );
-    if !no_browser {
-        let _ = open_browser(uri.as_str());
+    if should_open_browser(no_browser) {
+        if let Err(error) = open_browser(uri.as_str()) {
+            eprintln!("could not open a browser automatically ({error}); use the URL above");
+        }
     }
     let deadline = tokio::time::Instant::now() + Duration::from_secs(device.expires_in);
     let mut interval = device.interval;
@@ -133,6 +136,30 @@ pub(crate) async fn login_for_account(
         }
     }
 }
+
+fn should_open_browser(no_browser: bool) -> bool {
+    if no_browser || crate::output::no_input() || !std::io::stdin().is_terminal() {
+        return false;
+    }
+    // An SSH session is normally attached to a remote terminal. Even when
+    // X11 forwarding is present, opening a browser there is surprising; the
+    // printed URL/code works for every remote-terminal workflow.
+    if std::env::var_os("SSH_CONNECTION").is_some() || std::env::var_os("SSH_TTY").is_some() {
+        return false;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        // Do not invoke xdg-open on a headless Linux host. A local desktop
+        // advertises one of these display environments.
+        return std::env::var_os("DISPLAY").is_some()
+            || std::env::var_os("WAYLAND_DISPLAY").is_some();
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        true
+    }
+}
+
 fn open_browser(url: &str) -> std::io::Result<std::process::Child> {
     #[cfg(target_os = "macos")]
     let mut command = std::process::Command::new("open");
