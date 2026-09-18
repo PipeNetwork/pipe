@@ -30,7 +30,7 @@ pub async fn credentials(client: &ControlClient) -> Result<Value> {
 /// control plane owns this inventory because the public S3 gateway intentionally
 /// does not implement the global ListBuckets wire operation.
 pub async fn storage_buckets(client: &ControlClient) -> Result<Value> {
-    client.get("/v1/customer/cli/s3/buckets?limit=100").await
+    client.get("/v1/customer/storage/buckets?limit=100").await
 }
 
 pub async fn create_credential(
