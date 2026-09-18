@@ -251,7 +251,9 @@ impl SecretStore {
     }
     fn password(&self) -> Option<zeroize::Zeroizing<String>> {
         if let Ok(password) = std::env::var("PIPE_CLI_SECRET_PASSWORD") {
-            return (password.len() >= 12).then(|| zeroize::Zeroizing::new(password));
+            if password.len() >= 12 {
+                return Some(zeroize::Zeroizing::new(password));
+            }
         }
         if let Ok(password) = self.fallback_password.lock() {
             if let Some(password) = password.as_ref() {
