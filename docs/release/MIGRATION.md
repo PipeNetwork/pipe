@@ -35,6 +35,18 @@ account's bucket inventory; use `s3 ls s3://BUCKET/PREFIX` for object listing.
 The gateway does not implement AWS's global `ListBuckets` wire operation, so
 the CLI obtains this inventory from the control plane.
 
+`s3 ls BUCKET/PREFIX` now shows date/size/name rows and groups subfolders as
+`PRE folder/`. Add `--recursive` to list every nested object with its full key.
+`--human-readable`, `--summarize`, and `--page-size 1..1000` are supported.
+Bucket listing uses creation date/name rows; unknown historical dates display
+`-`. Dates are shown in your machine's time zone.
+
+For scripts, `s3 ls --output json` collects all pages into one result with
+`items`, `common_prefixes`, and `next: null`; `--output jsonl` streams pages.
+Include `--recursive` if your script expects the previous flat listing of all
+objects. `object list BUCKET PREFIX` retains its existing metadata behavior.
+Profiles, stored credentials, and transfer journals require no migration.
+
 Storage onboarding is automatic for reads: after login, `s3 ls` uses the
 account inventory, and `s3 head` plus object-list/read commands create a
 temporary account-wide read/list credential when the selected profile has no

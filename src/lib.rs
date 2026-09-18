@@ -25,6 +25,7 @@ mod output;
 mod payments;
 mod platform;
 pub mod s3;
+mod s3_listing;
 mod secretbox;
 mod secure_state;
 mod sigv4;

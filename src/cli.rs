@@ -380,13 +380,12 @@ pub enum PaymentCommands {
 pub enum S3Commands {
     /// Configure a secure S3 credential for the selected profile.
     Setup(StorageSetupArgs),
-    /// Show the configured bucket after a signed HEAD request.
-    ///
-    /// Pipe's customer gateway does not expose global ListBuckets enumeration,
-    /// so this is equivalent to `pipe bucket list`.
+    /// List your buckets, or the files and folders at an S3 location.
     #[command(name = "ls", visible_alias = "list")]
     List {
         location: Option<String>,
+        #[command(flatten)]
+        options: crate::s3_listing::ListOptions,
     },
     /// Copy one object, or a directory with `--recursive`.
     #[command(name = "cp", visible_alias = "copy")]
@@ -945,7 +944,7 @@ async fn s3_command(
         S3Commands::Endpoint
             | S3Commands::Credential { .. }
             | S3Commands::Setup(_)
-            | S3Commands::List { location: None }
+            | S3Commands::List { .. }
     ) {
         ensure_s3_endpoint(client, store, name).await?;
     }
@@ -963,20 +962,32 @@ async fn s3_command(
             )
             .await
         }
-        S3Commands::List { location } => {
-            let (_, profile) = store.profile(Some(name))?;
-            if let Some(location) = location {
-                let (bucket, prefix) = remote_prefix(&profile, &location)?;
-                object_command(
+        S3Commands::List { location, options } => {
+            if let Some(location) = location.filter(|value| value != "s3://") {
+                // Unlike cp/sync, ls has no local-path ambiguity: a bare name
+                // is a bucket, independent of the profile's default bucket.
+                let remote = format!(
+                    "s3://{}",
+                    location.strip_prefix("s3://").unwrap_or(&location)
+                );
+                let (_, profile) = store.profile(Some(name))?;
+                let (bucket, prefix) = remote_prefix(&profile, &remote)?;
+                ensure_s3_endpoint(client, store, name).await?;
+                let (_, profile) = store.profile(Some(name))?;
+                let s3 = s3_client(
                     client,
                     store,
                     name,
                     &profile,
-                    ObjectCommands::List { bucket, prefix },
-                    json_output,
+                    S3Access::ReadOnly,
+                    Some(&bucket),
                 )
-                .await
+                .await?;
+                crate::s3_listing::objects(&s3, &bucket, &prefix, &options, json_output)
+                    .await
+                    .map_err(|error| explain_s3_bucket_error(error, &bucket))
             } else {
+                let (_, profile) = store.profile(Some(name))?;
                 bucket_command(
                     client,
                     store,
@@ -1433,7 +1444,7 @@ async fn bucket_command(
         // without first choosing one or creating a bucket-scoped key.
         match account::storage_buckets(client).await {
             Ok(value) if value["available"].as_bool().unwrap_or(true) => {
-                return output::print(&value, json_output);
+                return crate::s3_listing::buckets(&value, json_output);
             }
             Ok(_) => {}
             Err(error)
@@ -1494,7 +1505,7 @@ async fn bucket_command(
             if profile.bucket.is_none() {
                 save_s3_profile_defaults(store, name, &bucket, None)?;
             }
-            output::print(&json!({"items":[bucket]}), json_output)
+            crate::s3_listing::buckets(&json!({"items":[bucket]}), json_output)
         }
     }
 }

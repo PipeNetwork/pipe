@@ -585,6 +585,7 @@ pipe s3 credential rotate ACCESS_KEY_ID
 pipe s3 credential revoke ACCESS_KEY_ID
 pipe s3 ls
 pipe s3 ls s3://my-bucket/backups/
+pipe s3 ls s3://my-bucket/backups/ --recursive --human-readable --summarize
 pipe s3 cp ./file.txt s3://my-bucket/file.txt
 pipe s3 cp s3://my-bucket/file.txt ./file.txt
 pipe s3 sync ./local s3://my-bucket/backups/
@@ -600,6 +601,30 @@ profile can list every account-visible bucket with `pipe s3 ls`; object reads
 automatically create one short-lived account-wide read/list session when needed.
 Destructive commands and payment submissions still require their normal
 confirmation.
+
+`s3 ls` uses the familiar [AWS S3 listing layout](https://docs.aws.amazon.com/cli/latest/reference/s3/ls.html):
+bucket creation date and name, or object modification date, byte size, and name.
+Dates use your local time zone; `-` means a historical bucket has no known creation date.
+Folders appear as `PRE folder/` instead of dumping every object underneath them:
+
+```text
+                           PRE backups/
+2026-09-18 00:29:46         14 readme.txt
+```
+
+Use `--recursive` for full object paths, `--human-readable` for KiB/MiB sizes,
+and `--summarize` for the number and total size of the listed files. Folder
+contents only count toward the summary with `--recursive`. `--page-size 100`
+reduces the results per request; the CLI still follows every page. Bucket names
+also work without the scheme (`pipe s3 ls my-bucket/backups/`), and `s3 ls s3://`
+lists all your buckets.
+
+For scripts, `--output json` returns one versioned document with object metadata
+in `items`, folder names in `common_prefixes`, and `next: null` after fetching all
+pages. Add `--recursive` to include all nested objects. `--output jsonl` streams
+one document per page and supports listings larger than the 16 MiB JSON limit.
+The explicit `pipe object list BUCKET PREFIX` command retains its flat metadata
+listing.
 
 If your login has read access, `pipe s3 setup --write --bucket my-bucket`
 opens browser authorization for the missing `storage.write` and

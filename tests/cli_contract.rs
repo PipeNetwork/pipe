@@ -843,6 +843,195 @@ async fn device_fixture(server: &MockServer, owner: &str, account: &str, scope: 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn executable_s3_ls_matches_familiar_directory_and_recursive_listings() {
+    let root = tempfile::tempdir().unwrap();
+    let server = MockServer::start().await;
+    let owner = "c".repeat(64);
+    success(pipe(
+        root.path(),
+        &[
+            "profile",
+            "create",
+            "listing",
+            "--control-api-url",
+            &server.uri(),
+            "--s3-endpoint",
+            &server.uri(),
+        ],
+    ));
+    success(pipe(root.path(), &["profile", "use", "listing"]));
+    device_fixture(
+        &server,
+        &owner,
+        "listing-account",
+        "account.read storage.read",
+        'a',
+    )
+    .await;
+    success(pipe(
+        root.path(),
+        &[
+            "auth",
+            "login",
+            "--scope",
+            "account.read storage.read",
+            "--no-browser",
+        ],
+    ));
+    Mock::given(method("POST")).and(path("/v1/customer/cli/s3/session"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"access_key_id":"LTLIST","secret_access_key":"listing-secret","wallet":owner,"buckets":["test"],"permissions":["read","list"]})))
+        .expect(1).mount(&server).await;
+    success(pipe(
+        root.path(),
+        &["s3", "setup", "--bucket", "test", "--wallet", &owner],
+    ));
+    success(pipe(
+        root.path(),
+        &[
+            "profile",
+            "set",
+            "--bucket",
+            "different-bucket",
+            "--prefix",
+            "ignored/",
+        ],
+    ));
+    Mock::given(method("GET")).and(path("/v1/customer/storage/buckets"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"available":true,"items":[{"name":"test","created_at":1789686149,"wallet":owner},{"name":"legacy","created_at":null}],"next_cursor":null})))
+        .mount(&server).await;
+
+    // Two pages, including a directory-only entry and an object with terminal
+    // control characters. Only compact human output escapes the original key.
+    Mock::given(method("GET")).and(path("/test")).and(query_param("prefix", "")).and(query_param("delimiter", "/"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("<ListBucketResult><IsTruncated>true</IsTruncated><NextContinuationToken>root+ &amp;</NextContinuationToken><CommonPrefixes><Prefix>test/</Prefix></CommonPrefixes><Contents><Key>read mé &amp; 雪.txt</Key><LastModified>2026-09-18T00:29:46Z</LastModified><Size>14</Size><ETag>opaque-etag</ETag></Contents></ListBucketResult>"))
+        .with_priority(3).mount(&server).await;
+    Mock::given(method("GET")).and(path("/test")).and(query_param("continuation-token", "root+ &"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("<ListBucketResult><IsTruncated>false</IsTruncated><Contents><Key>z&#10;name.txt</Key><LastModified>2026-09-18T00:29:46Z</LastModified><Size>0</Size></Contents></ListBucketResult>"))
+        .with_priority(2).mount(&server).await;
+    Mock::given(method("GET")).and(path("/test")).and(query_param("prefix", "test/")).and(query_param("delimiter", "/"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("<ListBucketResult><IsTruncated>false</IsTruncated><CommonPrefixes><Prefix>test/sub/</Prefix></CommonPrefixes><Contents><Key>test/a.txt</Key><LastModified>2026-09-18T00:29:46Z</LastModified><Size>1024</Size></Contents></ListBucketResult>"))
+        .mount(&server).await;
+    Mock::given(method("GET")).and(path("/test")).and(query_param("prefix", "test/"))
+        .and(|r: &wiremock::Request| !r.url.query_pairs().any(|(k, _)| k == "delimiter"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("<ListBucketResult><IsTruncated>true</IsTruncated><NextContinuationToken>recursive</NextContinuationToken><Contents><Key>test/a.txt</Key><LastModified>2026-09-18T00:29:46Z</LastModified><Size>1024</Size></Contents></ListBucketResult>"))
+        .with_priority(3).mount(&server).await;
+    Mock::given(method("GET")).and(path("/test")).and(query_param("continuation-token", "recursive"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("<ListBucketResult><IsTruncated>false</IsTruncated><Contents><Key>test/sub/b.txt</Key><LastModified>2026-09-18T00:29:46Z</LastModified><Size>2048</Size></Contents></ListBucketResult>"))
+        .with_priority(2).mount(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/test"))
+        .and(query_param("prefix", "empty/"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(
+            "<ListBucketResult><IsTruncated>false</IsTruncated></ListBucketResult>",
+        ))
+        .mount(&server)
+        .await;
+    let human = |args: &[&str]| {
+        let result = Command::new(env!("CARGO_BIN_EXE_pipe"))
+            .env("PIPE_DISABLE_KEYRING", "1")
+            .env("PIPE_CLI_SECRET_PASSWORD", "executable-fixture-password")
+            .env("PIPE_CLI_STATE_DIR", root.path().join("state"))
+            .arg("--config")
+            .arg(root.path().join("config.json"))
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        String::from_utf8(result.stdout).unwrap()
+    };
+    let date = chrono::DateTime::parse_from_rfc3339("2026-09-18T00:29:46Z")
+        .unwrap()
+        .with_timezone(&chrono::Local)
+        .format("%Y-%m-%d %H:%M:%S")
+        .to_string();
+    let bucket_date = chrono::DateTime::from_timestamp(1789686149, 0)
+        .unwrap()
+        .with_timezone(&chrono::Local)
+        .format("%Y-%m-%d %H:%M:%S")
+        .to_string();
+    for args in [
+        vec!["s3", "ls"],
+        vec!["s3", "ls", "s3://"],
+        vec!["bucket", "list"],
+    ] {
+        let text = human(&args);
+        assert_eq!(text.lines().count(), 2);
+        assert!(text.contains(&format!("{bucket_date} test\n")));
+        assert!(text.contains("-                   legacy\n"));
+        assert!(!text.contains(&owner));
+    }
+    for location in ["s3://test/", "s3://test", "test", "test/"] {
+        assert_eq!(
+            human(&["s3", "ls", location, "--page-size", "2"]),
+            format!("                           PRE test/\n{date}         14 read mé & 雪.txt\n{date}          0 z\\nname.txt\n")
+        );
+    }
+    assert_eq!(
+        human(&["s3", "ls", "test/test/"]),
+        format!("                           PRE sub/\n{date}       1024 a.txt\n")
+    );
+    let recursive = human(&[
+        "s3",
+        "list",
+        "s3://test/test/",
+        "--recursive",
+        "--human-readable",
+        "--summarize",
+        "--page-size",
+        "1",
+    ]);
+    assert_eq!(
+        recursive,
+        format!("{date}    1.0 KiB test/a.txt\n{date}    2.0 KiB test/sub/b.txt\n\nTotal Objects: 2\n   Total Size: 3.0 KiB\n")
+    );
+    assert_eq!(human(&["s3", "ls", "test/empty/"]), "");
+    let json = success(pipe_format(
+        root.path(),
+        &["s3", "ls", "test/", "--summarize"],
+        &["--output", "json"],
+    ));
+    assert_eq!(json["schema_version"], 1);
+    assert_eq!(json["result"]["items"].as_array().unwrap().len(), 2);
+    assert_eq!(json["result"]["items"][0]["etag"], "opaque-etag");
+    assert_eq!(json["result"]["items"][1]["key"], "z\nname.txt");
+    assert_eq!(json["result"]["common_prefixes"], json!(["test/"]));
+    assert_eq!(
+        json["result"]["summary"],
+        json!({"total_objects":2,"total_size":14})
+    );
+    assert_eq!(json["result"]["next"], Value::Null);
+    let jsonl = human(&["--output", "jsonl", "s3", "ls", "test/"]);
+    let pages: Vec<Value> = jsonl
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(pages.len(), 2);
+    assert_eq!(pages[0]["result"]["next"], "root+ &");
+    assert_eq!(pages[1]["result"]["next"], Value::Null);
+    for page_size in ["0", "1001"] {
+        assert_eq!(
+            pipe(
+                root.path(),
+                &["s3", "ls", "test/", "--page-size", page_size]
+            )
+            .status
+            .code(),
+            Some(2)
+        );
+    }
+    let requests = server.received_requests().await.unwrap();
+    assert!(requests.iter().any(|r| r.url.path() == "/test"
+        && r.url
+            .query_pairs()
+            .any(|(k, v)| k == "max-keys" && v == "2")));
+    assert!(!requests.iter().any(|r| r.url.path() == "/different-bucket"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn executable_storage_setup_requests_missing_scopes_and_preserves_account() {
     let root = tempfile::tempdir().unwrap();
     let server = MockServer::start().await;

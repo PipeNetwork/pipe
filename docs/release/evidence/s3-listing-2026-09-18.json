@@ -1,0 +1,205 @@
+{
+  "binary_sha256": "6dc9e563940dfbe41e9acf9401c7903b541c7f4faa0fd4fede546a44d2dabe73",
+  "commands": [
+    {
+      "args": [
+        "s3",
+        "setup",
+        "--write",
+        "--bucket",
+        "pipe-bucket-ffd540a549ba43adb62752ce97a66e44",
+        "--prefix",
+        "cli-ls-20260918-94bd1d34eea2/",
+        "--expires-in",
+        "600",
+        "--label",
+        "S3 ls format production qualification"
+      ],
+      "exit_code": 0
+    },
+    {
+      "args": [
+        "s3",
+        "cp",
+        "/tmp/pipe-s3-ls-live-3e3wl2mm/fixture-0",
+        "s3://pipe-bucket-ffd540a549ba43adb62752ce97a66e44/cli-ls-20260918-94bd1d34eea2/read me.txt"
+      ],
+      "exit_code": 0
+    },
+    {
+      "args": [
+        "s3",
+        "cp",
+        "/tmp/pipe-s3-ls-live-3e3wl2mm/fixture-1",
+        "s3://pipe-bucket-ffd540a549ba43adb62752ce97a66e44/cli-ls-20260918-94bd1d34eea2/sub/雪 & notes.bin"
+      ],
+      "exit_code": 0
+    },
+    {
+      "args": [
+        "s3",
+        "ls",
+        "s3://pipe-bucket-ffd540a549ba43adb62752ce97a66e44/cli-ls-20260918-94bd1d34eea2/",
+        "--page-size",
+        "1"
+      ],
+      "exit_code": 0
+    },
+    {
+      "args": [
+        "s3",
+        "ls",
+        "pipe-bucket-ffd540a549ba43adb62752ce97a66e44/cli-ls-20260918-94bd1d34eea2/",
+        "--page-size",
+        "1"
+      ],
+      "exit_code": 0
+    },
+    {
+      "args": [
+        "s3",
+        "ls",
+        "s3://pipe-bucket-ffd540a549ba43adb62752ce97a66e44/cli-ls-20260918-94bd1d34eea2/",
+        "--recursive",
+        "--human-readable",
+        "--summarize",
+        "--page-size",
+        "1"
+      ],
+      "exit_code": 0
+    },
+    {
+      "args": [
+        "s3",
+        "ls",
+        "pipe-bucket-ffd540a549ba43adb62752ce97a66e44/cli-ls-20260918-94bd1d34eea2/",
+        "--page-size",
+        "1"
+      ],
+      "exit_code": 0
+    },
+    {
+      "args": [
+        "s3",
+        "ls",
+        "pipe-bucket-ffd540a549ba43adb62752ce97a66e44/cli-ls-20260918-94bd1d34eea2/",
+        "--recursive",
+        "--summarize",
+        "--page-size",
+        "1"
+      ],
+      "exit_code": 0
+    },
+    {
+      "args": [
+        "s3",
+        "ls",
+        "pipe-bucket-ffd540a549ba43adb62752ce97a66e44/cli-ls-20260918-94bd1d34eea2/empty/"
+      ],
+      "exit_code": 0
+    },
+    {
+      "args": [
+        "s3",
+        "ls"
+      ],
+      "exit_code": 0
+    },
+    {
+      "args": [
+        "s3",
+        "rm",
+        "s3://pipe-bucket-ffd540a549ba43adb62752ce97a66e44/cli-ls-20260918-94bd1d34eea2/read me.txt",
+        "--yes"
+      ],
+      "exit_code": 0
+    },
+    {
+      "args": [
+        "s3",
+        "rm",
+        "s3://pipe-bucket-ffd540a549ba43adb62752ce97a66e44/cli-ls-20260918-94bd1d34eea2/sub/雪 & notes.bin",
+        "--yes"
+      ],
+      "exit_code": 0
+    },
+    {
+      "args": [
+        "s3",
+        "ls",
+        "pipe-bucket-ffd540a549ba43adb62752ce97a66e44/cli-ls-20260918-94bd1d34eea2/",
+        "--recursive"
+      ],
+      "exit_code": 0
+    },
+    {
+      "args": [
+        "storage",
+        "keys",
+        "ffd540a5-49ba-43ad-b627-52ce97a66e44",
+        "revoke",
+        "6a049de5-af88-418c-92de-9c43c6ef5411",
+        "--yes"
+      ],
+      "exit_code": 0
+    },
+    {
+      "args": [
+        "account"
+      ],
+      "exit_code": 0
+    },
+    {
+      "args": [
+        "auth",
+        "logout"
+      ],
+      "exit_code": 0
+    }
+  ],
+  "production": true,
+  "passed": true,
+  "reservation_id": "s3-ls-format-20260918",
+  "maximum_exposure_atoms": 50000,
+  "bucket": "pipe-bucket-ffd540a549ba43adb62752ce97a66e44",
+  "prefix": "cli-ls-20260918-94bd1d34eea2/",
+  "credential_id": "6a049de5-af88-418c-92de-9c43c6ef5411",
+  "directory_output": "2026-09-18 20:31:19         14 read me.txt\n                           PRE sub/\n",
+  "recursive_output": "2026-09-18 20:31:19   14 Bytes cli-ls-20260918-94bd1d34eea2/read me.txt\n2026-09-18 20:31:20    2.0 KiB cli-ls-20260918-94bd1d34eea2/sub/雪 & notes.bin\n\nTotal Objects: 2\n   Total Size: 2.0 KiB\n",
+  "bucket_output": "2026-09-18 04:41:26 pipe-bucket-ffd540a549ba43adb62752ce97a66e44\n",
+  "empty_after_cleanup": true,
+  "credential_revoked": true,
+  "actual_spending_atoms": 2,
+  "reserved_credit_atoms": 0,
+  "active_credentials": 0,
+  "budget_settled": true,
+  "logged_out": true,
+  "cleanup_errors": [],
+  "format_version": 1,
+  "verified_at": "2026-09-18T20:32:39.535814+00:00",
+  "base_commit": "88d6dc1525ab9111721066d9ea4145fee1df57b7",
+  "backend_deployed_by_this_change": false,
+  "payment_transfers": 0,
+  "source_checksums": {
+    "Cargo.toml": "7f0e4d39c709997aa8b5c968b3cfcc57b0e531d5b248009f0f9db620d5543cd4",
+    "Cargo.lock": "c9c9e7b4dd8e613027cf6e7edb4ba37e9f020413601ebe87768b4c7b0a295165",
+    "src/cli.rs": "678d376fbf88f7bd3a12bac06cfd7f64f0339ac643ed32fcc560e2d531d381b1",
+    "src/s3.rs": "4253f8df796ea2634d9def2e5188630e295021bde17292ea865237c3086e8690",
+    "src/s3_listing.rs": "fbd773e7aac58b777917426e2b4a20731cc5dfd2729e266dfc5d571f114e2088",
+    "src/lib.rs": "4b53ab03bc61befb4bb4fee9e690923305624b1b619e4956ac50a692a40cfcac"
+  },
+  "local_checks": {
+    "root_unit_tests": 133,
+    "executable_tests": 12,
+    "release_build": "passed",
+    "clippy_all_targets_all_features": "passed",
+    "signature_validation": "passed",
+    "interleaved_folder_file_xml": "passed",
+    "cargo_test_locked_workspace": "passed",
+    "cargo_fmt_all_check": "passed",
+    "operation_coverage": {
+      "operations": 229,
+      "pending": 0
+    }
+  }
+}

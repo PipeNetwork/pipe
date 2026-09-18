@@ -292,6 +292,30 @@ async fn object_pagination_decodes_xml_once_and_preserves_metadata() {
 }
 
 #[tokio::test]
+async fn directory_listing_keeps_interleaved_prefixes_and_signs_pagination() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(query_param("delimiter", "/"))
+        .and(query_param("max-keys", "4"))
+        .and(query_param("continuation-token", "a+ /&!"))
+        .respond_with(xml("<ListBucketResult><IsTruncated>true</IsTruncated><NextContinuationToken>next&amp;</NextContinuationToken><Contents><Key>a/read me.txt</Key><Size>9007199254740993</Size></Contents><CommonPrefixes><Prefix>a/sub&amp;/</Prefix></CommonPrefixes><Contents><Key>a/z.txt</Key><Size>0</Size></Contents><CommonPrefixes><Prefix>a/雪/</Prefix></CommonPrefixes></ListBucketResult>"))
+        .expect(1).mount(&server).await;
+    let page = client(&server)
+        .list_objects_page("bucket", Some("a/"), Some("a+ /&!"), Some("/"), Some(4))
+        .await
+        .unwrap();
+    assert_eq!(page.items.len(), 2);
+    assert_eq!(page.items[0].size, Some(9_007_199_254_740_993));
+    assert_eq!(page.common_prefixes, ["a/sub&/", "a/雪/"]);
+    assert_eq!(page.next.as_deref(), Some("next&"));
+    verify_signature(
+        &server.received_requests().await.unwrap()[0],
+        "/bucket",
+        "continuation-token=a%2B%20%2F%26%21&delimiter=%2F&list-type=2&max-keys=4&prefix=a%2F",
+    );
+}
+
+#[tokio::test]
 async fn multipart_pagination_distinguishes_part_from_part_number_marker() {
     let server = MockServer::start().await;
     Mock::given(method("GET")).and(query_param("part-number-marker", "0")).respond_with(xml("<ListPartsResult><PartNumberMarker>0</PartNumberMarker><NextPartNumberMarker>1</NextPartNumberMarker><IsTruncated>true</IsTruncated><Part><PartNumber>1</PartNumber><ETag>&#34;a&amp;quot;&#34;</ETag><Size>8</Size></Part></ListPartsResult>")).mount(&server).await;

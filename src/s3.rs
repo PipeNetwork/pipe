@@ -132,9 +132,24 @@ pub struct ValueList {
 struct ObjectPage {
     #[serde(rename = "Contents", default)]
     contents: Vec<ObjectInfo>,
+    #[serde(rename = "CommonPrefixes", default)]
+    common_prefixes: Vec<CommonPrefix>,
     #[serde(default)]
     is_truncated: bool,
     next_continuation_token: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct CommonPrefix {
+    #[serde(rename = "Prefix")]
+    prefix: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ObjectListing {
+    pub items: Vec<ObjectInfo>,
+    pub common_prefixes: Vec<String>,
+    pub next: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -512,6 +527,21 @@ impl S3Client {
         prefix: Option<&str>,
         continuation: Option<&str>,
     ) -> Result<(Vec<ObjectInfo>, Option<String>)> {
+        let page = self
+            .list_objects_page(bucket, prefix, continuation, None, None)
+            .await?;
+        Ok((page.items, page.next))
+    }
+
+    /// Fetch a bounded ListObjectsV2 page, optionally grouping keys by delimiter.
+    pub async fn list_objects_page(
+        &self,
+        bucket: &str,
+        prefix: Option<&str>,
+        continuation: Option<&str>,
+        delimiter: Option<&str>,
+        page_size: Option<u16>,
+    ) -> Result<ObjectListing> {
         let mut query = String::from("list-type=2");
         if let Some(prefix) = prefix {
             query.push_str(&format!("&prefix={}", sigv4::encode_query(prefix)));
@@ -521,6 +551,13 @@ impl S3Client {
                 "&continuation-token={}",
                 sigv4::encode_query(token)
             ));
+        }
+        if let Some(delimiter) = delimiter {
+            query.push_str(&format!("&delimiter={}", sigv4::encode_query(delimiter)));
+        }
+        if let Some(page_size) = page_size {
+            anyhow::ensure!((1..=1000).contains(&page_size), "page size must be 1–1000");
+            query.push_str(&format!("&max-keys={page_size}"));
         }
         let response = self
             .send(
@@ -544,7 +581,11 @@ impl S3Client {
         } else {
             None
         };
-        Ok((page.contents, next))
+        Ok(ObjectListing {
+            items: page.contents,
+            common_prefixes: page.common_prefixes.into_iter().map(|p| p.prefix).collect(),
+            next,
+        })
     }
 
     pub async fn list_all_objects(
