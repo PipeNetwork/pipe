@@ -151,8 +151,7 @@ fn should_open_browser(no_browser: bool) -> bool {
     {
         // Do not invoke xdg-open on a headless Linux host. A local desktop
         // advertises one of these display environments.
-        return std::env::var_os("DISPLAY").is_some()
-            || std::env::var_os("WAYLAND_DISPLAY").is_some();
+        std::env::var_os("DISPLAY").is_some() || std::env::var_os("WAYLAND_DISPLAY").is_some()
     }
     #[cfg(not(target_os = "linux"))]
     {

@@ -1,5 +1,7 @@
 use anyhow::{anyhow, Context, Result};
 use fs2::FileExt;
+#[cfg(not(test))]
+use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
@@ -25,6 +27,8 @@ enum CachedSecret {
 pub struct SecretStore {
     profile: String,
     fallback: PathBuf,
+    #[cfg(not(test))]
+    machine_key: PathBuf,
     directory: PathBuf,
     native: bool,
     cache: Mutex<BTreeMap<String, CachedSecret>>,
@@ -53,6 +57,8 @@ impl SecretStore {
         Self {
             profile,
             fallback: root.join("secrets.json"),
+            #[cfg(not(test))]
+            machine_key: root.join("secrets.key"),
             directory: root.join("state").join(namespace),
             native,
             cache: Mutex::new(BTreeMap::new()),
@@ -102,7 +108,7 @@ impl SecretStore {
 
     fn native_failure(&self, operation: &str, error: &keyring::Error) -> String {
         let message = format!(
-            "OS keychain access failed while {operation} Pipe CLI credentials ({error}); retry in an interactive terminal to use the encrypted fallback prompt, or set PIPE_DISABLE_KEYRING=1 and PIPE_CLI_SECRET_PASSWORD for noninteractive use"
+            "OS keychain access failed while {operation} Pipe CLI credentials ({error}); using the private local credential store instead"
         );
         if let Ok(mut failure) = self.native_error.lock() {
             if failure.is_none() {
@@ -216,7 +222,7 @@ impl SecretStore {
             if let Some(message) = self.native_failure_message() {
                 return Err(anyhow!(message));
             }
-            return Err(anyhow!("OS keyring unavailable; explicitly select encrypted fallback with PIPE_CLI_SECRET_PASSWORD before saving credentials"));
+            return Err(anyhow!("could not initialize the private local credential store; set PIPE_CLI_SECRET_PASSWORD for noninteractive use"));
         }
         self.update_fallback(key, Some(value))?;
         self.cache_value(key, Some(value.to_owned()))
@@ -250,6 +256,12 @@ impl SecretStore {
         Ok(())
     }
     fn password(&self) -> Option<zeroize::Zeroizing<String>> {
+        #[cfg(not(test))]
+        if self.has_machine_store() {
+            if let Some(password) = self.machine_password() {
+                return Some(password);
+            }
+        }
         if let Ok(password) = std::env::var("PIPE_CLI_SECRET_PASSWORD") {
             if password.len() >= 12 {
                 return Some(zeroize::Zeroizing::new(password));
@@ -258,6 +270,12 @@ impl SecretStore {
         if let Ok(password) = self.fallback_password.lock() {
             if let Some(password) = password.as_ref() {
                 return Some(zeroize::Zeroizing::new(password.as_str().to_owned()));
+            }
+        }
+        #[cfg(not(test))]
+        if !crate::output::no_input() && self.uses_machine_key() {
+            if let Some(password) = self.machine_password() {
+                return Some(password);
             }
         }
         #[cfg(test)]
@@ -273,11 +291,66 @@ impl SecretStore {
     }
 
     #[cfg(not(test))]
+    fn has_machine_store(&self) -> bool {
+        self.machine_key.is_file()
+            && fs::read(&self.fallback)
+                .map(|bytes| bytes.starts_with(b"PIPESEC3"))
+                .unwrap_or(false)
+    }
+
+    #[cfg(not(test))]
+    fn uses_machine_key(&self) -> bool {
+        match fs::read(&self.fallback) {
+            Ok(bytes) if bytes.starts_with(b"PIPESEC3") => self.machine_key.is_file(),
+            Ok(_) => true,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+            Err(_) => false,
+        }
+    }
+
+    #[cfg(not(test))]
+    fn machine_password(&self) -> Option<zeroize::Zeroizing<String>> {
+        #[cfg(unix)]
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(bytes) = fs::read(&self.machine_key) {
+            let metadata = fs::symlink_metadata(&self.machine_key).ok()?;
+            if !metadata.is_file() {
+                return None;
+            }
+            #[cfg(unix)]
+            if metadata.permissions().mode() & 0o077 != 0 {
+                return None;
+            }
+            if bytes.len() == 32 {
+                return Some(zeroize::Zeroizing::new(hex::encode(bytes)));
+            }
+        }
+        let mut bytes = [0u8; 32];
+        rand::rngs::OsRng.fill_bytes(&mut bytes);
+        let encoded = hex::encode(bytes);
+        match create_private_new(&self.machine_key, &bytes) {
+            Ok(true) => Some(zeroize::Zeroizing::new(encoded)),
+            Ok(false) => {
+                let bytes = fs::read(&self.machine_key).ok()?;
+                let metadata = fs::symlink_metadata(&self.machine_key).ok()?;
+                if !metadata.is_file() {
+                    return None;
+                }
+                #[cfg(unix)]
+                if metadata.permissions().mode() & 0o077 != 0 {
+                    return None;
+                }
+                (bytes.len() == 32).then(|| zeroize::Zeroizing::new(hex::encode(bytes)))
+            }
+            Err(_) => None,
+        }
+    }
+
+    #[cfg(not(test))]
     fn prompt_password(&self) -> Option<zeroize::Zeroizing<String>> {
-        // A terminal user can create or unlock the encrypted fallback without
-        // putting the password in shell history. Noninteractive callers must
-        // still provide PIPE_CLI_SECRET_PASSWORD explicitly so CI and scripts
-        // never hang or silently choose an unrecoverable secret.
+        // Only older passphrase-protected stores need a prompt. New headless
+        // stores use a private machine key and never ask the user to invent a
+        // second password.
         if crate::output::no_input() || !std::io::stdin().is_terminal() {
             return None;
         }
@@ -285,11 +358,10 @@ impl SecretStore {
             && fs::read(&self.fallback)
                 .map(|bytes| bytes.starts_with(b"PIPESEC3"))
                 .unwrap_or(false);
-        let prompt = if encrypted_store {
-            "Encrypted Pipe CLI store password: "
-        } else {
-            "Create an encrypted Pipe CLI store password (12+ characters): "
-        };
+        if !encrypted_store {
+            return None;
+        }
+        let prompt = "Encrypted Pipe CLI store password: ";
         let password = match rpassword::prompt_password(prompt) {
             Ok(password) if password.len() >= 12 => password,
             Ok(_) => {
@@ -301,20 +373,6 @@ impl SecretStore {
                 return None;
             }
         };
-        if !encrypted_store {
-            let confirmation =
-                match rpassword::prompt_password("Confirm encrypted store password: ") {
-                    Ok(confirmation) => confirmation,
-                    Err(error) => {
-                        eprintln!("could not read encrypted store password confirmation: {error}");
-                        return None;
-                    }
-                };
-            if password != confirmation {
-                eprintln!("encrypted store passwords did not match");
-                return None;
-            }
-        }
         let password = zeroize::Zeroizing::new(password);
         if let Ok(mut cached) = self.fallback_password.lock() {
             *cached = Some(zeroize::Zeroizing::new(password.as_str().to_owned()));
@@ -324,7 +382,7 @@ impl SecretStore {
     fn warn() {
         static ONCE: std::sync::Once = std::sync::Once::new();
         ONCE.call_once(|| {
-            eprintln!("warning: OS keyring unavailable; reading a legacy secret file; select encrypted fallback to migrate it")
+            eprintln!("warning: OS keyring unavailable; reading a legacy secret file; its next update will use the private machine-key store")
         });
     }
     fn load_fallback(&self) -> Result<FallbackFile> {
@@ -347,7 +405,7 @@ impl SecretStore {
             crate::secretbox::open(
                 &bytes,
                 &self.password().ok_or_else(|| {
-                    anyhow!("PIPE_CLI_SECRET_PASSWORD is required for encrypted secret storage")
+                    anyhow!("could not unlock the encrypted local credential store; set PIPE_CLI_SECRET_PASSWORD or restore its local key")
                 })?,
             )?
         } else {
@@ -374,7 +432,7 @@ impl SecretStore {
         let data = zeroize::Zeroizing::new(serde_json::to_vec(&file)?);
         let password = self
             .password()
-            .ok_or_else(|| anyhow!("explicit encrypted fallback password required"))?;
+            .ok_or_else(|| anyhow!("could not initialize the private local credential store"))?;
         let sealed = crate::secretbox::seal(&data, &password)?;
         if self.fallback.exists() && !fs::read(&self.fallback)?.starts_with(b"PIPESEC3") {
             let backup = self
@@ -395,6 +453,33 @@ fn private_open(path: &Path) -> Result<File> {
         options.mode(0o600);
     }
     Ok(options.open(path)?)
+}
+
+/// Create a private file without replacing a key another process may already
+/// have generated for the same local credential store.
+#[cfg(not(test))]
+fn create_private_new(path: &Path, data: &[u8]) -> Result<bool> {
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    fs::create_dir_all(parent)?;
+    let mut options = OpenOptions::new();
+    options.create_new(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = match options.open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => return Ok(false),
+        Err(error) => return Err(error.into()),
+    };
+    file.write_all(data)?;
+    file.sync_all()?;
+    File::open(parent)?.sync_all()?;
+    Ok(true)
 }
 
 pub fn atomic_private_write(path: &Path, data: &[u8]) -> Result<()> {

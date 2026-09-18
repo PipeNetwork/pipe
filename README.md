@@ -39,14 +39,15 @@ Automation can supply an activated `pcli_c_` credential through `PIPE_CLI_TOKEN`
 without persisting it. Account keys, browser sessions and operator tokens are
 rejected. Automation does not inherit a stored local wallet signing key.
 
-New secrets use the OS keyring when it is available. On an interactive Linux or
-other headless terminal, Pipe prompts once for a 12-character password and uses
-the AES-GCM/Argon2id encrypted fallback when the keyring cannot be opened. The
-password is cached only for that process. For CI and other noninteractive runs,
-set `PIPE_CLI_SECRET_PASSWORD` (at least 12 characters) through your secret
-manager. Keyring failures never create new plaintext secret files. Existing
-legacy secret files remain readable; selecting the encrypted fallback creates a
-private backup before migration. Keep that backup private. Existing payment,
+New secrets use the OS keyring when it is available. If a Linux or other
+headless terminal has no usable keyring, Pipe automatically creates a random
+machine key with private file permissions and uses it for the AES-GCM/Argon2id
+encrypted local store; login does not ask the user to invent another password.
+`PIPE_CLI_SECRET_PASSWORD` is only needed to unlock an older passphrase-protected
+store or to provide an explicit secret in noninteractive automation. Keyring
+failures never create new plaintext secret files. Existing legacy secret files
+remain readable; their next update is encrypted and creates a private backup
+first. Keep the state directory and its machine key together. Existing payment,
 multipart and transfer journals are preserved.
 
 `--output json` emits one `{schema_version:1,result:...}` document. `jsonl` emits
@@ -606,23 +607,25 @@ defaults. `--config FILE` selects a separate configuration. Sessions and keys ar
 scoped to the configuration/profile and control API endpoint. A command lock
 prevents simultaneous session refreshes for one profile.
 
-Native OS keyrings are enabled. If the keyring is unavailable, an interactive
-terminal prompts for the encrypted fallback password once. Set
-`PIPE_CLI_SECRET_PASSWORD` for noninteractive use. `PIPE_DISABLE_KEYRING=1`
-disables the native keyring and uses the same encrypted fallback behavior; it
-never authorizes plaintext secret persistence. Profile state lives under the OS config
-directory's `pipe` folder; it includes payment journals and transfer recovery
-records. Preserve this state when recovering an interrupted payment.
+Native OS keyrings are enabled. If the keyring is unavailable, the CLI creates a
+private machine key and uses the encrypted local store automatically.
+`PIPE_DISABLE_KEYRING=1` disables the native keyring and uses the same automatic
+fallback; it never authorizes plaintext secret persistence. Set
+`PIPE_CLI_SECRET_PASSWORD` only when restoring an older passphrase-protected
+store or when an automation environment supplies its own secret. Profile state
+lives under the OS config directory's `pipe` folder; it includes the machine key,
+payment journals and transfer recovery records. Preserve this state when
+recovering an interrupted payment.
 `PIPE_CLI_STATE_DIR` selects a different private state directory for automation.
 
 Each command caches secret lookups for its lifetime, so a macOS Keychain item is
 opened at most once per command. A denied or locked Keychain lookup is latched
 for that command instead of being retried for every API request. New active S3
 credentials are stored as one item, which avoids separate Keychain prompts for
-the access key and secret. If the Keychain is unavailable, the interactive
-fallback prompt confirms a new password and reuses it for the rest of the
-command, so login does not ask repeatedly. For noninteractive use, select the
-fallback with `PIPE_DISABLE_KEYRING=1` and a password of at least 12 characters.
+the access key and secret. If the keyring is unavailable, the private machine-key
+fallback is used without another prompt. Older passphrase-protected stores still
+prompt once to unlock. For automation, preserve the state directory or provide
+`PIPE_CLI_SECRET_PASSWORD` through a secret manager.
 
 New S3 secrets are saved before local use and are exported only with `--show-secret`.
 Rotation creates and stores a replacement before revoking the old key; a failed

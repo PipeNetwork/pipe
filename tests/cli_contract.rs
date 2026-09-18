@@ -298,6 +298,86 @@ async fn executable_browser_login_encrypts_secrets() {
     assert!(!bytes.windows(7).any(|b| b == b"pcli_a_"));
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn executable_headless_login_uses_private_machine_key_without_password() {
+    let server = MockServer::start().await;
+    let root = tempfile::tempdir().unwrap();
+    success(pipe(
+        root.path(),
+        &[
+            "profile",
+            "create",
+            "test",
+            "--control-api-url",
+            &server.uri(),
+        ],
+    ));
+    success(pipe(root.path(), &["profile", "use", "test"]));
+    Mock::given(method("POST"))
+        .and(path("/v1/cli/auth/device"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "device_code":"pcli_d_machine",
+            "user_code":"BCDFG-HJKLM",
+            "verification_uri":"https://pipe.network/cli/authorize",
+            "verification_uri_complete":"https://pipe.network/cli/authorize?user_code=BCDFG-HJKLM",
+            "expires_in":600,
+            "interval":5
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/cli/auth/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "access_token":format!("pcli_a_{}", "a".repeat(64)),
+            "refresh_token":format!("pcli_r_{}", "b".repeat(128)),
+            "token_type":"Bearer",
+            "scope":"account.read billing.read compute.read durable.read hosting.read kv.read org.read storage.read usage.read",
+            "account_id":null,
+            "owner_wallet":"c".repeat(64),
+            "session_id":Uuid::new_v4(),
+            "expires_in":900,
+            "refresh_expires_in":2592000
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let output = Command::new(env!("CARGO_BIN_EXE_pipe"))
+        .current_dir(root.path())
+        .env("PIPE_DISABLE_KEYRING", "1")
+        .env_remove("PIPE_CLI_SECRET_PASSWORD")
+        .env("PIPE_CLI_STATE_DIR", root.path().join("state"))
+        .env("XDG_CONFIG_HOME", root.path())
+        .env("APPDATA", root.path())
+        .arg("--config")
+        .arg(root.path().join("config.json"))
+        .args(["--json", "auth", "login", "--no-browser"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let machine_key = root.path().join("state/secrets.key");
+    assert_eq!(std::fs::metadata(&machine_key).unwrap().len(), 32);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(&machine_key)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+    }
+    assert!(std::fs::read(root.path().join("state/secrets.json"))
+        .unwrap()
+        .starts_with(b"PIPESEC3"));
+}
+
 #[test]
 fn executable_output_and_unavailable_secret_store_fail_closed() {
     let root = tempfile::tempdir().unwrap();
@@ -322,9 +402,7 @@ fn executable_output_and_unavailable_secret_store_fail_closed() {
         .unwrap();
     assert!(!output.status.success());
     assert!(!root.path().join("secrets/secrets.json").exists());
-    assert!(
-        String::from_utf8_lossy(&output.stderr).contains("explicitly select encrypted fallback")
-    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("PIPE_CLI_SECRET_PASSWORD"));
 }
 
 fn features() -> Value {
