@@ -118,6 +118,11 @@ async fn upload(
 ) -> Result<u64> {
     let root = checked_directory(local, false)?;
     let prefix = normalized_prefix(prefix)?;
+    let show_progress = client.progress_enabled();
+    // Directory sync follows the AWS CLI's per-object output. The S3 client's
+    // byte progress bar is useful for a single copy, but becomes a giant line
+    // of blocks when it is recreated for every object in a sync.
+    let transfer_client = client.clone().with_progress(false);
     let mut state = state_dir
         .map(|dir| State::open(dir, &root, bucket, prefix, &client.endpoint_identity()))
         .transpose()?;
@@ -174,12 +179,17 @@ async fn upload(
         if let Some(state) = state.as_mut() {
             // Only the actual write/completion response binds this snapshot
             // to an ETag. A later HEAD could observe a concurrent writer.
-            let etag = client
+            let etag = transfer_client
                 .put_file_observed(bucket, &key, snapshot.path(), None)
                 .await?;
             state.observe(&key, digest, etag)?;
         } else {
-            client.put_file(bucket, &key, snapshot.path(), None).await?;
+            transfer_client
+                .put_file(bucket, &key, snapshot.path(), None)
+                .await?;
+        }
+        if show_progress {
+            eprintln!("upload: ./{} to s3://{}/{}", relative, bucket, key);
         }
         count += 1;
     }
@@ -216,6 +226,10 @@ async fn download(
 ) -> Result<u64> {
     let prefix = normalized_prefix(prefix)?;
     let root = checked_directory(local, true)?;
+    let show_progress = client.progress_enabled();
+    // Keep sync output to one AWS-style line per completed object instead of
+    // rendering a separate byte bar for every download.
+    let transfer_client = client.clone().with_progress(false);
     let mut state = state_dir
         .map(|dir| State::open(dir, &root, bucket, prefix, &client.endpoint_identity()))
         .transpose()?;
@@ -268,7 +282,7 @@ async fn download(
             // can replace the file.
             let staging = tempfile::NamedTempFile::new_in(&destination.parent)?.into_temp_path();
             let reader = download_client(
-                client,
+                &transfer_client,
                 before.as_ref().and_then(|object| object.etag.as_deref()),
             )?;
             reader
@@ -308,6 +322,9 @@ async fn download(
                     digest.context("missing download digest")?,
                     after.and_then(|object| object.etag),
                 )?;
+            }
+            if show_progress {
+                eprintln!("download: s3://{}/{} to ./{}", bucket, item.key, relative);
             }
             count += 1;
         }

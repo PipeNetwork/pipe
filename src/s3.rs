@@ -283,6 +283,10 @@ impl S3Client {
         self
     }
 
+    pub(crate) fn progress_enabled(&self) -> bool {
+        self.progress
+    }
+
     /// Keep resume records outside input trees, including read-only sources.
     pub fn with_state_directory(mut self, directory: PathBuf) -> Self {
         self.state_directory = directory;
