@@ -1,0 +1,36 @@
+{
+  "complete": true,
+  "earlier_owned_browser_sessions_revoked": 5,
+  "format_version": 1,
+  "no_active_billable_test_resources": true,
+  "retained_records": "One empty managed bucket catalog entry, its audit history, revoked credentials and terminal recovery records. Managed bucket deletion is unsupported.",
+  "scoped_storage_audit": {
+    "active_credentials": 0,
+    "active_leases": 0,
+    "captured_at": "2026-09-18T05:24:11.486761+00:00",
+    "consumed_atoms": "521",
+    "credential_count": 17,
+    "enabled_lifecycle": 0,
+    "enabled_webhooks": 0,
+    "indexed_objects": 0,
+    "live_objects": 0,
+    "pending_reservations": 0,
+    "pending_webhooks": 0,
+    "usage_atoms": "521",
+    "wallet_reserved_atoms": "0"
+  },
+  "session_and_settings_audit": {
+    "active_browser_sessions": 0,
+    "active_cli_sessions": 0,
+    "captured_at": "2026-09-18T05:24:45.825091+00:00",
+    "cors_rule_count": 0,
+    "monthly_limit_atoms": null
+  },
+  "webhook_receiver": {
+    "gateway_cors_preserved": true,
+    "receiver_route_removed": true,
+    "receiver_stopped": true,
+    "secret_removed": true,
+    "site_sha256": "4e9398af3458d4e8dcd3ef3638236af57ca1fe985b1d83f17aa7027e61ae5251"
+  }
+}

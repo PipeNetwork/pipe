@@ -1,0 +1,58 @@
+{
+  "aged_lifecycle_expiration": "Passed staging worker fixtures; live production checks cover preview, enable/disable, and stale-version rejection.",
+  "checks": {
+    "browser_cli_round_trip": true,
+    "bucket_audit": true,
+    "bucket_settings_readable": true,
+    "cli_ls": true,
+    "cors_allow_and_deny": true,
+    "device_approval": true,
+    "device_denial": true,
+    "first_upload": true,
+    "global_search": true,
+    "http_only_session": true,
+    "keys_create_list_revoke": true,
+    "lifecycle_preview_and_disable": true,
+    "real_website_login": true,
+    "search_dialog_centered": true,
+    "transfer_receipt_survives_reload": true,
+    "transfer_rows_inside_center": true
+  },
+  "cli_round_trip": {
+    "bytes": 9437184,
+    "sha256": "d1ef402e937ad3853124a217f5e8cc073cf2fcb510d604904afffbbdf7f227ce"
+  },
+  "exact_tag_linux_binary_sha256": "053428781661470f5373c215f8de3e69cddb1836905404db0f08375802dfaf37",
+  "finished_at": "2026-09-18T05:22:05.504Z",
+  "format_version": 1,
+  "frontend_commit": "392ed5e115d411398f3798a3160cbc448939c637",
+  "identity_binding": {
+    "browser_owner_matches_cli_principal": true,
+    "credential_kind": "session",
+    "selected_context_belongs_to_browser_owner": true,
+    "storage_endpoint": "https://api.pipedev.network"
+  },
+  "private_evidence_sha256": {
+    "bucket_settings_screenshot": "9dbe9e195cbf4964e18fdbe1487ea3c9e79ca896b1c1fc986299c5f24e360689",
+    "core_record": "5a01f1432809e5ee567d58951728470cfea29a8a50fcb7260c70750509682ff8",
+    "global_search_screenshot": "550ca63379f13baee67cdcc851c4b58da0394eb4d2f652ab6a0a811ecd8b2f00",
+    "transfer_center_screenshot": "130cd2b0cc731aa0ea124dbe5d50c796b64088c651da50729182187b4deeae92",
+    "webhook_record": "732d1390eda5ab737dd2ee86512e9ce64ad7a9b94cc9e269961e4f8bb173847d"
+  },
+  "production_team_acceptance": "Pending an authorized canonical Google-linked test account. Team fixtures pass with real PostgreSQL and browser tests.",
+  "real_payment_transfers": 0,
+  "source_tag_commit": "fc44e0db734ff715a765a5bc2994ef04bee8424a",
+  "webhooks": {
+    "all_deliveries_retried_once": true,
+    "binary_identity": "Reviewed-source Linux binary is byte-identical to the final tagged binary; provenance verified for both.",
+    "checks": {
+      "cli_webhook_upload": true,
+      "signed_delete_exact_retry": true,
+      "signed_upload_exact_retry": true,
+      "stale_version_rejected_replacement_preserved": true,
+      "wallet_cli_login": true
+    },
+    "successful_deliveries": 3,
+    "verified_receipts": 6
+  }
+}
