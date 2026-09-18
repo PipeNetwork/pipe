@@ -3,6 +3,8 @@ use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
+#[cfg(not(test))]
+use std::io::IsTerminal;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -27,6 +29,7 @@ pub struct SecretStore {
     native: bool,
     cache: Mutex<BTreeMap<String, CachedSecret>>,
     native_error: Mutex<Option<String>>,
+    fallback_password: Mutex<Option<zeroize::Zeroizing<String>>>,
 }
 
 impl SecretStore {
@@ -54,6 +57,7 @@ impl SecretStore {
             native,
             cache: Mutex::new(BTreeMap::new()),
             native_error: Mutex::new(None),
+            fallback_password: Mutex::new(None),
         }
     }
     pub fn state_directory(&self) -> &Path {
@@ -98,7 +102,7 @@ impl SecretStore {
 
     fn native_failure(&self, operation: &str, error: &keyring::Error) -> String {
         let message = format!(
-            "OS keychain access failed while {operation} Pipe CLI credentials ({error}); unlock the keychain item once and retry, or explicitly select encrypted fallback with PIPE_DISABLE_KEYRING=1 and PIPE_CLI_SECRET_PASSWORD"
+            "OS keychain access failed while {operation} Pipe CLI credentials ({error}); retry in an interactive terminal to use the encrypted fallback prompt, or set PIPE_DISABLE_KEYRING=1 and PIPE_CLI_SECRET_PASSWORD for noninteractive use"
         );
         if let Ok(mut failure) = self.native_error.lock() {
             if failure.is_none() {
@@ -246,22 +250,74 @@ impl SecretStore {
         Ok(())
     }
     fn password(&self) -> Option<zeroize::Zeroizing<String>> {
-        std::env::var("PIPE_CLI_SECRET_PASSWORD")
-            .ok()
-            .filter(|s| s.len() >= 12)
-            .map(zeroize::Zeroizing::new)
-            .or_else(|| {
-                #[cfg(test)]
-                {
-                    Some(zeroize::Zeroizing::new(
-                        "unit-test-only-fallback-password".into(),
-                    ))
-                }
-                #[cfg(not(test))]
-                {
-                    None
-                }
-            })
+        if let Ok(password) = std::env::var("PIPE_CLI_SECRET_PASSWORD") {
+            return (password.len() >= 12).then(|| zeroize::Zeroizing::new(password));
+        }
+        if let Ok(password) = self.fallback_password.lock() {
+            if let Some(password) = password.as_ref() {
+                return Some(zeroize::Zeroizing::new(password.as_str().to_owned()));
+            }
+        }
+        #[cfg(test)]
+        {
+            Some(zeroize::Zeroizing::new(
+                "unit-test-only-fallback-password".to_owned(),
+            ))
+        }
+        #[cfg(not(test))]
+        {
+            self.prompt_password()
+        }
+    }
+
+    #[cfg(not(test))]
+    fn prompt_password(&self) -> Option<zeroize::Zeroizing<String>> {
+        // A terminal user can create or unlock the encrypted fallback without
+        // putting the password in shell history. Noninteractive callers must
+        // still provide PIPE_CLI_SECRET_PASSWORD explicitly so CI and scripts
+        // never hang or silently choose an unrecoverable secret.
+        if crate::output::no_input() || !std::io::stdin().is_terminal() {
+            return None;
+        }
+        let encrypted_store = self.fallback.is_file()
+            && fs::read(&self.fallback)
+                .map(|bytes| bytes.starts_with(b"PIPESEC3"))
+                .unwrap_or(false);
+        let prompt = if encrypted_store {
+            "Encrypted Pipe CLI store password: "
+        } else {
+            "Create an encrypted Pipe CLI store password (12+ characters): "
+        };
+        let password = match rpassword::prompt_password(prompt) {
+            Ok(password) if password.len() >= 12 => password,
+            Ok(_) => {
+                eprintln!("encrypted store password must contain at least 12 characters");
+                return None;
+            }
+            Err(error) => {
+                eprintln!("could not read encrypted store password: {error}");
+                return None;
+            }
+        };
+        if !encrypted_store {
+            let confirmation =
+                match rpassword::prompt_password("Confirm encrypted store password: ") {
+                    Ok(confirmation) => confirmation,
+                    Err(error) => {
+                        eprintln!("could not read encrypted store password confirmation: {error}");
+                        return None;
+                    }
+                };
+            if password != confirmation {
+                eprintln!("encrypted store passwords did not match");
+                return None;
+            }
+        }
+        let password = zeroize::Zeroizing::new(password);
+        if let Ok(mut cached) = self.fallback_password.lock() {
+            *cached = Some(zeroize::Zeroizing::new(password.as_str().to_owned()));
+        }
+        Some(password)
     }
     fn warn() {
         static ONCE: std::sync::Once = std::sync::Once::new();
