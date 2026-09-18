@@ -6,7 +6,7 @@ use crate::{
     s3::S3Client,
     sync,
 };
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use clap::{Args, Parser, Subcommand};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -221,6 +221,8 @@ pub enum Commands {
 
 #[derive(Subcommand, Debug)]
 pub enum StorageCommands {
+    #[command(flatten)]
+    Workspace(crate::storage_workspace::Commands),
     /// Configure a secure S3 credential for the selected storage profile.
     #[command(visible_alias = "init")]
     Setup(StorageSetupArgs),
@@ -594,6 +596,9 @@ pub async fn run(mut cli: Cli) -> Result<()> {
         Commands::Durable { command } => crate::platform::durable(&client, command, cli.json).await,
         Commands::Hosting { command } => crate::platform::hosting(&client, command, cli.json).await,
         Commands::Storage { command } => match command {
+            StorageCommands::Workspace(command) => {
+                crate::storage_workspace::run(&client, command, cli.json, &mut store, &name).await
+            }
             StorageCommands::Setup(args) => {
                 let (_, selected) = store.profile(Some(&name))?;
                 setup_s3_credential(
@@ -2006,6 +2011,49 @@ async fn setup_s3_credential(
         .prefix
         .or_else(|| profile.prefix.clone())
         .unwrap_or_default();
+    if let Some(id) = bucket.strip_prefix("pipe-bucket-") {
+        let id = Uuid::parse_str(id).context("invalid managed bucket name")?;
+        let resource = client
+            .get(&format!("/v1/customer/storage/buckets/{id}"))
+            .await?;
+        anyhow::ensure!(
+            resource["name"] == bucket,
+            "managed bucket identity differs"
+        );
+        if let Some(wallet) = &args.wallet {
+            anyhow::ensure!(
+                resource["wallet"].as_str() == Some(wallet),
+                "the selected wallet is not this bucket's funding identity"
+            );
+        }
+        // Managed team keys use live membership and the bucket's existing payer.
+        // A member need not own or import the organization's funding wallet.
+        client
+            .authorize_storage_key_management(args.no_browser)
+            .await?;
+        let value = crate::storage_workspace::setup_key(
+            client,
+            id,
+            &args.label,
+            &prefix,
+            args.write,
+            args.expires_in,
+        )
+        .await?;
+        if let Some(store) = store.take() {
+            save_s3_profile_defaults(
+                store,
+                name,
+                &bucket,
+                explicit_prefix.then_some(prefix.as_str()),
+            )?;
+        }
+        if automatic {
+            eprintln!("Managed bucket credential saved securely for profile '{name}'.");
+            return Ok(());
+        }
+        return output::print_credential(&value, json_output);
+    }
     if args.write {
         client.authorize_storage_writes(args.no_browser).await?;
     }
@@ -2094,7 +2142,7 @@ async fn setup_s3_credential(
     }
 }
 
-fn save_s3_profile_defaults(
+pub(crate) fn save_s3_profile_defaults(
     store: &mut ConfigStore,
     name: &str,
     bucket: &str,
@@ -2425,6 +2473,12 @@ fn config_command(cli: &Cli, command: &ConfigCommands) -> Result<()> {
 }
 
 fn destructive(command: &Commands) -> bool {
+    if let Commands::Storage {
+        command: StorageCommands::Workspace(c),
+    } = command
+    {
+        return crate::storage_workspace::needs_confirmation(c);
+    }
     if let Commands::Account {
         command: Some(command),
     } = command

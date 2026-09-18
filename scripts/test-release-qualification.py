@@ -42,8 +42,13 @@ class Qualification(unittest.TestCase):
   with self.assertRaises(AssertionError):self.verify('candidate')
  def test_qualification_cannot_increase_the_authorized_ceiling_or_use_inexact_atoms(self):
   original=self.record['canary'].copy()
-  for field,value in [('maximum_atoms',100_000_001),('maximum_atoms',0),('maximum_atoms',True),('spent_atoms',0.5),('reserved_atoms',False),('reserved_atoms',-1)]:
+  for field,value in [('maximum_atoms',Q.AUTHORIZED_CANARY_MAX_ATOMS+1),('maximum_atoms',0),('maximum_atoms',True),('spent_atoms',0.5),('reserved_atoms',False),('reserved_atoms',-1)]:
    with self.subTest(field=field,value=value):
     self.record['canary']={**original,field:value}
     with self.assertRaises(AssertionError):self.verify('candidate')
+ def test_authorized_thousand_dollar_record_preserves_prior_spending(self):
+  self.record['canary'].update(maximum_atoms=1_000_000_000,spent_atoms=45_021_726,reserved_atoms=954_978_274)
+  self.verify('candidate')
+  self.record['canary']['reserved_atoms']+=1
+  with self.assertRaises(AssertionError):self.verify('candidate')
 if __name__=='__main__':unittest.main()

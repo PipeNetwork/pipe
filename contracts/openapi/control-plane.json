@@ -880,6 +880,133 @@
         ],
         "type": "object"
       },
+      "CorsRule": {
+        "additionalProperties": false,
+        "properties": {
+          "allowed_headers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "allowed_methods": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "allowed_origins": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "expose_headers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "max_age_seconds": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "allowed_origins",
+          "allowed_methods",
+          "allowed_headers",
+          "expose_headers",
+          "max_age_seconds"
+        ],
+        "type": "object"
+      },
+      "CorsUpdate": {
+        "additionalProperties": false,
+        "properties": {
+          "revision": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "rules": {
+            "items": {
+              "$ref": "#/components/schemas/CorsRule"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "revision",
+          "rules"
+        ],
+        "type": "object"
+      },
+      "CreateBucket": {
+        "additionalProperties": false,
+        "properties": {
+          "label": {
+            "description": "Display name; the returned S3 namespace is unique and must be used by clients.",
+            "type": "string"
+          },
+          "organization_id": {
+            "description": "Optional organization owner. The selected owned credit identity pays; no balances are transferred.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "request_id": {
+            "description": "UUID retained by the caller across retries, so a lost response creates no duplicate.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "wallet": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "wallet",
+          "label",
+          "request_id"
+        ],
+        "type": "object"
+      },
+      "CreateKey": {
+        "additionalProperties": false,
+        "properties": {
+          "expires_in": {
+            "description": "Lifetime from initial issuance. Exact retries preserve the original expiry.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "label": {
+            "type": "string"
+          },
+          "permissions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "prefix": {
+            "type": "string"
+          },
+          "request_id": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "label",
+          "prefix",
+          "permissions",
+          "expires_in"
+        ],
+        "type": "object"
+      },
       "CreateRequest": {
         "additionalProperties": false,
         "properties": {
@@ -2704,6 +2831,38 @@
         ],
         "type": "object"
       },
+      "LifecycleUpdate": {
+        "additionalProperties": false,
+        "properties": {
+          "days": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "prefix": {
+            "type": "string"
+          },
+          "preview_token": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision",
+          "prefix",
+          "days",
+          "enabled"
+        ],
+        "type": "object"
+      },
       "OrganizationBinding": {
         "additionalProperties": false,
         "properties": {
@@ -3515,6 +3674,8 @@
               "owner",
               "admin",
               "member",
+              "developer",
+              "auditor",
               "billing_admin"
             ],
             "type": "string"
@@ -3829,6 +3990,8 @@
               "owner",
               "admin",
               "member",
+              "developer",
+              "auditor",
               "billing_admin"
             ],
             "type": "string"
@@ -4934,6 +5097,72 @@
         ],
         "type": "object"
       },
+      "StorageBucket": {
+        "properties": {
+          "access_role": {
+            "enum": [
+              "owner",
+              "admin",
+              "member",
+              "developer",
+              "auditor"
+            ],
+            "type": "string"
+          },
+          "created_at": {
+            "type": "integer"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "managed": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "object_count": {
+            "type": "string"
+          },
+          "organization_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "size_bytes": {
+            "type": "string"
+          },
+          "wallet": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "wallet",
+          "name",
+          "label",
+          "managed",
+          "access_role",
+          "organization_id",
+          "revision",
+          "created_at",
+          "object_count",
+          "size_bytes"
+        ],
+        "type": "object"
+      },
       "StorageIdentity": {
         "properties": {
           "active_credentials": {
@@ -5374,6 +5603,33 @@
         "required": [
           "challenge_id",
           "signature"
+        ],
+        "type": "object"
+      },
+      "WebhookCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "events": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "prefix": {
+            "type": "string"
+          },
+          "request_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "url",
+          "events"
         ],
         "type": "object"
       },
@@ -23789,6 +24045,4531 @@
         }
       }
     },
+    "/v1/customer/storage/buckets": {
+      "get": {
+        "description": "List durable buckets for the authenticated account's linked credit identities. Legacy namespaces remain shared; managed buckets have an exclusive S3 boundary. Sizes and counts are exact decimal strings.",
+        "operationId": "storageBucketsList",
+        "parameters": [
+          {
+            "description": "Opaque object/bucket ID from the previous next_cursor.",
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Maximum returned items.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "available": {
+                      "type": "boolean"
+                    },
+                    "items": {
+                      "items": {
+                        "$ref": "#/components/schemas/StorageBucket"
+                      },
+                      "type": "array"
+                    },
+                    "next_cursor": {
+                      "anyOf": [
+                        {
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "available",
+                    "items",
+                    "next_cursor"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cliBearer": []
+          },
+          {
+            "customerSession": [],
+            "websiteBff": []
+          }
+        ],
+        "summary": "List durable buckets for the authenticated account's linked credit identities",
+        "tags": [
+          "Storage workspace"
+        ],
+        "x-pipe-audience": "customer",
+        "x-pipe-availability": {
+          "deployed": "configuration-dependent",
+          "schema": "storage_workspace",
+          "version": 1
+        },
+        "x-pipe-handler": "lattice-control-plane/src/storage_workspace.rs:list",
+        "x-pipe-lifecycle": "implemented",
+        "x-pipe-required-scopes": [
+          "storage.read"
+        ]
+      },
+      "post": {
+        "description": "Create a managed bucket. Persist and reuse request_id after an unknown result. Use the returned name as the S3 bucket; the label is for display. Creation does not transfer balances or objects.",
+        "operationId": "storageBucketsCreate",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateBucket"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageBucket"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Request exceeds the applicable body/proxy limit",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Expected JSON content type",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "JSON does not deserialize into the request type",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cliBearer": []
+          },
+          {
+            "customerSession": [],
+            "websiteBff": []
+          }
+        ],
+        "summary": "Create a managed bucket",
+        "tags": [
+          "Storage workspace"
+        ],
+        "x-pipe-audience": "customer",
+        "x-pipe-availability": {
+          "deployed": "configuration-dependent",
+          "schema": "storage_workspace",
+          "version": 1
+        },
+        "x-pipe-handler": "lattice-control-plane/src/storage_workspace.rs:create",
+        "x-pipe-lifecycle": "implemented",
+        "x-pipe-required-scopes": [
+          "storage.write"
+        ]
+      }
+    },
+    "/v1/customer/storage/buckets/{id}": {
+      "get": {
+        "description": "Read an authorized bucket and exact committed-object totals.",
+        "operationId": "storageBucketGet",
+        "parameters": [
+          {
+            "description": "Path identifier. Object and cache keys can contain slashes where indicated by x-pipe-greedy-parameters.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageBucket"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cliBearer": []
+          },
+          {
+            "customerSession": [],
+            "websiteBff": []
+          }
+        ],
+        "summary": "Read an authorized bucket and exact committed-object totals",
+        "tags": [
+          "Storage workspace"
+        ],
+        "x-pipe-audience": "customer",
+        "x-pipe-availability": {
+          "deployed": "configuration-dependent",
+          "schema": "storage_workspace",
+          "version": 1
+        },
+        "x-pipe-handler": "lattice-control-plane/src/storage_workspace.rs:get_bucket",
+        "x-pipe-lifecycle": "implemented",
+        "x-pipe-required-scopes": [
+          "storage.read"
+        ]
+      }
+    },
+    "/v1/customer/storage/buckets/{id}/audit": {
+      "get": {
+        "description": "Read bucket audit events, newest first. Object events identify the funding identity; administrative events identify the acting owner. Exact IDs are decimal strings.",
+        "operationId": "storageBucketAudit",
+        "parameters": [
+          {
+            "description": "Path identifier. Object and cache keys can contain slashes where indicated by x-pipe-greedy-parameters.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Previous next_cursor, serialized as a decimal integer.",
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Maximum events.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "items": {
+                      "items": {
+                        "properties": {
+                          "action": {
+                            "type": "string"
+                          },
+                          "actor": {
+                            "type": "string"
+                          },
+                          "created_at": {
+                            "type": "integer"
+                          },
+                          "detail": {
+                            "additionalProperties": true,
+                            "type": "object"
+                          },
+                          "id": {
+                            "type": "string"
+                          },
+                          "resource": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "actor",
+                          "action",
+                          "resource",
+                          "detail",
+                          "created_at"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "next_cursor": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "items",
+                    "next_cursor"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Audit page",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cliBearer": []
+          },
+          {
+            "customerSession": [],
+            "websiteBff": []
+          }
+        ],
+        "summary": "Read bucket audit events, newest first",
+        "tags": [
+          "Storage workspace"
+        ],
+        "x-pipe-audience": "customer",
+        "x-pipe-availability": {
+          "deployed": "configuration-dependent"
+        },
+        "x-pipe-handler": "lattice-control-plane/src/storage_workspace.rs:audit",
+        "x-pipe-lifecycle": "implemented",
+        "x-pipe-required-scopes": [
+          "storage.read"
+        ]
+      }
+    },
+    "/v1/customer/storage/buckets/{id}/cors": {
+      "get": {
+        "description": "PipeBox signed transfers are always allowed from exactly https://pipe.network and https://pipe.love. Read bucket CORS rules. CORS does not grant object permissions.",
+        "operationId": "storageCorsGet",
+        "parameters": [
+          {
+            "description": "Path identifier. Object and cache keys can contain slashes where indicated by x-pipe-greedy-parameters.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "revision": {
+                      "type": "integer"
+                    },
+                    "rules": {
+                      "items": {
+                        "$ref": "#/components/schemas/CorsRule"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "revision",
+                    "rules"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cliBearer": []
+          },
+          {
+            "customerSession": [],
+            "websiteBff": []
+          }
+        ],
+        "summary": "PipeBox signed transfers are always allowed from exactly https://pipe",
+        "tags": [
+          "Storage automation"
+        ],
+        "x-pipe-audience": "customer",
+        "x-pipe-availability": {
+          "deployed": "configuration-dependent",
+          "schema": "storage_workspace",
+          "version": 1
+        },
+        "x-pipe-handler": "lattice-control-plane/src/storage_automation.rs:get_cors",
+        "x-pipe-lifecycle": "implemented",
+        "x-pipe-required-scopes": [
+          "storage.read"
+        ]
+      },
+      "post": {
+        "description": "Replace CORS rules using the observed revision. Empty rules disable browser cross-origin access. Exact replay after a lost response is supported; stale changes conflict.",
+        "operationId": "storageCorsUpdate",
+        "parameters": [
+          {
+            "description": "Path identifier. Object and cache keys can contain slashes where indicated by x-pipe-greedy-parameters.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CorsUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "revision": {
+                      "type": "integer"
+                    },
+                    "rules": {
+                      "items": {
+                        "$ref": "#/components/schemas/CorsRule"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "revision",
+                    "rules"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Request exceeds the applicable body/proxy limit",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Expected JSON content type",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "JSON does not deserialize into the request type",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cliBearer": []
+          },
+          {
+            "customerSession": [],
+            "websiteBff": []
+          }
+        ],
+        "summary": "Replace CORS rules using the observed revision",
+        "tags": [
+          "Storage automation"
+        ],
+        "x-pipe-audience": "customer",
+        "x-pipe-availability": {
+          "deployed": "configuration-dependent",
+          "schema": "storage_workspace",
+          "version": 1
+        },
+        "x-pipe-handler": "lattice-control-plane/src/storage_automation.rs:put_cors",
+        "x-pipe-lifecycle": "implemented",
+        "x-pipe-required-scopes": [
+          "storage.write"
+        ]
+      }
+    },
+    "/v1/customer/storage/buckets/{id}/credentials": {
+      "get": {
+        "description": "Manage bucket application keys after interactive login. Keys are bound to the issuer's current membership, bucket and prefix. Auditors may issue read/list keys only. Admins can revoke all bucket application keys; other members only their own. Issuance requires a persisted request_id; exact replay recovers the same encrypted secret and expiry. List returns the latest 100 summaries without secrets. Automation credentials cannot delegate keys.",
+        "operationId": "storageBucketCredentialsList",
+        "parameters": [
+          {
+            "description": "Path identifier. Object and cache keys can contain slashes where indicated by x-pipe-greedy-parameters.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "items": {
+                      "items": {
+                        "properties": {
+                          "access_key_id": {
+                            "type": "string"
+                          },
+                          "created_by": {
+                            "type": "string"
+                          },
+                          "expires_at": {
+                            "type": "integer"
+                          },
+                          "id": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "label": {
+                            "type": "string"
+                          },
+                          "permissions": {
+                            "items": {
+                              "enum": [
+                                "read",
+                                "write",
+                                "list"
+                              ],
+                              "type": "string"
+                            },
+                            "type": "array"
+                          },
+                          "prefix": {
+                            "type": "string"
+                          },
+                          "revoked": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "access_key_id",
+                          "label",
+                          "prefix",
+                          "permissions",
+                          "created_by",
+                          "expires_at",
+                          "revoked"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cliBearer": []
+          },
+          {
+            "customerSession": [],
+            "websiteBff": []
+          }
+        ],
+        "summary": "Manage bucket application keys after interactive login",
+        "tags": [
+          "Storage workspace"
+        ],
+        "x-pipe-audience": "customer",
+        "x-pipe-availability": {
+          "schema": "storage_workspace",
+          "version": 1
+        },
+        "x-pipe-credential-kinds": [
+          "session"
+        ],
+        "x-pipe-handler": "lattice-control-plane/src/storage_bucket_keys.rs:list",
+        "x-pipe-lifecycle": "implemented",
+        "x-pipe-required-scopes": [
+          "storage.read",
+          "credentials.read"
+        ]
+      },
+      "post": {
+        "description": "Manage bucket application keys after interactive login. Keys are bound to the issuer's current membership, bucket and prefix. Auditors may issue read/list keys only. Admins can revoke all bucket application keys; other members only their own. Issuance requires a persisted request_id; exact replay recovers the same encrypted secret and expiry. List returns the latest 100 summaries without secrets. Automation credentials cannot delegate keys.",
+        "operationId": "storageBucketCredentialCreate",
+        "parameters": [
+          {
+            "description": "Path identifier. Object and cache keys can contain slashes where indicated by x-pipe-greedy-parameters.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateKey"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "access_key_id": {
+                      "type": "string"
+                    },
+                    "bucket": {
+                      "type": "string"
+                    },
+                    "created_by": {
+                      "type": "string"
+                    },
+                    "expires_at": {
+                      "type": "integer"
+                    },
+                    "id": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "label": {
+                      "type": "string"
+                    },
+                    "permissions": {
+                      "items": {
+                        "enum": [
+                          "read",
+                          "write",
+                          "list"
+                        ],
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "prefix": {
+                      "type": "string"
+                    },
+                    "revoked": {
+                      "type": "boolean"
+                    },
+                    "secret_access_key": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "access_key_id",
+                    "label",
+                    "prefix",
+                    "permissions",
+                    "created_by",
+                    "expires_at",
+                    "revoked",
+                    "secret_access_key",
+                    "bucket"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Request exceeds the applicable body/proxy limit",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Expected JSON content type",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "JSON does not deserialize into the request type",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cliBearer": []
+          },
+          {
+            "customerSession": [],
+            "websiteBff": []
+          }
+        ],
+        "summary": "Manage bucket application keys after interactive login",
+        "tags": [
+          "Storage workspace"
+        ],
+        "x-pipe-audience": "customer",
+        "x-pipe-availability": {
+          "schema": "storage_workspace",
+          "version": 1
+        },
+        "x-pipe-credential-kinds": [
+          "session"
+        ],
+        "x-pipe-handler": "lattice-control-plane/src/storage_bucket_keys.rs:create",
+        "x-pipe-lifecycle": "implemented",
+        "x-pipe-required-scopes": [
+          "storage.write",
+          "credentials.write"
+        ]
+      }
+    },
+    "/v1/customer/storage/buckets/{id}/credentials/{key}": {
+      "delete": {
+        "description": "Manage bucket application keys after interactive login. Keys are bound to the issuer's current membership, bucket and prefix. Auditors may issue read/list keys only. Admins can revoke all bucket application keys; other members only their own. Issuance requires a persisted request_id; exact replay recovers the same encrypted secret and expiry. List returns the latest 100 summaries without secrets. Automation credentials cannot delegate keys.",
+        "operationId": "storageBucketCredentialRevoke",
+        "parameters": [
+          {
+            "description": "Path identifier. Object and cache keys can contain slashes where indicated by x-pipe-greedy-parameters.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Path identifier. Object and cache keys can contain slashes where indicated by x-pipe-greedy-parameters.",
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "revoked": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "revoked"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cliBearer": []
+          },
+          {
+            "customerSession": [],
+            "websiteBff": []
+          }
+        ],
+        "summary": "Manage bucket application keys after interactive login",
+        "tags": [
+          "Storage workspace"
+        ],
+        "x-pipe-audience": "customer",
+        "x-pipe-availability": {
+          "schema": "storage_workspace",
+          "version": 1
+        },
+        "x-pipe-credential-kinds": [
+          "session"
+        ],
+        "x-pipe-handler": "lattice-control-plane/src/storage_bucket_keys.rs:revoke",
+        "x-pipe-lifecycle": "implemented",
+        "x-pipe-required-scopes": [
+          "storage.write",
+          "credentials.write"
+        ]
+      }
+    },
+    "/v1/customer/storage/buckets/{id}/deliveries": {
+      "get": {
+        "description": "Read delivery outcomes without payloads or secrets. before accepts the previous UUID next_cursor.",
+        "operationId": "storageWebhookDeliveries",
+        "parameters": [
+          {
+            "description": "Path identifier. Object and cache keys can contain slashes where indicated by x-pipe-greedy-parameters.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Previous next_cursor.",
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "items": {
+                      "items": {
+                        "properties": {
+                          "attempt": {
+                            "type": "integer"
+                          },
+                          "available_at": {
+                            "type": "integer"
+                          },
+                          "error": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "event_id": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "id": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "state": {
+                            "enum": [
+                              "queued",
+                              "sending",
+                              "succeeded",
+                              "failed",
+                              "cancelled"
+                            ],
+                            "type": "string"
+                          },
+                          "status": {
+                            "anyOf": [
+                              {
+                                "type": "integer"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "webhook_id": {
+                            "format": "uuid",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "webhook_id",
+                          "event_id",
+                          "state",
+                          "attempt",
+                          "status",
+                          "error",
+                          "available_at"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "next_cursor": {
+                      "anyOf": [
+                        {
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "items",
+                    "next_cursor"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cliBearer": []
+          },
+          {
+            "customerSession": [],
+            "websiteBff": []
+          }
+        ],
+        "summary": "Read delivery outcomes without payloads or secrets",
+        "tags": [
+          "Storage automation"
+        ],
+        "x-pipe-audience": "customer",
+        "x-pipe-availability": {
+          "deployed": "configuration-dependent",
+          "schema": "storage_workspace",
+          "version": 1
+        },
+        "x-pipe-handler": "lattice-control-plane/src/storage_automation.rs:deliveries",
+        "x-pipe-lifecycle": "implemented",
+        "x-pipe-required-scopes": [
+          "storage.read"
+        ]
+      }
+    },
+    "/v1/customer/storage/buckets/{id}/deliveries/{delivery}/retry": {
+      "post": {
+        "description": "Retry a failed delivery with its original payload and delivery ID. Does not create a replacement event.",
+        "operationId": "storageWebhookRetry",
+        "parameters": [
+          {
+            "description": "Path identifier. Object and cache keys can contain slashes where indicated by x-pipe-greedy-parameters.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Path identifier. Object and cache keys can contain slashes where indicated by x-pipe-greedy-parameters.",
+            "in": "path",
+            "name": "delivery",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "queued": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "queued"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cliBearer": []
+          },
+          {
+            "customerSession": [],
+            "websiteBff": []
+          }
+        ],
+        "summary": "Retry a failed delivery with its original payload and delivery ID",
+        "tags": [
+          "Storage automation"
+        ],
+        "x-pipe-audience": "customer",
+        "x-pipe-availability": {
+          "deployed": "configuration-dependent",
+          "schema": "storage_workspace",
+          "version": 1
+        },
+        "x-pipe-handler": "lattice-control-plane/src/storage_automation.rs:retry_delivery",
+        "x-pipe-lifecycle": "implemented",
+        "x-pipe-required-scopes": [
+          "storage.write"
+        ]
+      }
+    },
+    "/v1/customer/storage/buckets/{id}/lifecycle": {
+      "get": {
+        "description": "Read the expiration rule and durable operation counts. Unknown outcomes remain visible for reconciliation.",
+        "operationId": "storageLifecycleGet",
+        "parameters": [
+          {
+            "description": "Path identifier. Object and cache keys can contain slashes where indicated by x-pipe-greedy-parameters.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "days": {
+                      "type": "integer"
+                    },
+                    "enabled": {
+                      "type": "boolean"
+                    },
+                    "last_error": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "last_run": {
+                      "anyOf": [
+                        {
+                          "type": "integer"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "operations": {
+                      "items": {
+                        "properties": {
+                          "count": {
+                            "type": "string"
+                          },
+                          "state": {
+                            "enum": [
+                              "queued",
+                              "sending",
+                              "completed",
+                              "skipped",
+                              "failed",
+                              "unknown"
+                            ],
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "state",
+                          "count"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "prefix": {
+                      "type": "string"
+                    },
+                    "revision": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "revision",
+                    "prefix",
+                    "days",
+                    "enabled",
+                    "last_run",
+                    "last_error",
+                    "operations"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cliBearer": []
+          },
+          {
+            "customerSession": [],
+            "websiteBff": []
+          }
+        ],
+        "summary": "Read the expiration rule and durable operation counts",
+        "tags": [
+          "Storage automation"
+        ],
+        "x-pipe-audience": "customer",
+        "x-pipe-availability": {
+          "deployed": "configuration-dependent",
+          "schema": "storage_workspace",
+          "version": 1
+        },
+        "x-pipe-handler": "lattice-control-plane/src/storage_automation.rs:lifecycle_get",
+        "x-pipe-lifecycle": "implemented",
+        "x-pipe-required-scopes": [
+          "storage.read"
+        ]
+      },
+      "post": {
+        "description": "Save a continuous expiration rule using the observed revision. Enabling requires an exact recent preview token. Objects are permanently deleted through S3 with an exact version precondition; replacements are not deleted. Disabling revokes the service credential; admitted operations may finish. Existing balances remain separate.",
+        "operationId": "storageLifecycleUpdate",
+        "parameters": [
+          {
+            "description": "Path identifier. Object and cache keys can contain slashes where indicated by x-pipe-greedy-parameters.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LifecycleUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean"
+                    },
+                    "revision": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "revision",
+                    "enabled"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Request exceeds the applicable body/proxy limit",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Expected JSON content type",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "JSON does not deserialize into the request type",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cliBearer": []
+          },
+          {
+            "customerSession": [],
+            "websiteBff": []
+          }
+        ],
+        "summary": "Save a continuous expiration rule using the observed revision",
+        "tags": [
+          "Storage automation"
+        ],
+        "x-pipe-audience": "customer",
+        "x-pipe-availability": {
+          "deployed": "configuration-dependent",
+          "schema": "storage_workspace",
+          "version": 1
+        },
+        "x-pipe-handler": "lattice-control-plane/src/storage_automation.rs:lifecycle_put",
+        "x-pipe-lifecycle": "implemented",
+        "x-pipe-required-scopes": [
+          "storage.write"
+        ]
+      }
+    },
+    "/v1/customer/storage/buckets/{id}/lifecycle/preview": {
+      "post": {
+        "description": "Preview exact current matching count/size and at most 100 sample objects. The approval token is bound to actor, bucket, revision, age and prefix and expires in ten minutes. No objects are deleted.",
+        "operationId": "storageLifecyclePreview",
+        "parameters": [
+          {
+            "description": "Path identifier. Object and cache keys can contain slashes where indicated by x-pipe-greedy-parameters.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LifecycleUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "count": {
+                      "type": "string"
+                    },
+                    "cutoff": {
+                      "type": "integer"
+                    },
+                    "expires_at": {
+                      "type": "integer"
+                    },
+                    "preview_token": {
+                      "type": "string"
+                    },
+                    "sample": {
+                      "items": {
+                        "properties": {
+                          "id": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "key": {
+                            "type": "string"
+                          },
+                          "modified_at": {
+                            "type": "integer"
+                          },
+                          "size_bytes": {
+                            "type": "string"
+                          },
+                          "version_id": {
+                            "format": "uuid",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "version_id",
+                          "key",
+                          "size_bytes",
+                          "modified_at"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "size_bytes": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "count",
+                    "size_bytes",
+                    "cutoff",
+                    "expires_at",
+                    "preview_token",
+                    "sample"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Request exceeds the applicable body/proxy limit",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Expected JSON content type",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "JSON does not deserialize into the request type",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cliBearer": []
+          },
+          {
+            "customerSession": [],
+            "websiteBff": []
+          }
+        ],
+        "summary": "Preview exact current matching count/size and at most 100 sample objects",
+        "tags": [
+          "Storage automation"
+        ],
+        "x-pipe-audience": "customer",
+        "x-pipe-availability": {
+          "deployed": "configuration-dependent",
+          "schema": "storage_workspace",
+          "version": 1
+        },
+        "x-pipe-handler": "lattice-control-plane/src/storage_automation.rs:lifecycle_preview",
+        "x-pipe-lifecycle": "implemented",
+        "x-pipe-required-scopes": [
+          "storage.read"
+        ]
+      }
+    },
+    "/v1/customer/storage/buckets/{id}/webhooks": {
+      "get": {
+        "description": "List the 20 newest bucket webhook configurations; secrets are omitted.",
+        "operationId": "storageWebhooksList",
+        "parameters": [
+          {
+            "description": "Path identifier. Object and cache keys can contain slashes where indicated by x-pipe-greedy-parameters.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "items": {
+                      "items": {
+                        "properties": {
+                          "created_at": {
+                            "type": "integer"
+                          },
+                          "enabled": {
+                            "type": "boolean"
+                          },
+                          "events": {
+                            "items": {
+                              "enum": [
+                                "object.uploaded",
+                                "object.deleted"
+                              ],
+                              "type": "string"
+                            },
+                            "type": "array"
+                          },
+                          "failed": {
+                            "type": "integer"
+                          },
+                          "id": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "pending": {
+                            "type": "integer"
+                          },
+                          "prefix": {
+                            "type": "string"
+                          },
+                          "url": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "url",
+                          "prefix",
+                          "events",
+                          "enabled",
+                          "created_at",
+                          "pending",
+                          "failed"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cliBearer": []
+          },
+          {
+            "customerSession": [],
+            "websiteBff": []
+          }
+        ],
+        "summary": "List the 20 newest bucket webhook configurations; secrets are omitted",
+        "tags": [
+          "Storage automation"
+        ],
+        "x-pipe-audience": "customer",
+        "x-pipe-availability": {
+          "deployed": "configuration-dependent",
+          "schema": "storage_workspace",
+          "version": 1
+        },
+        "x-pipe-handler": "lattice-control-plane/src/storage_automation.rs:hooks",
+        "x-pipe-lifecycle": "implemented",
+        "x-pipe-required-scopes": [
+          "storage.read"
+        ]
+      },
+      "post": {
+        "description": "Create a signed webhook. Persist request_id before sending; identical replay by the issuer recovers the same secret. Save it securely. HTTPS public destinations only; DNS is checked at connection time. At-least-once delivery uses a stable delivery ID, up to 12 attempts, capped exponential backoff. Signature is HMAC-SHA256 with the UTF-8 secret over timestamp.delivery-id.raw-body; verify x-pipe-signature v1 hex and x-pipe-timestamp.",
+        "operationId": "storageWebhookCreate",
+        "parameters": [
+          {
+            "description": "Path identifier. Object and cache keys can contain slashes where indicated by x-pipe-greedy-parameters.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebhookCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "events": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "id": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "prefix": {
+                      "type": "string"
+                    },
+                    "secret": {
+                      "type": "string"
+                    },
+                    "url": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "secret",
+                    "url",
+                    "events",
+                    "prefix"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Request exceeds the applicable body/proxy limit",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Expected JSON content type",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "JSON does not deserialize into the request type",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cliBearer": []
+          },
+          {
+            "customerSession": [],
+            "websiteBff": []
+          }
+        ],
+        "summary": "Create a signed webhook",
+        "tags": [
+          "Storage automation"
+        ],
+        "x-pipe-audience": "customer",
+        "x-pipe-availability": {
+          "deployed": "configuration-dependent",
+          "schema": "storage_workspace",
+          "version": 1
+        },
+        "x-pipe-handler": "lattice-control-plane/src/storage_automation.rs:create_hook",
+        "x-pipe-lifecycle": "implemented",
+        "x-pipe-required-scopes": [
+          "storage.write"
+        ]
+      }
+    },
+    "/v1/customer/storage/buckets/{id}/webhooks/{hook}": {
+      "delete": {
+        "description": "Disable a webhook and cancel queued deliveries. An already in-flight delivery may finish.",
+        "operationId": "storageWebhookRevoke",
+        "parameters": [
+          {
+            "description": "Path identifier. Object and cache keys can contain slashes where indicated by x-pipe-greedy-parameters.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Path identifier. Object and cache keys can contain slashes where indicated by x-pipe-greedy-parameters.",
+            "in": "path",
+            "name": "hook",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "revoked": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "revoked"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cliBearer": []
+          },
+          {
+            "customerSession": [],
+            "websiteBff": []
+          }
+        ],
+        "summary": "Disable a webhook and cancel queued deliveries",
+        "tags": [
+          "Storage automation"
+        ],
+        "x-pipe-audience": "customer",
+        "x-pipe-availability": {
+          "deployed": "configuration-dependent",
+          "schema": "storage_workspace",
+          "version": 1
+        },
+        "x-pipe-handler": "lattice-control-plane/src/storage_automation.rs:revoke_hook",
+        "x-pipe-lifecycle": "implemented",
+        "x-pipe-required-scopes": [
+          "storage.write"
+        ]
+      }
+    },
+    "/v1/customer/storage/search": {
+      "get": {
+        "description": "Search committed object publications across authorized buckets. Uploads and deletions update the index transactionally. Size filters are decimal integers. Pages are ordered by object ID and are not a snapshot across concurrent mutations.",
+        "operationId": "storageObjectsSearch",
+        "parameters": [
+          {
+            "description": "Opaque object/bucket ID from the previous next_cursor.",
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Maximum returned items.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Filename/path search terms, at most 256 bytes.",
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional authorized bucket ID.",
+            "in": "query",
+            "name": "bucket",
+            "required": false,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "File extension, without a dot.",
+            "in": "query",
+            "name": "extension",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Inclusive decimal minimum size.",
+            "in": "query",
+            "name": "min_bytes",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Inclusive decimal maximum size.",
+            "in": "query",
+            "name": "max_bytes",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Inclusive Unix seconds.",
+            "in": "query",
+            "name": "modified_after",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Inclusive Unix seconds.",
+            "in": "query",
+            "name": "modified_before",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "index": {
+                      "enum": [
+                        "committed_publications"
+                      ],
+                      "type": "string"
+                    },
+                    "items": {
+                      "items": {
+                        "properties": {
+                          "bucket": {
+                            "type": "string"
+                          },
+                          "bucket_id": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "bucket_label": {
+                            "type": "string"
+                          },
+                          "etag": {
+                            "type": "string"
+                          },
+                          "extension": {
+                            "type": "string"
+                          },
+                          "id": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "key": {
+                            "type": "string"
+                          },
+                          "managed": {
+                            "type": "boolean"
+                          },
+                          "modified_at": {
+                            "type": "integer"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "size_bytes": {
+                            "type": "string"
+                          },
+                          "wallet": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "bucket_id",
+                          "bucket",
+                          "bucket_label",
+                          "managed",
+                          "wallet",
+                          "key",
+                          "name",
+                          "extension",
+                          "size_bytes",
+                          "etag",
+                          "modified_at"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "next_cursor": {
+                      "anyOf": [
+                        {
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "items",
+                    "next_cursor",
+                    "index"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cliBearer": []
+          },
+          {
+            "customerSession": [],
+            "websiteBff": []
+          }
+        ],
+        "summary": "Search committed object publications across authorized buckets",
+        "tags": [
+          "Storage workspace"
+        ],
+        "x-pipe-audience": "customer",
+        "x-pipe-availability": {
+          "deployed": "configuration-dependent",
+          "schema": "storage_workspace",
+          "version": 1
+        },
+        "x-pipe-handler": "lattice-control-plane/src/storage_workspace.rs:search",
+        "x-pipe-lifecycle": "implemented",
+        "x-pipe-required-scopes": [
+          "storage.read"
+        ]
+      }
+    },
     "/v1/durable/namespaces/{id}/execute": {
       "post": {
         "description": "Enqueue an action using a namespace-scoped pido_ API key. Write actions require can_write. The response can remain pending after acceptance; reuse the exact Idempotency-Key and payload to reconcile.",
@@ -37801,6 +42582,241 @@
         "x-pipe-lifecycle": "implemented"
       }
     },
+    "/v1/platform/organizations/{org_id}/audit": {
+      "get": {
+        "description": "Read the latest 100 team events. before accepts the previous decimal next_cursor. Optional storage workspace schema required.",
+        "operationId": "platform.organization_audit",
+        "parameters": [
+          {
+            "description": "Path identifier. Object and cache keys can contain slashes where indicated by x-pipe-greedy-parameters.",
+            "in": "path",
+            "name": "org_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Previous decimal next_cursor.",
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "items": {
+                      "items": {
+                        "properties": {
+                          "action": {
+                            "type": "string"
+                          },
+                          "actor": {
+                            "type": "string"
+                          },
+                          "created_at": {
+                            "type": "integer"
+                          },
+                          "detail": {
+                            "additionalProperties": true,
+                            "type": "object"
+                          },
+                          "id": {
+                            "type": "string"
+                          },
+                          "resource": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "actor",
+                          "action",
+                          "resource",
+                          "detail",
+                          "created_at"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "next_cursor": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "items",
+                    "next_cursor"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Request rejected. The code and message identify the reason; unknown outcomes require reconciliation before retrying a mutation.",
+            "headers": {
+              "x-request-id": {
+                "description": "Control-plane middleware echoes or generates a request ID. Proxy-generated responses can omit it. ApiError JSON omits request_id.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "platformSession": []
+          },
+          {
+            "platformCliBearer": []
+          }
+        ],
+        "summary": "Read the latest 100 team events",
+        "tags": [
+          "Organizations"
+        ],
+        "x-pipe-audience": "customer",
+        "x-pipe-availability": {
+          "deployed": "configuration-dependent",
+          "disabled_status": 503,
+          "feature_gate": "LATTICE_PIPENETWORK_ENABLED",
+          "requires": "Imported platform schema and lattice billing authority"
+        },
+        "x-pipe-cli-context": "Automation requires an explicit organization binding. Lists include only selected memberships; every call rechecks the issuer's exact membership revision. Creating or joining organizations requires an interactive session.",
+        "x-pipe-cli-credential-kinds": [
+          "session",
+          "automation"
+        ],
+        "x-pipe-cli-recovery": "Observe current state after an ambiguous mutation. Do not automatically repeat or replace it.",
+        "x-pipe-cli-scopes": [
+          "org.read"
+        ],
+        "x-pipe-handler": "lattice-control-plane/src/pipenetwork/auth.rs:organization_audit",
+        "x-pipe-lifecycle": "implemented"
+      }
+    },
     "/v1/platform/organizations/{org_id}/billing": {
       "get": {
         "description": "Read organization billing settings, invoices, subscriptions and retained Solana payment records. Availability flags are authoritative for the deployed billing options.",
@@ -41076,6 +46092,8 @@
                           "owner",
                           "admin",
                           "member",
+                          "developer",
+                          "auditor",
                           "billing_admin"
                         ],
                         "type": "string"
@@ -42336,5 +47354,5 @@
     }
   ],
   "x-pipe-publication-status": "reference",
-  "x-pipe-source-revision": "sha256:26be3044fff96bf238e2bcd9586a899a000262c23a82e5d67c9c76d34a28106d"
+  "x-pipe-source-revision": "sha256:548bb1df2ea4d600e92a9128eec7b7b39a93da8640a59feb678a203b9bbf9f66"
 }

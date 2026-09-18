@@ -66,3 +66,5 @@ pub fn error_message(error: &anyhow::Error) -> String {
 }
 
 mod billing_workflows;
+
+mod storage_workspace;

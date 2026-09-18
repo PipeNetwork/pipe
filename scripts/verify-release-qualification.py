@@ -3,9 +3,9 @@
 import argparse,hashlib,json,os,re,subprocess,tomllib
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
-# User-authorized test-credit ceiling, September 17, 2026. Older $10 records
+# User-authorized test-credit ceiling, September 18, 2026. Older $10/$100 records
 # retain their lower bound; this does not rewrite an existing qualification.
-AUTHORIZED_CANARY_MAX_ATOMS=100_000_000
+AUTHORIZED_CANARY_MAX_ATOMS=1_000_000_000
 def sha(p):return hashlib.sha256(p.read_bytes()).hexdigest()
 def tree_sha():
     names=subprocess.check_output(['git','ls-files','--cached','--others','--exclude-standard','-z'],cwd=ROOT).decode().split('\0')

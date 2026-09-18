@@ -70,6 +70,34 @@ request bindings also pin its identical document in `contracts/platform-draft`.
 The previous pin is retained in `contracts/previous-openapi`. Release records bind
 all checksums to the backend revision.
 
+## Managed storage workspaces
+
+Create a durable personal or team bucket, then use its returned `pipe-bucket-…`
+S3 name for uploads. The UUID identifies the bucket in management commands.
+
+```sh
+pipe auth login --scope "account.read storage.read storage.write credentials.read credentials.write"
+pipe storage buckets create "Project media" --wallet LINKED_CREDIT_IDENTITY
+pipe s3 setup --write --bucket S3_BUCKET_NAME
+pipe s3 cp ./photo.jpg s3://S3_BUCKET_NAME/
+pipe s3 ls
+pipe storage search photo --all
+pipe storage keys BUCKET_UUID create "Read-only app" --permissions read,list
+pipe storage audit BUCKET_UUID
+```
+
+Team creation adds `--organization ORG_ID` and requires current owner/admin
+membership. Organization roles include `developer` and `auditor`; membership
+changes are enforced on existing bucket credentials. Application keys remain
+separate from the CLI's active S3 key; `s3 setup` securely activates its own key.
+
+CORS policies, signed webhook deliveries, previewed lifecycle expiration and
+exact-request recovery are described in [bucket automation](docs/storage-bucket-automation.md).
+Use `pipe storage requests` and `pipe storage resume REQUEST_UUID` to reconcile
+lost replies. Secrets are encrypted before activation and require explicit
+`--show-secret` for export. Browser transfer receipts and global search are
+available in the matching Pipe storage console.
+
 ## Canonical accounts, organizations and billing
 
 ```sh

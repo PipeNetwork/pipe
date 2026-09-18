@@ -49,6 +49,11 @@ pub enum Account {
 }
 #[derive(Subcommand, Debug)]
 pub enum Org {
+    Audit {
+        org: String,
+        #[arg(long)]
+        before: Option<u64>,
+    },
     List,
     Create {
         name: String,
@@ -81,7 +86,7 @@ pub enum Members {
     List,
     Update {
         account: String,
-        #[arg(long,value_parser=["owner","admin","billing_admin","member"])]
+        #[arg(long,value_parser=["owner","admin","billing_admin","member","developer","auditor"])]
         role: String,
     },
     Delete {
@@ -93,7 +98,7 @@ pub enum Invites {
     List,
     Create {
         email: String,
-        #[arg(long,default_value="member",value_parser=["owner","admin","billing_admin","member"])]
+        #[arg(long,default_value="member",value_parser=["owner","admin","billing_admin","member","developer","auditor"])]
         role: String,
     },
     Revoke {
@@ -651,6 +656,21 @@ fn read_token_file(path: &std::path::Path) -> Result<String> {
 }
 pub async fn org(c: &ControlClient, cmd: Org, json_output: bool) -> Result<()> {
     let r = match cmd {
+        Org::Audit { org, before } => {
+            ensure!(
+                org.starts_with("org_")
+                    && org.len() <= 100
+                    && org.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_'),
+                "invalid organization ID"
+            );
+            let mut path = format!("/v1/platform/organizations/{org}/audit");
+            if let Some(before) = before {
+                path.push_str(&format!("?before={before}"));
+            }
+            let value = c.get(&path).await?;
+            platform::validate_response("platform.organization_audit", "200", &value)?;
+            return output::print(&value, json_output);
+        }
         Org::Requests => return output::print(&State::load(c)?.metadata(), json_output),
         Org::Resume { request_id } => {
             return output::print(

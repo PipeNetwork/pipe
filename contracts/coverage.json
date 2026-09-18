@@ -3277,6 +3277,41 @@
         "session",
         "automation"
       ],
+      "command": "pipe org audit",
+      "conditional_cli_scopes": {},
+      "credentials": [
+        {
+          "platformSession": []
+        },
+        {
+          "platformCliBearer": []
+        }
+      ],
+      "disposition": "dedicated",
+      "feature_conditions": {
+        "deployed": "configuration-dependent",
+        "disabled_status": 503,
+        "feature_gate": "LATTICE_PIPENETWORK_ENABLED",
+        "requires": "Imported platform schema and lattice billing authority"
+      },
+      "implementation_status": "implemented",
+      "method": "GET",
+      "operation_id": "platform.organization_audit",
+      "path": "/v1/platform/organizations/{org_id}/audit",
+      "reason": "Account-bound encrypted original requests, exact decimal sizes, bounded cursor pagination, revision/preview checks and explicit secret output. Qualification and deployment are tracked separately.",
+      "required_cli_scopes": [
+        "org.read"
+      ],
+      "retry_policy": "read-only",
+      "service": "control-plane",
+      "verification_fixture": "storage_workspace_tests; storage_automation_tests; s3::delete_pricing_tests; CLI storage_workspace tests"
+    },
+    {
+      "advanced_access": true,
+      "allowed_cli_credential_kinds": [
+        "session",
+        "automation"
+      ],
       "command": "pipe org list",
       "conditional_cli_scopes": {},
       "credentials": [
@@ -4569,6 +4604,580 @@
       "retry_policy": "resume-exact-idempotency-only",
       "service": "control-plane",
       "verification_fixture": "compute::tests::platform_cli_executable_wallet_and_vm_lifecycle; CLI compute_tests; pipe-transports openssh fixture"
+    },
+    {
+      "advanced_access": true,
+      "allowed_cli_credential_kinds": [],
+      "command": "pipe storage audit",
+      "conditional_cli_scopes": {},
+      "credentials": [
+        {
+          "cliBearer": []
+        },
+        {
+          "customerSession": [],
+          "websiteBff": []
+        }
+      ],
+      "disposition": "dedicated",
+      "feature_conditions": {
+        "deployed": "configuration-dependent"
+      },
+      "implementation_status": "implemented",
+      "method": "GET",
+      "operation_id": "storageBucketAudit",
+      "path": "/v1/customer/storage/buckets/{id}/audit",
+      "reason": "Account-bound encrypted original requests, exact decimal sizes, bounded cursor pagination, revision/preview checks and explicit secret output. Qualification and deployment are tracked separately.",
+      "required_cli_scopes": [
+        "storage.read"
+      ],
+      "retry_policy": "read-only",
+      "service": "control-plane",
+      "verification_fixture": "storage_workspace_tests; storage_automation_tests; s3::delete_pricing_tests; CLI storage_workspace tests"
+    },
+    {
+      "advanced_access": false,
+      "allowed_cli_credential_kinds": [],
+      "command": "pipe storage keys create",
+      "conditional_cli_scopes": {},
+      "credentials": [
+        {
+          "cliBearer": []
+        },
+        {
+          "customerSession": [],
+          "websiteBff": []
+        }
+      ],
+      "disposition": "dedicated",
+      "feature_conditions": {
+        "schema": "storage_workspace",
+        "version": 1
+      },
+      "implementation_status": "implemented",
+      "method": "POST",
+      "operation_id": "storageBucketCredentialCreate",
+      "path": "/v1/customer/storage/buckets/{id}/credentials",
+      "reason": "Account-bound encrypted original requests, exact decimal sizes, bounded cursor pagination, revision/preview checks and explicit secret output. Qualification and deployment are tracked separately.",
+      "required_cli_scopes": [
+        "storage.write",
+        "credentials.write"
+      ],
+      "retry_policy": "resume-exact-original-request",
+      "service": "control-plane",
+      "verification_fixture": "storage_workspace_tests; storage_automation_tests; s3::delete_pricing_tests; CLI storage_workspace tests"
+    },
+    {
+      "advanced_access": false,
+      "allowed_cli_credential_kinds": [],
+      "command": "pipe storage keys revoke",
+      "conditional_cli_scopes": {},
+      "credentials": [
+        {
+          "cliBearer": []
+        },
+        {
+          "customerSession": [],
+          "websiteBff": []
+        }
+      ],
+      "disposition": "dedicated",
+      "feature_conditions": {
+        "schema": "storage_workspace",
+        "version": 1
+      },
+      "implementation_status": "implemented",
+      "method": "DELETE",
+      "operation_id": "storageBucketCredentialRevoke",
+      "path": "/v1/customer/storage/buckets/{id}/credentials/{key}",
+      "reason": "Account-bound encrypted original requests, exact decimal sizes, bounded cursor pagination, revision/preview checks and explicit secret output. Qualification and deployment are tracked separately.",
+      "required_cli_scopes": [
+        "storage.write",
+        "credentials.write"
+      ],
+      "retry_policy": "resume-exact-original-request",
+      "service": "control-plane",
+      "verification_fixture": "storage_workspace_tests; storage_automation_tests; s3::delete_pricing_tests; CLI storage_workspace tests"
+    },
+    {
+      "advanced_access": true,
+      "allowed_cli_credential_kinds": [],
+      "command": "pipe storage keys list",
+      "conditional_cli_scopes": {},
+      "credentials": [
+        {
+          "cliBearer": []
+        },
+        {
+          "customerSession": [],
+          "websiteBff": []
+        }
+      ],
+      "disposition": "dedicated",
+      "feature_conditions": {
+        "schema": "storage_workspace",
+        "version": 1
+      },
+      "implementation_status": "implemented",
+      "method": "GET",
+      "operation_id": "storageBucketCredentialsList",
+      "path": "/v1/customer/storage/buckets/{id}/credentials",
+      "reason": "Account-bound encrypted original requests, exact decimal sizes, bounded cursor pagination, revision/preview checks and explicit secret output. Qualification and deployment are tracked separately.",
+      "required_cli_scopes": [
+        "storage.read",
+        "credentials.read"
+      ],
+      "retry_policy": "read-only",
+      "service": "control-plane",
+      "verification_fixture": "storage_workspace_tests; storage_automation_tests; s3::delete_pricing_tests; CLI storage_workspace tests"
+    },
+    {
+      "advanced_access": true,
+      "allowed_cli_credential_kinds": [],
+      "command": "pipe storage buckets get",
+      "conditional_cli_scopes": {},
+      "credentials": [
+        {
+          "cliBearer": []
+        },
+        {
+          "customerSession": [],
+          "websiteBff": []
+        }
+      ],
+      "disposition": "dedicated",
+      "feature_conditions": {
+        "deployed": "configuration-dependent",
+        "schema": "storage_workspace",
+        "version": 1
+      },
+      "implementation_status": "implemented",
+      "method": "GET",
+      "operation_id": "storageBucketGet",
+      "path": "/v1/customer/storage/buckets/{id}",
+      "reason": "Account-bound encrypted original requests, exact decimal sizes, bounded cursor pagination, revision/preview checks and explicit secret output. Qualification and deployment are tracked separately.",
+      "required_cli_scopes": [
+        "storage.read"
+      ],
+      "retry_policy": "read-only",
+      "service": "control-plane",
+      "verification_fixture": "storage_workspace_tests; storage_automation_tests; s3::delete_pricing_tests; CLI storage_workspace tests"
+    },
+    {
+      "advanced_access": false,
+      "allowed_cli_credential_kinds": [],
+      "command": "pipe storage buckets create",
+      "conditional_cli_scopes": {},
+      "credentials": [
+        {
+          "cliBearer": []
+        },
+        {
+          "customerSession": [],
+          "websiteBff": []
+        }
+      ],
+      "disposition": "dedicated",
+      "feature_conditions": {
+        "deployed": "configuration-dependent",
+        "schema": "storage_workspace",
+        "version": 1
+      },
+      "implementation_status": "implemented",
+      "method": "POST",
+      "operation_id": "storageBucketsCreate",
+      "path": "/v1/customer/storage/buckets",
+      "reason": "Account-bound encrypted original requests, exact decimal sizes, bounded cursor pagination, revision/preview checks and explicit secret output. Qualification and deployment are tracked separately.",
+      "required_cli_scopes": [
+        "storage.write"
+      ],
+      "retry_policy": "resume-exact-original-request",
+      "service": "control-plane",
+      "verification_fixture": "storage_workspace_tests; storage_automation_tests; s3::delete_pricing_tests; CLI storage_workspace tests"
+    },
+    {
+      "advanced_access": true,
+      "allowed_cli_credential_kinds": [],
+      "command": "pipe storage buckets list",
+      "conditional_cli_scopes": {},
+      "credentials": [
+        {
+          "cliBearer": []
+        },
+        {
+          "customerSession": [],
+          "websiteBff": []
+        }
+      ],
+      "disposition": "dedicated",
+      "feature_conditions": {
+        "deployed": "configuration-dependent",
+        "schema": "storage_workspace",
+        "version": 1
+      },
+      "implementation_status": "implemented",
+      "method": "GET",
+      "operation_id": "storageBucketsList",
+      "path": "/v1/customer/storage/buckets",
+      "reason": "Account-bound encrypted original requests, exact decimal sizes, bounded cursor pagination, revision/preview checks and explicit secret output. Qualification and deployment are tracked separately.",
+      "required_cli_scopes": [
+        "storage.read"
+      ],
+      "retry_policy": "read-only",
+      "service": "control-plane",
+      "verification_fixture": "storage_workspace_tests; storage_automation_tests; s3::delete_pricing_tests; CLI storage_workspace tests"
+    },
+    {
+      "advanced_access": true,
+      "allowed_cli_credential_kinds": [],
+      "command": "pipe storage cors get",
+      "conditional_cli_scopes": {},
+      "credentials": [
+        {
+          "cliBearer": []
+        },
+        {
+          "customerSession": [],
+          "websiteBff": []
+        }
+      ],
+      "disposition": "dedicated",
+      "feature_conditions": {
+        "deployed": "configuration-dependent",
+        "schema": "storage_workspace",
+        "version": 1
+      },
+      "implementation_status": "implemented",
+      "method": "GET",
+      "operation_id": "storageCorsGet",
+      "path": "/v1/customer/storage/buckets/{id}/cors",
+      "reason": "Account-bound encrypted original requests, exact decimal sizes, bounded cursor pagination, revision/preview checks and explicit secret output. Qualification and deployment are tracked separately.",
+      "required_cli_scopes": [
+        "storage.read"
+      ],
+      "retry_policy": "read-only",
+      "service": "control-plane",
+      "verification_fixture": "storage_workspace_tests; storage_automation_tests; s3::delete_pricing_tests; CLI storage_workspace tests"
+    },
+    {
+      "advanced_access": false,
+      "allowed_cli_credential_kinds": [],
+      "command": "pipe storage cors set",
+      "conditional_cli_scopes": {},
+      "credentials": [
+        {
+          "cliBearer": []
+        },
+        {
+          "customerSession": [],
+          "websiteBff": []
+        }
+      ],
+      "disposition": "dedicated",
+      "feature_conditions": {
+        "deployed": "configuration-dependent",
+        "schema": "storage_workspace",
+        "version": 1
+      },
+      "implementation_status": "implemented",
+      "method": "POST",
+      "operation_id": "storageCorsUpdate",
+      "path": "/v1/customer/storage/buckets/{id}/cors",
+      "reason": "Account-bound encrypted original requests, exact decimal sizes, bounded cursor pagination, revision/preview checks and explicit secret output. Qualification and deployment are tracked separately.",
+      "required_cli_scopes": [
+        "storage.write"
+      ],
+      "retry_policy": "resume-exact-original-request",
+      "service": "control-plane",
+      "verification_fixture": "storage_workspace_tests; storage_automation_tests; s3::delete_pricing_tests; CLI storage_workspace tests"
+    },
+    {
+      "advanced_access": true,
+      "allowed_cli_credential_kinds": [],
+      "command": "pipe storage lifecycle get",
+      "conditional_cli_scopes": {},
+      "credentials": [
+        {
+          "cliBearer": []
+        },
+        {
+          "customerSession": [],
+          "websiteBff": []
+        }
+      ],
+      "disposition": "dedicated",
+      "feature_conditions": {
+        "deployed": "configuration-dependent",
+        "schema": "storage_workspace",
+        "version": 1
+      },
+      "implementation_status": "implemented",
+      "method": "GET",
+      "operation_id": "storageLifecycleGet",
+      "path": "/v1/customer/storage/buckets/{id}/lifecycle",
+      "reason": "Account-bound encrypted original requests, exact decimal sizes, bounded cursor pagination, revision/preview checks and explicit secret output. Qualification and deployment are tracked separately.",
+      "required_cli_scopes": [
+        "storage.read"
+      ],
+      "retry_policy": "read-only",
+      "service": "control-plane",
+      "verification_fixture": "storage_workspace_tests; storage_automation_tests; s3::delete_pricing_tests; CLI storage_workspace tests"
+    },
+    {
+      "advanced_access": false,
+      "allowed_cli_credential_kinds": [],
+      "command": "pipe storage lifecycle preview",
+      "conditional_cli_scopes": {},
+      "credentials": [
+        {
+          "cliBearer": []
+        },
+        {
+          "customerSession": [],
+          "websiteBff": []
+        }
+      ],
+      "disposition": "dedicated",
+      "feature_conditions": {
+        "deployed": "configuration-dependent",
+        "schema": "storage_workspace",
+        "version": 1
+      },
+      "implementation_status": "implemented",
+      "method": "POST",
+      "operation_id": "storageLifecyclePreview",
+      "path": "/v1/customer/storage/buckets/{id}/lifecycle/preview",
+      "reason": "Account-bound encrypted original requests, exact decimal sizes, bounded cursor pagination, revision/preview checks and explicit secret output. Qualification and deployment are tracked separately.",
+      "required_cli_scopes": [
+        "storage.read"
+      ],
+      "retry_policy": "resume-exact-original-request",
+      "service": "control-plane",
+      "verification_fixture": "storage_workspace_tests; storage_automation_tests; s3::delete_pricing_tests; CLI storage_workspace tests"
+    },
+    {
+      "advanced_access": false,
+      "allowed_cli_credential_kinds": [],
+      "command": "pipe storage lifecycle enable / disable",
+      "conditional_cli_scopes": {},
+      "credentials": [
+        {
+          "cliBearer": []
+        },
+        {
+          "customerSession": [],
+          "websiteBff": []
+        }
+      ],
+      "disposition": "dedicated",
+      "feature_conditions": {
+        "deployed": "configuration-dependent",
+        "schema": "storage_workspace",
+        "version": 1
+      },
+      "implementation_status": "implemented",
+      "method": "POST",
+      "operation_id": "storageLifecycleUpdate",
+      "path": "/v1/customer/storage/buckets/{id}/lifecycle",
+      "reason": "Account-bound encrypted original requests, exact decimal sizes, bounded cursor pagination, revision/preview checks and explicit secret output. Qualification and deployment are tracked separately.",
+      "required_cli_scopes": [
+        "storage.write"
+      ],
+      "retry_policy": "resume-exact-original-request",
+      "service": "control-plane",
+      "verification_fixture": "storage_workspace_tests; storage_automation_tests; s3::delete_pricing_tests; CLI storage_workspace tests"
+    },
+    {
+      "advanced_access": true,
+      "allowed_cli_credential_kinds": [],
+      "command": "pipe storage search",
+      "conditional_cli_scopes": {},
+      "credentials": [
+        {
+          "cliBearer": []
+        },
+        {
+          "customerSession": [],
+          "websiteBff": []
+        }
+      ],
+      "disposition": "dedicated",
+      "feature_conditions": {
+        "deployed": "configuration-dependent",
+        "schema": "storage_workspace",
+        "version": 1
+      },
+      "implementation_status": "implemented",
+      "method": "GET",
+      "operation_id": "storageObjectsSearch",
+      "path": "/v1/customer/storage/search",
+      "reason": "Account-bound encrypted original requests, exact decimal sizes, bounded cursor pagination, revision/preview checks and explicit secret output. Qualification and deployment are tracked separately.",
+      "required_cli_scopes": [
+        "storage.read"
+      ],
+      "retry_policy": "read-only",
+      "service": "control-plane",
+      "verification_fixture": "storage_workspace_tests; storage_automation_tests; s3::delete_pricing_tests; CLI storage_workspace tests"
+    },
+    {
+      "advanced_access": false,
+      "allowed_cli_credential_kinds": [],
+      "command": "pipe storage webhooks create",
+      "conditional_cli_scopes": {},
+      "credentials": [
+        {
+          "cliBearer": []
+        },
+        {
+          "customerSession": [],
+          "websiteBff": []
+        }
+      ],
+      "disposition": "dedicated",
+      "feature_conditions": {
+        "deployed": "configuration-dependent",
+        "schema": "storage_workspace",
+        "version": 1
+      },
+      "implementation_status": "implemented",
+      "method": "POST",
+      "operation_id": "storageWebhookCreate",
+      "path": "/v1/customer/storage/buckets/{id}/webhooks",
+      "reason": "Account-bound encrypted original requests, exact decimal sizes, bounded cursor pagination, revision/preview checks and explicit secret output. Qualification and deployment are tracked separately.",
+      "required_cli_scopes": [
+        "storage.write"
+      ],
+      "retry_policy": "resume-exact-original-request",
+      "service": "control-plane",
+      "verification_fixture": "storage_workspace_tests; storage_automation_tests; s3::delete_pricing_tests; CLI storage_workspace tests"
+    },
+    {
+      "advanced_access": true,
+      "allowed_cli_credential_kinds": [],
+      "command": "pipe storage webhooks deliveries",
+      "conditional_cli_scopes": {},
+      "credentials": [
+        {
+          "cliBearer": []
+        },
+        {
+          "customerSession": [],
+          "websiteBff": []
+        }
+      ],
+      "disposition": "dedicated",
+      "feature_conditions": {
+        "deployed": "configuration-dependent",
+        "schema": "storage_workspace",
+        "version": 1
+      },
+      "implementation_status": "implemented",
+      "method": "GET",
+      "operation_id": "storageWebhookDeliveries",
+      "path": "/v1/customer/storage/buckets/{id}/deliveries",
+      "reason": "Account-bound encrypted original requests, exact decimal sizes, bounded cursor pagination, revision/preview checks and explicit secret output. Qualification and deployment are tracked separately.",
+      "required_cli_scopes": [
+        "storage.read"
+      ],
+      "retry_policy": "read-only",
+      "service": "control-plane",
+      "verification_fixture": "storage_workspace_tests; storage_automation_tests; s3::delete_pricing_tests; CLI storage_workspace tests"
+    },
+    {
+      "advanced_access": false,
+      "allowed_cli_credential_kinds": [],
+      "command": "pipe storage webhooks retry",
+      "conditional_cli_scopes": {},
+      "credentials": [
+        {
+          "cliBearer": []
+        },
+        {
+          "customerSession": [],
+          "websiteBff": []
+        }
+      ],
+      "disposition": "dedicated",
+      "feature_conditions": {
+        "deployed": "configuration-dependent",
+        "schema": "storage_workspace",
+        "version": 1
+      },
+      "implementation_status": "implemented",
+      "method": "POST",
+      "operation_id": "storageWebhookRetry",
+      "path": "/v1/customer/storage/buckets/{id}/deliveries/{delivery}/retry",
+      "reason": "Account-bound encrypted original requests, exact decimal sizes, bounded cursor pagination, revision/preview checks and explicit secret output. Qualification and deployment are tracked separately.",
+      "required_cli_scopes": [
+        "storage.write"
+      ],
+      "retry_policy": "resume-exact-original-request",
+      "service": "control-plane",
+      "verification_fixture": "storage_workspace_tests; storage_automation_tests; s3::delete_pricing_tests; CLI storage_workspace tests"
+    },
+    {
+      "advanced_access": false,
+      "allowed_cli_credential_kinds": [],
+      "command": "pipe storage webhooks revoke",
+      "conditional_cli_scopes": {},
+      "credentials": [
+        {
+          "cliBearer": []
+        },
+        {
+          "customerSession": [],
+          "websiteBff": []
+        }
+      ],
+      "disposition": "dedicated",
+      "feature_conditions": {
+        "deployed": "configuration-dependent",
+        "schema": "storage_workspace",
+        "version": 1
+      },
+      "implementation_status": "implemented",
+      "method": "DELETE",
+      "operation_id": "storageWebhookRevoke",
+      "path": "/v1/customer/storage/buckets/{id}/webhooks/{hook}",
+      "reason": "Account-bound encrypted original requests, exact decimal sizes, bounded cursor pagination, revision/preview checks and explicit secret output. Qualification and deployment are tracked separately.",
+      "required_cli_scopes": [
+        "storage.write"
+      ],
+      "retry_policy": "resume-exact-original-request",
+      "service": "control-plane",
+      "verification_fixture": "storage_workspace_tests; storage_automation_tests; s3::delete_pricing_tests; CLI storage_workspace tests"
+    },
+    {
+      "advanced_access": true,
+      "allowed_cli_credential_kinds": [],
+      "command": "pipe storage webhooks list",
+      "conditional_cli_scopes": {},
+      "credentials": [
+        {
+          "cliBearer": []
+        },
+        {
+          "customerSession": [],
+          "websiteBff": []
+        }
+      ],
+      "disposition": "dedicated",
+      "feature_conditions": {
+        "deployed": "configuration-dependent",
+        "schema": "storage_workspace",
+        "version": 1
+      },
+      "implementation_status": "implemented",
+      "method": "GET",
+      "operation_id": "storageWebhooksList",
+      "path": "/v1/customer/storage/buckets/{id}/webhooks",
+      "reason": "Account-bound encrypted original requests, exact decimal sizes, bounded cursor pagination, revision/preview checks and explicit secret output. Qualification and deployment are tracked separately.",
+      "required_cli_scopes": [
+        "storage.read"
+      ],
+      "retry_policy": "read-only",
+      "service": "control-plane",
+      "verification_fixture": "storage_workspace_tests; storage_automation_tests; s3::delete_pricing_tests; CLI storage_workspace tests"
     },
     {
       "advanced_access": false,
@@ -6243,9 +6852,9 @@
   ],
   "release_ready": true,
   "specifications": {
-    "control-plane": "357b65a9b07f5c3008eafac954ae46ce4dc3a0fe63a9ddf47cb043eec326cfc1",
-    "s3": "32be014fa21a480b5a5ba939fce5b0b5369ccfc45630ec98667fac299db6016d",
-    "storage": "5ff1a2a9c9faf21a59c74e4d9f470db4b9d35c6b32a3af6009a7726171a4d6ca"
+    "control-plane": "48fb67f745821973d52da02fe0d08413d5d6aec9315eaf70b8011e628493dcd6",
+    "s3": "1d53803829ef98b34eb77d17c7500dd8319c5761e9d1d9e4e7491bfb5b6421d2",
+    "storage": "2ff1f9b9e2914e91023eef77214da7d3c4769fb0d4065cb9a56998bf0f95c1e9"
   },
   "version": 1
 }

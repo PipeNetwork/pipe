@@ -394,6 +394,12 @@ impl ControlClient {
     /// Explicit write workflows can ask the browser for missing permissions.
     /// Automation never inherits or replaces an interactive session.
     pub(crate) async fn authorize_storage_writes(&self, no_browser: bool) -> Result<()> {
+        self.authorize_storage_scopes(no_browser, false).await
+    }
+    pub(crate) async fn authorize_storage_key_management(&self, no_browser: bool) -> Result<()> {
+        self.authorize_storage_scopes(no_browser, true).await
+    }
+    async fn authorize_storage_scopes(&self, no_browser: bool, key_management: bool) -> Result<()> {
         if std::env::var_os("PIPE_CLI_TOKEN").is_some() {
             return Ok(()); // The server validates the automation grant.
         }
@@ -418,18 +424,27 @@ impl ControlClient {
         }
         let expanded =
             crate::wallet_auth::normalized_scope(&format!("{scope} {}", required.join(" ")));
+        let action = if key_management {
+            "storage key management"
+        } else {
+            "storage writes"
+        };
         if crate::output::no_input() {
             return Err(crate::error::ApiError {
                 status: StatusCode::FORBIDDEN,
                 code: "insufficient_scope".into(),
-                message: format!("storage writes need browser approval; run 'pipe auth login --scope \"{expanded}\"', then retry setup"),
+                message: format!("{action} needs browser approval; run 'pipe auth login --scope \"{expanded}\"', then retry setup"),
                 request_id: None,
             }.into());
         }
-        eprintln!("Approve storage write access in your browser to finish setup. Use the same Pipe account as this terminal.");
+        eprintln!("Approve {action} in your browser to finish setup. Use the same Pipe account as this terminal.");
         crate::device::login_for_account(
             self,
-            "Pipe CLI storage write access",
+            if key_management {
+                "Pipe CLI storage key management"
+            } else {
+                "Pipe CLI storage write access"
+            },
             &expanded,
             no_browser,
             Some(&session),

@@ -143,6 +143,12 @@ pub fn document(error: &anyhow::Error) -> Value {
 }
 
 pub fn classification(error: &anyhow::Error) -> (&'static str, u8) {
+    if error
+        .downcast_ref::<crate::storage_workspace::Unknown>()
+        .is_some()
+    {
+        return ("unknown_outcome", 8);
+    }
     if error.downcast_ref::<crate::s3::MutationUnknown>().is_some() {
         return ("unknown_outcome", 8);
     }
