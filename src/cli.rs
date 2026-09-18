@@ -1446,7 +1446,9 @@ async fn bucket_command(
             output::print(&json!({"bucket":bucket,"created":true}), json_output)
         }
         BucketCommands::Head { bucket } => {
-            s3.head_bucket(&bucket).await?;
+            s3.head_bucket(&bucket)
+                .await
+                .map_err(|error| explain_s3_bucket_error(error, &bucket))?;
             output::print(&json!({"bucket":bucket,"exists":true}), json_output)
         }
         BucketCommands::Delete { bucket } => {
@@ -1459,13 +1461,32 @@ async fn bucket_command(
                     "Pipe's gateway does not support ListBuckets; specify a bucket or configure profile.bucket"
                 )
             })?;
-            s3.head_bucket(&bucket).await?;
+            s3.head_bucket(&bucket)
+                .await
+                .map_err(|error| explain_s3_bucket_error(error, &bucket))?;
             if profile.bucket.is_none() {
                 save_s3_profile_defaults(store, name, &bucket, None)?;
             }
             output::print(&json!({"items":[bucket]}), json_output)
         }
     }
+}
+
+fn explain_s3_bucket_error(error: anyhow::Error, bucket: &str) -> anyhow::Error {
+    let Some(s3) = error.downcast_ref::<crate::s3::S3Error>() else {
+        return error;
+    };
+    if s3.status == reqwest::StatusCode::NOT_FOUND {
+        return anyhow!(
+            "bucket '{bucket}' was not found at the configured S3 gateway; check `pipe profile show`, use an existing bucket, or create it with `pipe s3 mb {bucket}` ({s3})"
+        );
+    }
+    if s3.status == reqwest::StatusCode::FORBIDDEN {
+        return anyhow!(
+            "access to bucket '{bucket}' was denied by the configured S3 gateway; check the credential bucket scope and run `pipe s3 setup --write --bucket {bucket}` if this bucket should be writable ({s3})"
+        );
+    }
+    error
 }
 
 async fn active_s3_bucket(client: &ControlClient) -> Result<String> {
@@ -1598,7 +1619,8 @@ async fn object_command(
             loop {
                 let (items, next) = s3
                     .list_objects(&bucket, Some(&prefix), token.as_deref())
-                    .await?;
+                    .await
+                    .map_err(|error| explain_s3_bucket_error(error, &bucket))?;
                 output::print(&json!({"items":items,"next":next}), json_output)?;
                 match next {
                     Some(next) if seen.insert(next.clone()) => token = Some(next),
