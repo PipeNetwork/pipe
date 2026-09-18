@@ -89,6 +89,17 @@ impl ControlClient {
             .map(|s| serde_json::from_str(&s).context("invalid stored session"))
             .transpose()
     }
+    pub(crate) fn require_login(&self) -> Result<()> {
+        if std::env::var_os("PIPE_CLI_TOKEN").is_some() || self.session()?.is_some() {
+            return Ok(());
+        }
+        Err(crate::error::ApiError {
+            status: StatusCode::UNAUTHORIZED,
+            code: "login_required".into(),
+            message: "No saved login for the selected profile and API endpoint. Run `pipe auth login`, then retry.".into(),
+            request_id: None,
+        }.into())
+    }
     pub fn wallet_signing_key(&self) -> Result<SigningKey> {
         anyhow::ensure!(
             std::env::var_os("PIPE_CLI_TOKEN").is_none(),

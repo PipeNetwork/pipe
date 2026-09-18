@@ -942,7 +942,10 @@ async fn s3_command(
 ) -> Result<()> {
     if !matches!(
         &command,
-        S3Commands::Endpoint | S3Commands::Credential { .. } | S3Commands::Setup(_)
+        S3Commands::Endpoint
+            | S3Commands::Credential { .. }
+            | S3Commands::Setup(_)
+            | S3Commands::List { location: None }
     ) {
         ensure_s3_endpoint(client, store, name).await?;
     }

@@ -4,10 +4,12 @@ use serde_json::{json, Value};
 use std::collections::BTreeMap;
 
 pub async fn account(client: &ControlClient) -> Result<Value> {
+    client.require_login()?;
     client.get("/v1/customer/cli/account").await
 }
 
 pub async fn usage(client: &ControlClient, from: Option<u64>, to: Option<u64>) -> Result<Value> {
+    client.require_login()?;
     let mut path = String::from("/v1/customer/cli/usage");
     let mut query = Vec::new();
     if let Some(value) = from {
@@ -24,6 +26,7 @@ pub async fn usage(client: &ControlClient, from: Option<u64>, to: Option<u64>) -
 }
 
 pub async fn credentials(client: &ControlClient) -> Result<Value> {
+    client.require_login()?;
     client.get("/v1/customer/cli/s3/credentials").await
 }
 
@@ -31,6 +34,16 @@ pub async fn credentials(client: &ControlClient) -> Result<Value> {
 /// control plane owns this inventory because the public S3 gateway intentionally
 /// does not implement the global ListBuckets wire operation.
 pub async fn storage_buckets(client: &ControlClient) -> Result<Value> {
+    client.require_login()?;
+    if std::env::var_os("PIPE_CLI_TOKEN").is_some()
+        || client
+            .session()?
+            .is_some_and(|session| session.access_token.starts_with("pcli_a_"))
+    {
+        // This deployed inventory includes historical namespaces and managed
+        // buckets. Platform sessions do not need the unshipped legacy route.
+        return managed_storage_buckets(client).await;
+    }
     // The managed workspace is the canonical account inventory for new
     // buckets. The compatibility inventory retains legacy S3 namespaces, so
     // merge both views for users migrating from the storage-only CLI.
@@ -195,6 +208,7 @@ pub async fn revoke_credential(client: &ControlClient, access_key_id: &str) -> R
 }
 
 pub async fn endpoint(client: &ControlClient) -> Result<Value> {
+    client.require_login()?;
     client.get("/v1/customer/cli/s3/endpoint").await
 }
 

@@ -15,6 +15,7 @@ apply migrations or open product launch gates automatically.
 
 ```sh
 pipe auth login
+pipe s3 ls
 pipe context --output json
 pipe doctor --output json
 pipe compute vms list --limit 50
@@ -49,6 +50,12 @@ failures never create new plaintext secret files. Existing legacy secret files
 remain readable; their next update is encrypted and creates a private backup
 first. Keep the state directory and its machine key together. Existing payment,
 multipart and transfer journals are preserved.
+
+If an earlier login failed while saving credentials, rebuilding the CLI does
+not complete that login. Run `pipe auth login` again, approve the terminal code,
+then run `pipe s3 ls`. No environment exports, password, bucket selection, or S3
+key setup is needed to list your account's buckets. `pipe auth status` shows
+whether the selected profile has a saved login.
 
 `--output json` emits one `{schema_version:1,result:...}` document. `jsonl` emits
 one compact document per result; compute lists stream pages and operation waits

@@ -8,7 +8,7 @@ use std::{
 };
 use uuid::Uuid;
 use wiremock::{
-    matchers::{body_partial_json, header, method, path},
+    matchers::{body_partial_json, header, method, path, query_param},
     Mock, MockServer, ResponseTemplate,
 };
 
@@ -302,6 +302,7 @@ async fn executable_browser_login_encrypts_secrets() {
 async fn executable_headless_login_uses_private_machine_key_without_password() {
     let server = MockServer::start().await;
     let root = tempfile::tempdir().unwrap();
+    let session_id = Uuid::new_v4();
     success(pipe(
         root.path(),
         &[
@@ -313,6 +314,40 @@ async fn executable_headless_login_uses_private_machine_key_without_password() {
         ],
     ));
     success(pipe(root.path(), &["profile", "use", "test"]));
+    let run_headless = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_pipe"))
+            .current_dir(root.path())
+            .env_remove("PIPE_DISABLE_KEYRING")
+            .env_remove("PIPE_CLI_SECRET_PASSWORD")
+            .env_remove("PIPE_CLI_TOKEN")
+            .env_remove("DBUS_SESSION_BUS_ADDRESS")
+            .env_remove("DISPLAY")
+            .env_remove("WAYLAND_DISPLAY")
+            .env_remove("SSH_CONNECTION")
+            .env_remove("SSH_TTY")
+            .env("PIPE_CLI_STATE_DIR", root.path().join("state"))
+            .env("XDG_CONFIG_HOME", root.path())
+            .env("APPDATA", root.path())
+            .arg("--config")
+            .arg(root.path().join("config.json"))
+            .arg("--json")
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    // An unsuccessful old login leaves no session. Do not send an anonymous
+    // endpoint request, which production reports as a disabled legacy CLI 404.
+    for args in [vec!["s3", "ls"], vec!["s3", "ls", "s3://test/"]] {
+        let missing = run_headless(&args);
+        assert_eq!(missing.status.code(), Some(3));
+        let error: Value = serde_json::from_slice(&missing.stdout).unwrap();
+        assert_eq!(error["error"]["code"], "authentication");
+        assert!(error["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("pipe auth login"));
+    }
+    assert!(server.received_requests().await.unwrap().is_empty());
     Mock::given(method("POST"))
         .and(path("/v1/cli/auth/device"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
@@ -335,30 +370,14 @@ async fn executable_headless_login_uses_private_machine_key_without_password() {
             "scope":"account.read billing.read compute.read durable.read hosting.read kv.read org.read storage.read usage.read",
             "account_id":null,
             "owner_wallet":"c".repeat(64),
-            "session_id":Uuid::new_v4(),
+            "session_id":session_id,
             "expires_in":900,
             "refresh_expires_in":2592000
         })))
         .expect(1)
         .mount(&server)
         .await;
-    let output = Command::new(env!("CARGO_BIN_EXE_pipe"))
-        .current_dir(root.path())
-        .env_remove("PIPE_DISABLE_KEYRING")
-        .env_remove("PIPE_CLI_SECRET_PASSWORD")
-        .env_remove("DBUS_SESSION_BUS_ADDRESS")
-        .env_remove("DISPLAY")
-        .env_remove("WAYLAND_DISPLAY")
-        .env_remove("SSH_CONNECTION")
-        .env_remove("SSH_TTY")
-        .env("PIPE_CLI_STATE_DIR", root.path().join("state"))
-        .env("XDG_CONFIG_HOME", root.path())
-        .env("APPDATA", root.path())
-        .arg("--config")
-        .arg(root.path().join("config.json"))
-        .args(["--json", "auth", "login"])
-        .output()
-        .unwrap();
+    let output = run_headless(&["auth", "login"]);
     assert!(
         output.status.success(),
         "{}",
@@ -381,6 +400,119 @@ async fn executable_headless_login_uses_private_machine_key_without_password() {
     assert!(std::fs::read(root.path().join("state/secrets.json"))
         .unwrap()
         .starts_with(b"PIPESEC3"));
+
+    // Freshly logged-in users have no S3 endpoint or key. Listing buckets is a
+    // control-plane read; it must survive gateway discovery being unavailable.
+    for route in ["endpoint", "credentials", "buckets"] {
+        Mock::given(path(format!("/v1/customer/cli/s3/{route}")))
+            .respond_with(ResponseTemplate::new(404).set_body_json(json!({
+                "code":"not_found", "message":"CLI access is not enabled"
+            })))
+            .expect(0)
+            .mount(&server)
+            .await;
+    }
+    let cursor = Uuid::new_v4().to_string();
+    Mock::given(method("GET"))
+        .and(path("/v1/customer/storage/buckets"))
+        .and(query_param("limit", "100"))
+        .and(header(
+            "authorization",
+            format!("Bearer pcli_a_{}", "a".repeat(64)),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "available":true, "items":[{"name":"test","managed":false}], "next_cursor":cursor
+        })))
+        .with_priority(3)
+        .expect(3)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/v1/customer/storage/buckets"))
+        .and(query_param("after", &cursor))
+        .and(header("authorization", format!("Bearer pcli_a_{}", "a".repeat(64))))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "available":true, "items":[{"name":"pipe-bucket-managed","managed":true}], "next_cursor":null
+        })))
+        .with_priority(2)
+        .expect(3)
+        .mount(&server)
+        .await;
+    for args in [
+        vec!["s3", "ls"],
+        vec!["bucket", "list"],
+        vec!["storage", "bucket", "list"],
+    ] {
+        let listed = success(run_headless(&args));
+        assert_eq!(listed["items"].as_array().unwrap().len(), 2);
+        assert_eq!(listed["items"][0]["name"], "test");
+        assert_eq!(listed["items"][1]["name"], "pipe-bucket-managed");
+    }
+    // Persisted authentication stays scoped to the selected profile.
+    success(pipe(
+        root.path(),
+        &[
+            "profile",
+            "create",
+            "other",
+            "--control-api-url",
+            &server.uri(),
+        ],
+    ));
+    assert_eq!(
+        run_headless(&["--profile", "other", "s3", "ls"])
+            .status
+            .code(),
+        Some(3)
+    );
+    // After the 15-minute access lifetime, refresh the platform session and
+    // retain it for the next process instead of falling through to legacy auth.
+    Mock::given(method("GET"))
+        .and(path("/v1/customer/storage/buckets"))
+        .and(header(
+            "authorization",
+            format!("Bearer pcli_a_{}", "a".repeat(64)),
+        ))
+        .respond_with(ResponseTemplate::new(401))
+        .with_priority(1)
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/cli/auth/refresh"))
+        .and(body_partial_json(json!({"refresh_token":format!("pcli_r_{}", "b".repeat(128))})))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "access_token":format!("pcli_a_{}", "d".repeat(64)),
+            "refresh_token":format!("pcli_r_{}", "e".repeat(128)),
+            "token_type":"Bearer",
+            "scope":"account.read billing.read compute.read durable.read hosting.read kv.read org.read storage.read usage.read",
+            "account_id":null,
+            "owner_wallet":"c".repeat(64),
+            "session_id":session_id,
+            "expires_in":900,
+            "refresh_expires_in":2592000
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/v1/customer/storage/buckets"))
+        .and(header(
+            "authorization",
+            format!("Bearer pcli_a_{}", "d".repeat(64)),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "available":true, "items":[{"name":"test"}], "next_cursor":null
+        })))
+        .expect(2)
+        .mount(&server)
+        .await;
+    for _ in 0..2 {
+        assert_eq!(
+            success(run_headless(&["s3", "ls"]))["items"][0]["name"],
+            "test"
+        );
+    }
 }
 
 #[test]
