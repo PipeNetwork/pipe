@@ -1,0 +1,135 @@
+{
+  "attestation_verification_sha256": "3af6a2a7ae84087b0ad154e91a901b2768d5e909e463485f445fcfe02011c149",
+  "attested_reviewed_binary": {
+    "binary_sha256": "053428781661470f5373c215f8de3e69cddb1836905404db0f08375802dfaf37",
+    "contract_index_sha256": "df0769ae4fb2fc143dac640f1e4ab437c636858559978953723a1df357424f43",
+    "contract_sha256": "48fb67f745821973d52da02fe0d08413d5d6aec9315eaf70b8011e628493dcd6",
+    "format_version": 1,
+    "lockfile_sha256": "c9c9e7b4dd8e613027cf6e7edb4ba37e9f020413601ebe87768b4c7b0a295165",
+    "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)",
+    "source_commit": "990545530ba93c0811f78a24fee6b579bd898da8",
+    "source_status": "committed",
+    "target": "x86_64-unknown-linux-gnu",
+    "tested_build_os": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
+    "version": "3.0.0-rc.3"
+  },
+  "core": {
+    "browser_cli_round_trip": true,
+    "bucket_audit": true,
+    "cli_ls": true,
+    "cli_round_trip": {
+      "bytes": 9437184,
+      "sha256": "af1e3102d9bb1c5b16f958f839ccaaf53000727a808f9c500b8642af168d32d3"
+    },
+    "completed": true,
+    "cors_allow_and_deny": true,
+    "device_approval": true,
+    "device_denial": true,
+    "finished_at": "2026-09-18T04:56:07.036Z",
+    "first_upload": true,
+    "format_version": 1,
+    "global_search": true,
+    "http_only_session": true,
+    "keys_create_list_revoke": true,
+    "lifecycle_aged_expiration": "Real aged-object worker verified in staging; production minimum age is one day.",
+    "lifecycle_preview_and_disable": true,
+    "payment_signatures": 0,
+    "production": true,
+    "real_website_login": true,
+    "session_cleanup": true,
+    "transfer_receipt_survives_reload": true
+  },
+  "interim_audit": {
+    "active_credentials": 0,
+    "active_leases": 0,
+    "captured_at": "2026-09-18T05:10:36.147819+00:00",
+    "consumed_atoms": "179",
+    "credential_count": 11,
+    "enabled_lifecycle": 0,
+    "enabled_webhooks": 0,
+    "indexed_objects": 0,
+    "live_objects": 0,
+    "pending_reservations": 0,
+    "pending_webhooks": 0,
+    "usage_atoms": "179",
+    "wallet_reserved_atoms": "0"
+  },
+  "prior_browser_session_cleanup": {
+    "count": 5,
+    "only_owned_qualification_sessions": true
+  },
+  "remaining_acceptance": [
+    "Exact tag artifacts, latest frontend live visual check, and final ledger settlement.",
+    "Canonical Google-account team acceptance requires an authorized production test account.",
+    "Aged lifecycle expiration uses staging fixtures; production minimum age is one day."
+  ],
+  "scope": "New storage platform workflows; prior RC1/RC2 selected-product and payment sandbox evidence remains historical.",
+  "webhooks": {
+    "bucket_id": "ffd540a5-49ba-43ad-b627-52ce97a66e44",
+    "checks": {
+      "cli_webhook_upload": true,
+      "signed_delete_exact_retry": true,
+      "signed_upload_exact_retry": true,
+      "stale_version_rejected_replacement_preserved": true,
+      "wallet_cli_login": true
+    },
+    "cleanup": [
+      {
+        "webhook_revoked": true
+      },
+      {
+        "credential_revoked": "LT3B60C6C3103C492690"
+      },
+      {
+        "credential_revoked": "LT3A9D9DD77A5B4EB48E"
+      },
+      {
+        "session_revoked": true
+      }
+    ],
+    "cli_access_key_id": "LT3A9D9DD77A5B4EB48E",
+    "completed": true,
+    "conditional_key_id": "b1a9242d-284f-43f9-bca4-f167106a4c0c",
+    "deliveries": [
+      {
+        "attempt": 2,
+        "available_at": 1789708030,
+        "error": null,
+        "event_id": "1eb0bc22-061e-5577-986c-ecf2e478ce58",
+        "id": "c99fdd0d-036b-4c51-b782-acd84a681082",
+        "state": "succeeded",
+        "status": 204,
+        "webhook_id": "52f165e7-26b5-43e5-a9dc-273e0d006a47"
+      },
+      {
+        "attempt": 2,
+        "available_at": 1789708040,
+        "error": null,
+        "event_id": "40b9b13d-01a5-5bdd-a7d0-82ca920f4ca2",
+        "id": "af6de7ff-f786-4faa-9999-813353fb01c7",
+        "state": "succeeded",
+        "status": 204,
+        "webhook_id": "52f165e7-26b5-43e5-a9dc-273e0d006a47"
+      },
+      {
+        "attempt": 2,
+        "available_at": 1789708015,
+        "error": null,
+        "event_id": "0678db57-d8e8-5f7a-913b-58c3f9086480",
+        "id": "59c51090-f530-4e5f-854f-be56d43e9f5c",
+        "state": "succeeded",
+        "status": 204,
+        "webhook_id": "52f165e7-26b5-43e5-a9dc-273e0d006a47"
+      }
+    ],
+    "finished_at": "2026-09-18T05:07:17.866Z",
+    "format_version": 1,
+    "key": "webhook-qa/cbebdf56311db005.txt",
+    "maximum_upload_bytes": 2048,
+    "payment_transfers": 0,
+    "production": true,
+    "receipt_count": 6,
+    "started_at": "2026-09-18T05:06:31.226Z",
+    "webhook_id": "52f165e7-26b5-43e5-a9dc-273e0d006a47"
+  }
+}

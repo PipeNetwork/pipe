@@ -1,0 +1,77 @@
+{
+  "contracts": {
+    "deployed": true,
+    "deployment_receipt_sha256": "87e6051ced2ba3abf36e60ce62bce607560c80fc97fa154d7f62e8190e4660b9",
+    "files": {
+      "docs/assets/LICENSE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+      "docs/assets/NOTICE": "0d20d1adef18aee3f40dd258172155521ce702ac445cb5f7b7d60ed32dad2fb2",
+      "docs/assets/swagger-ui-bundle.js": "62df541529080464a7660adc793eab7128c6193ce3be24ddc1e0e0a4a63edc2f",
+      "docs/assets/swagger-ui-bundle.js.LICENSE.txt": "63818894e4b04cd0e3180d9cb20761e227a939121e7484f8e1d528227c756f89",
+      "docs/assets/swagger-ui.css": "23ae95db3e810a3e1eb7d8995ddb587dd463c25d0c06bbd768d58ec8b08f6981",
+      "docs/index.html": "f7dc4fb07d8375faf694bbdb581298206263fe2cff632b7969cc022d34d59fad",
+      "docs/portal.css": "12f0c187804657ad5b3ec6cfeaefea1bb41a840fbe9f1198d409c53b54dc3b6a",
+      "docs/portal.js": "b16cdeb001374f93581a11d48dd377bcf5075859af2ee99aecf9c5e9015de8a2",
+      "openapi/control-plane.json": "48fb67f745821973d52da02fe0d08413d5d6aec9315eaf70b8011e628493dcd6",
+      "openapi/control-plane.yaml": "48fb67f745821973d52da02fe0d08413d5d6aec9315eaf70b8011e628493dcd6",
+      "openapi/index.json": "df0769ae4fb2fc143dac640f1e4ab437c636858559978953723a1df357424f43",
+      "openapi/s3.json": "1d53803829ef98b34eb77d17c7500dd8319c5761e9d1d9e4e7491bfb5b6421d2",
+      "openapi/s3.yaml": "1d53803829ef98b34eb77d17c7500dd8319c5761e9d1d9e4e7491bfb5b6421d2",
+      "openapi/storage.json": "2ff1f9b9e2914e91023eef77214da7d3c4769fb0d4065cb9a56998bf0f95c1e9",
+      "openapi/storage.yaml": "2ff1f9b9e2914e91023eef77214da7d3c4769fb0d4065cb9a56998bf0f95c1e9"
+    },
+    "git_commit": "6d6f3e8e80c4bb9cbe33a22401546e62e3a64042",
+    "revision": "548bb1df2ea4d600e92a9128eec7b7b39a93da8640a59feb678a203b9bbf9f66"
+  },
+  "control": {
+    "base_migrations_unchanged": true,
+    "binary_sha256": "26220b22994e9afb18f962ca5b39e5e8918d2a595d566927e3fd9bc06ea59d0c",
+    "deployment_receipt_sha256": "d116d931e5ac325af7793933228ac9d9b051072f297da6395ee7a1a2e1acebe7",
+    "source_commit": "f5e8baacbb1951ed79eb5626d14076cbf836e483",
+    "storage_schemas": [
+      {
+        "checksum": "fc14072bd0e0c6027ab0b4f88f75e8524401b1d93772d19c23e99c167c864175",
+        "name": "storage_budget",
+        "version": 1
+      },
+      {
+        "checksum": "daed5a836d72a9602298701cf61f748f9617a58552eb1e33ed67bf8c16be1be7",
+        "name": "storage_workspace",
+        "version": 2
+      }
+    ]
+  },
+  "frontend": {
+    "deployed": true,
+    "source_commit": "2d8d8b32f54070502cf99f710d336974dd4c30cb"
+  },
+  "full_database_backup": {
+    "offhost_backup_receipt_sha256": "f6a86c19dbb47a693988876b70e85ea5738bbb406f4a1ad86596b91d570d3ce4",
+    "verified_full_restore_parse": true
+  },
+  "gateway": {
+    "binary_sha256": "322eab304722e9ca6a2e892c912f1613b2fef46847b2edba2a210f6b5ccc094e",
+    "deployed": true,
+    "deployment_receipt_sha256": "dc0392f3e90b64f4b4e108305a0c652c1843a179f431da4e96de8aacfce04a2f",
+    "managed_namespace_admission": true,
+    "node_processes_preserved": true,
+    "source_commit": "3047c4ef222954038b8957c4ec11da20a39331fa"
+  },
+  "proxy_cors": {
+    "deployment_receipt_sha256": "ba163878ccccbec74c46c87b8a2953369d24445b5a6a7fee2a7abd9ded5c14a5",
+    "gateway_cors_authoritative": true,
+    "managed_urls_not_logged": true
+  },
+  "public_contract_verification": {
+    "all_four_json_files_match_pins": true,
+    "immutable_catalog": "https://api.pipedev.network/openapi/releases/548bb1df2ea4d600e92a9128eec7b7b39a93da8640a59feb678a203b9bbf9f66/index.json",
+    "public_portal_browser_passed": true,
+    "public_portal_log_sha256": "c36efdaee7a73a629374a6c436d948d3496a12faa24be2f6294971c4e99c2a91"
+  },
+  "receiver_cleanup": {
+    "gateway_cors_preserved": true,
+    "receiver_route_removed": true,
+    "receiver_stopped": true,
+    "secret_removed": true,
+    "site_sha256": "4e9398af3458d4e8dcd3ef3638236af57ca1fe985b1d83f17aa7027e61ae5251"
+  }
+}

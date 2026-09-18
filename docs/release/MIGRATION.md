@@ -1,6 +1,6 @@
 # Migrating to Pipe CLI 3.0
 
-This guide covers the 1.0.0 command interface at `b18eb5d` and existing profile/state files when upgrading to `3.0.0-rc.2`. Keep the previous binary and private local state until outstanding operations are resolved. Run `pipe doctor --output json` to inspect the deployment's supported, enabled and authorized features.
+This guide covers the 1.0.0 command interface at `b18eb5d` and existing profile/state files when upgrading to `3.0.0-rc.3`. Keep the previous binary and private local state until outstanding operations are resolved. Run `pipe doctor --output json` to inspect the deployment's supported, enabled and authorized features.
 
 When upgrading from RC1, account for the corrected S3 error reporting in automation. A definitive `403` now reports `authorization` with exit `4`, and a definitive `409` or `412` reports `conflict` with exit `6`. Versioned output includes `result.error.http_status` and `result.error.s3_code`; streaming upload failures also retain those details. Unknown submitted mutations take precedence and return exit `8`, even if a later retry receives a refusal. Reconcile the original operation before retrying it. RC2 preserves existing signing, retry counts, ciphertext, profiles, secret storage and operation journals, so the version update requires no state conversion.
 
@@ -68,3 +68,21 @@ Rollback validates the backup and saves the current configuration before restori
 For scripts, prefer `--output json`: each result is `{"schema_version":1,"result":...}`. `--output jsonl` emits compact documents and streams pages/events where supported. The retained `--json` flag emits the older unwrapped payload; it cannot be combined with `--output`. Diagnostics and parser errors go to stderr. Use `--no-input` to forbid prompts, supply required input files, and add `--yes` explicitly for commands requiring confirmation. These flags do not grant permissions or imply a completed payment.
 
 Exit statuses are `0` success, `1` other/application failure, `2` command-line syntax, `3` authentication, `4` authorization, `5` unavailable/rate-limited, `6` conflict/precondition, `7` transport, `8` unknown outcome or expired retained response, and `9` wait deadline. SSH propagates the OpenSSH exit status. A wait deadline does not cancel server work; exit `8` requires recovery or reconciliation before submitting another mutation.
+
+## Managed storage workspaces
+
+Existing S3 namespaces and encrypted objects retain their names and owners.
+`pipe storage buckets create` returns a durable bucket UUID and its unique S3
+name. Use that returned name with `pipe s3 setup --write --bucket NAME` and
+ordinary S3 transfers; management commands use the UUID. Creating a bucket label
+does not claim or rename a historical namespace.
+
+`pipe storage` now exposes indexed search, scoped keys, CORS, webhooks, lifecycle
+previews, activity, and recovery requests. A lost creation response must be
+reconciled with `pipe storage requests` and `pipe storage resume REQUEST_ID`.
+These encrypted records survive logout. They contain the original request ID;
+creating a replacement request can create a second resource.
+
+See [bucket automation](../storage-bucket-automation.md) for complete examples.
+Object limits remain negotiated from the deployed gateway; this release retains
+the qualified 18 GiB production maximum.
