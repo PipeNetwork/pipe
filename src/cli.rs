@@ -1442,7 +1442,8 @@ async fn bucket_command(
                             reqwest::StatusCode::NOT_FOUND
                                 | reqwest::StatusCode::SERVICE_UNAVAILABLE
                         )
-                    }) => {}
+                    })
+                    && !platform_cli_auth(client)? => {}
             Err(error) => return Err(error),
         }
     }
@@ -1493,6 +1494,15 @@ async fn bucket_command(
             output::print(&json!({"items":[bucket]}), json_output)
         }
     }
+}
+
+fn platform_cli_auth(client: &ControlClient) -> Result<bool> {
+    if std::env::var_os("PIPE_CLI_TOKEN").is_some() {
+        return Ok(true);
+    }
+    Ok(client
+        .session()?
+        .is_some_and(|session| session.access_token.starts_with("pcli_a_")))
 }
 
 fn explain_s3_bucket_error(error: anyhow::Error, bucket: &str) -> anyhow::Error {
