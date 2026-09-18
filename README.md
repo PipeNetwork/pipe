@@ -587,11 +587,12 @@ pipe s3 rb my-bucket
 ```
 
 `pipe s3 setup` is an explicit action and creates the credential immediately;
-it does not ask for a second confirmation. It also saves the selected bucket and
-explicit prefix as the profile defaults, so a later `pipe s3 ls` uses that
-bucket without trying global bucket discovery. Read-only S3 commands can also
-create their short-lived read/list credential automatically. Destructive commands
-and payment submissions still require their normal confirmation.
+it does not ask for a second confirmation. It saves the selected bucket and
+explicit prefix as profile defaults for bare object locations. A logged-in
+profile can list every account-visible bucket with `pipe s3 ls`; object reads
+automatically create one short-lived account-wide read/list session when needed.
+Destructive commands and payment submissions still require their normal
+confirmation.
 
 If your login has read access, `pipe s3 setup --write --bucket my-bucket`
 opens browser authorization for the missing `storage.write` and
@@ -632,12 +633,13 @@ Rotation creates and stores a replacement before revoking the old key; a failed
 revocation is reported explicitly. `s3 credential import ACCESS_KEY_ID` securely
 prompts for an existing S3 secret, and `s3 credential use ACCESS_KEY_ID` selects a
 stored key. Configure the same endpoint, bucket and key to access existing
-PipeBox objects. No bucket or object migration is performed. If a read-only
-command such as `s3 ls`, `s3 head`, or `object list` has no local key, the CLI
-offers to create a seven-day `read/list` credential for the requested bucket,
-saves it in the OS keyring, and retries the original request once. This prompt
-never grants write access. Use `s3 setup --write` for uploads, deletes, bucket
-creation, or other mutations; `--no-input` prints the setup command instead.
+PipeBox objects. No bucket or object migration is performed. After login,
+`s3 ls` uses the account-scoped bucket inventory, and a read-only object command
+without a local S3 key creates a seven-day account-wide `read/list` session,
+saves it securely, and retries the original request once. No prompt or
+bucket-specific setup is required. This automatic session never grants write
+access. Use `s3 setup --write --bucket BUCKET` for uploads, deletes, bucket
+creation, or other mutations.
 
 `pipe config migrate --legacy-path FILE` creates a timestamped private backup
 and imports compatible local configuration fields. It discards legacy
@@ -662,11 +664,12 @@ pipe sync s3://my-bucket/backups ./restored
 
 `upload-file` and `download-file` are aliases for object put/get. Explicit
 locations accept `bucket/key` or `s3://bucket/key`. A bare filename uses the
-profile's bucket and prefix. `bucket list` and its `s3 ls` shortcut report the
-configured bucket after HEAD; `s3 ls s3://BUCKET/PREFIX` lists objects under a
-prefix. Pipe does not support global `ListBuckets` enumeration, so no-argument
-`s3 ls` cannot discover every bucket in an account. Use `object list` for the
-explicit form. `s3 cp` handles one file in either direction and directory
+profile's bucket and prefix. `bucket list` and no-argument `s3 ls` use the
+authenticated account's bucket inventory; `s3 ls s3://BUCKET/PREFIX` lists
+objects under a prefix. The gateway still does not expose the AWS global
+`ListBuckets` wire operation, so the CLI obtains this inventory from the
+control plane. Use `object list` for the explicit form. `s3 cp` handles one
+file in either direction and directory
 transfers with `--recursive`; `s3 sync` is the familiar spelling for the
 existing top-level `sync` workflow. A destination such as `s3://my-bucket/`
 uploads a file under its local filename; add a key to choose a different name.
@@ -674,9 +677,9 @@ uploads a file under its local filename; add a key to choose a different name.
 object under a prefix and uses the existing destructive confirmation.
 
 `pipe doctor` reports endpoint configuration, whether an active storage key is
-present, and whether its secret is available locally. The gateway currently has
-no global `ListBuckets` operation, so automatic setup always scopes a key to the
-configured or explicitly supplied bucket.
+present, and whether its secret is available locally. The gateway has no global
+`ListBuckets` operation; account-wide read/list access is issued through the
+authenticated control-plane session instead.
 
 Sync records local content digests and observed opaque remote ETags to skip
 unchanged files on later runs. It never deletes unrelated objects or local

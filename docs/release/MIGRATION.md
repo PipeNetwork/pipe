@@ -30,18 +30,19 @@ Existing storage spellings remain available: `bucket`, `object`, and `s3` also w
 S3 compatibility spellings are also available: `s3 ls`, `s3 cp`, `s3 sync`,
 `s3 rm`, `s3 mb`, `s3 rb`, and `s3 head`/`s3 stat`. Recursive copy and removal
 are explicit with `--recursive`; removal retains the normal confirmation and
-unknown-outcome handling. `s3 ls` without a location checks the configured
-profile bucket. Global `ListBuckets` enumeration is not part of the customer
-gateway contract; use `s3 ls s3://BUCKET/PREFIX` for object listing.
+unknown-outcome handling. `s3 ls` without a location lists the authenticated
+account's bucket inventory; use `s3 ls s3://BUCKET/PREFIX` for object listing.
+The gateway does not implement AWS's global `ListBuckets` wire operation, so
+the CLI obtains this inventory from the control plane.
 
-Storage onboarding is guided: `s3 ls`, `s3 head`, and object-list reads offer to
-create a temporary read/list credential when the selected profile has no local
-S3 key. The secret is stored in the OS keyring and the original read is retried
+Storage onboarding is automatic for reads: after login, `s3 ls` uses the
+account inventory, and `s3 head` plus object-list/read commands create a
+temporary account-wide read/list credential when the selected profile has no
+local S3 key. The secret is stored securely and the original read is retried
 once. Uploads and destructive operations never create write credentials
 silently; use `pipe s3 setup --write --bucket BUCKET`. `pipe storage init` is an
-alias for the setup workflow. With `--no-input`, the CLI reports the exact setup
-command. `pipe doctor` includes local endpoint and credential availability in
-its diagnostic result.
+alias for the setup workflow. `pipe doctor` includes local endpoint and
+credential availability in the diagnostic result.
 
 Existing named profiles retain their explicit endpoints. Ordinary command configuration resolves `--control-api-url`, `PIPE_CONTROL_API_URL`, the selected profile, then `https://api.pipedev.network/control-api`. Storage discovers its customer endpoint; the documented default is `https://gw-001.pipedev.network`. Use `--profile NAME` or `profile use NAME`; `--config FILE` / `PIPE_CLI_CONFIG` select the configuration file. Context changes never transfer ownership or combine infrastructure and platform billing balances.
 
