@@ -30,7 +30,38 @@ pub async fn credentials(client: &ControlClient) -> Result<Value> {
 /// control plane owns this inventory because the public S3 gateway intentionally
 /// does not implement the global ListBuckets wire operation.
 pub async fn storage_buckets(client: &ControlClient) -> Result<Value> {
-    client.get("/v1/customer/storage/buckets?limit=100").await
+    let mut items = Vec::new();
+    let mut after: Option<String> = None;
+    let mut pages = 0usize;
+    loop {
+        let path = match &after {
+            Some(cursor) => format!("/v1/customer/storage/buckets?limit=100&after={cursor}"),
+            None => "/v1/customer/storage/buckets?limit=100".to_owned(),
+        };
+        let value = client.get(&path).await?;
+        if value["available"].as_bool() == Some(false) {
+            return Ok(value);
+        }
+        let page = value["items"]
+            .as_array()
+            .ok_or_else(|| anyhow::anyhow!("storage bucket inventory omitted items"))?;
+        items.extend(page.iter().cloned());
+        let next = value["next_cursor"].as_str().map(str::to_owned);
+        if next.is_none() {
+            return Ok(serde_json::json!({
+                "available": true,
+                "items": items,
+                "next_cursor": null
+            }));
+        }
+        anyhow::ensure!(pages < 100, "storage bucket inventory exceeded 100 pages");
+        anyhow::ensure!(
+            next != after,
+            "storage bucket inventory repeated its cursor"
+        );
+        after = next;
+        pages += 1;
+    }
 }
 
 pub async fn create_credential(
