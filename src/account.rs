@@ -1,6 +1,7 @@
 use crate::auth::ControlClient;
 use anyhow::Result;
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 
 pub async fn account(client: &ControlClient) -> Result<Value> {
     client.get("/v1/customer/cli/account").await
@@ -30,6 +31,29 @@ pub async fn credentials(client: &ControlClient) -> Result<Value> {
 /// control plane owns this inventory because the public S3 gateway intentionally
 /// does not implement the global ListBuckets wire operation.
 pub async fn storage_buckets(client: &ControlClient) -> Result<Value> {
+    // The managed workspace is the canonical account inventory for new
+    // buckets. The compatibility inventory retains legacy S3 namespaces, so
+    // merge both views for users migrating from the storage-only CLI.
+    let managed = managed_storage_buckets(client).await;
+    let legacy = client.get("/v1/customer/cli/s3/buckets?limit=100").await;
+
+    match (managed, legacy) {
+        (Ok(managed), Ok(legacy)) => merge_bucket_inventories(&managed, &legacy),
+        (Ok(managed), Err(error)) if optional_inventory_error(&error) => Ok(managed),
+        (Err(error), Ok(legacy)) if optional_inventory_error(&error) => Ok(legacy),
+        (Err(managed), Err(legacy)) if optional_inventory_error(&legacy) => Err(managed),
+        // Legacy enumeration is additive. A scoped platform credential may
+        // be allowed to read managed buckets while the compatibility route is
+        // unavailable or outside its grant.
+        (Ok(managed), Err(_legacy)) => Ok(managed),
+        (Err(managed), Ok(_legacy)) => Err(managed.context("managed bucket inventory")),
+        (Err(managed), Err(legacy)) => Err(managed.context(format!(
+            "managed and legacy bucket inventories failed: {legacy}"
+        ))),
+    }
+}
+
+async fn managed_storage_buckets(client: &ControlClient) -> Result<Value> {
     let mut items = Vec::new();
     let mut after: Option<String> = None;
     let mut pages = 0usize;
@@ -62,6 +86,47 @@ pub async fn storage_buckets(client: &ControlClient) -> Result<Value> {
         after = next;
         pages += 1;
     }
+}
+
+fn optional_inventory_error(error: &anyhow::Error) -> bool {
+    error
+        .downcast_ref::<crate::error::ApiError>()
+        .is_some_and(|api| {
+            matches!(
+                api.status,
+                reqwest::StatusCode::NOT_FOUND | reqwest::StatusCode::SERVICE_UNAVAILABLE
+            )
+        })
+}
+
+fn merge_bucket_inventories(managed: &Value, legacy: &Value) -> Result<Value> {
+    let managed_available = managed["available"].as_bool().unwrap_or(false);
+    let legacy_available = legacy["available"].as_bool().unwrap_or(false);
+    if !managed_available && !legacy_available {
+        return Ok(json!({"available": false, "items": [], "next_cursor": null}));
+    }
+    let mut by_name = BTreeMap::<String, Value>::new();
+    for inventory in [managed, legacy] {
+        if inventory["available"].as_bool() == Some(false) {
+            continue;
+        }
+        let page = inventory["items"]
+            .as_array()
+            .ok_or_else(|| anyhow::anyhow!("bucket inventory omitted items"))?;
+        for item in page {
+            let name = item["name"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("bucket inventory item omitted name"))?;
+            by_name
+                .entry(name.to_owned())
+                .or_insert_with(|| item.clone());
+        }
+    }
+    Ok(json!({
+        "available": true,
+        "items": by_name.into_values().collect::<Vec<_>>(),
+        "next_cursor": null
+    }))
 }
 
 pub async fn create_credential(
@@ -131,4 +196,48 @@ pub async fn revoke_credential(client: &ControlClient, access_key_id: &str) -> R
 
 pub async fn endpoint(client: &ControlClient) -> Result<Value> {
     client.get("/v1/customer/cli/s3/endpoint").await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::merge_bucket_inventories;
+    use serde_json::{json, Value};
+
+    #[test]
+    fn bucket_inventory_merges_managed_and_legacy_namespaces() {
+        let merged = merge_bucket_inventories(
+            &json!({
+                "available": true,
+                "items": [
+                    {"id": "managed-id", "name": "pipe-bucket-new"},
+                    {"name": "shared"}
+                ]
+            }),
+            &json!({
+                "available": true,
+                "items": [{"name": "legacy"}, {"name": "shared"}]
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            merged["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|item| item["name"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["legacy", "pipe-bucket-new", "shared"]
+        );
+        assert_eq!(merged["items"][2]["id"], Value::Null);
+    }
+
+    #[test]
+    fn unavailable_managed_inventory_does_not_hide_legacy_buckets() {
+        let merged = merge_bucket_inventories(
+            &json!({"available": false, "items": []}),
+            &json!({"available": true, "items": [{"name": "legacy"}]}),
+        )
+        .unwrap();
+        assert_eq!(merged["items"][0]["name"], "legacy");
+    }
 }
