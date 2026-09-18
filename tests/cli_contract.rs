@@ -874,6 +874,16 @@ async fn executable_storage_setup_requests_missing_scopes_and_preserves_account(
             .mount(&server)
             .await;
     }
+    Mock::given(method("GET"))
+        .and(path("/v1/customer/storage/buckets"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "available": true,
+            "items": [{"name": "test"}],
+            "next_cursor": null
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
     for args in [
         vec!["s3", "mb", "s3://test/"],
         vec!["s3", "head", "s3://test/"],
