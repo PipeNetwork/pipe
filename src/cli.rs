@@ -1423,6 +1423,29 @@ async fn bucket_command(
         },
         BucketCommands::List => BucketCommands::List,
     };
+    if matches!(&command, BucketCommands::List) {
+        // The public S3 gateway deliberately does not implement the global
+        // ListBuckets wire operation. Resolve the account-owned inventory from
+        // the control plane instead, so a logged-in user can see every bucket
+        // without first choosing one or creating a bucket-scoped key.
+        match account::storage_buckets(client).await {
+            Ok(value) if value["available"].as_bool().unwrap_or(true) => {
+                return output::print(&value, json_output);
+            }
+            Ok(_) => {}
+            Err(error)
+                if error
+                    .downcast_ref::<crate::error::ApiError>()
+                    .is_some_and(|api| {
+                        matches!(
+                            api.status,
+                            reqwest::StatusCode::NOT_FOUND
+                                | reqwest::StatusCode::SERVICE_UNAVAILABLE
+                        )
+                    }) => {}
+            Err(error) => return Err(error),
+        }
+    }
     let list_bucket = if matches!(&command, BucketCommands::List) && profile.bucket.is_none() {
         if client.active_s3_access_key()?.is_some() {
             Some(active_s3_bucket(client).await?)
@@ -1932,7 +1955,7 @@ async fn s3_client(
     let (access, secret) = match configured {
         Some(pair) => pair,
         None if matches!(access_mode, S3Access::ReadOnly) => {
-            let args = automatic_setup_args(profile, bucket_hint)?;
+            let args = automatic_setup_args(profile, bucket_hint);
             setup_s3_credential(client, name, profile, args, false, true, None).await?;
             client
                 .active_s3_credential()?
@@ -1954,24 +1977,19 @@ enum S3Access {
     Write,
 }
 
-fn automatic_setup_args(profile: &Profile, bucket_hint: Option<&str>) -> Result<StorageSetupArgs> {
-    let bucket = bucket_hint
-        .map(str::to_owned)
-        .or_else(|| profile.bucket.clone())
-        .ok_or_else(|| {
-            anyhow!(
-                "no bucket is configured; use an explicit s3://BUCKET/ location or run 'pipe s3 setup --bucket BUCKET'"
-            )
-        })?;
-    Ok(StorageSetupArgs {
+fn automatic_setup_args(profile: &Profile, _bucket_hint: Option<&str>) -> StorageSetupArgs {
+    // Interactive reads use one short-lived wildcard read/list session. The
+    // server bounds that wildcard to the authenticated account; no bucket is
+    // required on the local profile and explicit write setup remains scoped.
+    StorageSetupArgs {
         no_browser: false,
         write: false,
-        bucket: Some(bucket),
+        bucket: None,
         prefix: profile.prefix.clone(),
         wallet: None,
         expires_in: 7 * 24 * 60 * 60,
         label: "pipe-cli-auto".into(),
-    })
+    }
 }
 
 fn write_credential_help(profile: &Profile, bucket_hint: Option<&str>) -> anyhow::Error {
@@ -2013,68 +2031,72 @@ async fn setup_s3_credential(
     );
     let bucket = args
         .bucket
-        .or_else(|| profile.bucket.clone())
-        .ok_or_else(|| {
-            anyhow!(
-                "no bucket is configured; pass '--bucket BUCKET' to pipe s3 setup or use an explicit s3://BUCKET/ location"
-            )
-        })?;
-    anyhow::ensure!(
-        (3..=63).contains(&bucket.len())
-            && bucket
-                .bytes()
-                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
-            && !bucket.starts_with('-')
-            && !bucket.ends_with('-'),
-        "bucket must be a valid S3 bucket name"
-    );
+        .or_else(|| (!automatic).then(|| profile.bucket.clone()).flatten());
+    if args.write && bucket.is_none() {
+        return Err(anyhow!(
+            "write access must be scoped; pass '--bucket BUCKET' to pipe s3 setup --write"
+        ));
+    }
+    if let Some(bucket) = bucket.as_deref() {
+        anyhow::ensure!(
+            (3..=63).contains(&bucket.len())
+                && bucket
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+                && !bucket.starts_with('-')
+                && !bucket.ends_with('-'),
+            "bucket must be a valid S3 bucket name"
+        );
+    }
     let explicit_prefix = args.prefix.is_some();
     let prefix = args
         .prefix
         .or_else(|| profile.prefix.clone())
         .unwrap_or_default();
-    if let Some(id) = bucket.strip_prefix("pipe-bucket-") {
-        let id = Uuid::parse_str(id).context("invalid managed bucket name")?;
-        let resource = client
-            .get(&format!("/v1/customer/storage/buckets/{id}"))
-            .await?;
-        anyhow::ensure!(
-            resource["name"] == bucket,
-            "managed bucket identity differs"
-        );
-        if let Some(wallet) = &args.wallet {
+    if let Some(bucket) = bucket.as_deref() {
+        if let Some(id) = bucket.strip_prefix("pipe-bucket-") {
+            let id = Uuid::parse_str(id).context("invalid managed bucket name")?;
+            let resource = client
+                .get(&format!("/v1/customer/storage/buckets/{id}"))
+                .await?;
             anyhow::ensure!(
-                resource["wallet"].as_str() == Some(wallet),
-                "the selected wallet is not this bucket's funding identity"
+                resource["name"] == bucket,
+                "managed bucket identity differs"
             );
-        }
-        // Managed team keys use live membership and the bucket's existing payer.
-        // A member need not own or import the organization's funding wallet.
-        client
-            .authorize_storage_key_management(args.no_browser)
+            if let Some(wallet) = &args.wallet {
+                anyhow::ensure!(
+                    resource["wallet"].as_str() == Some(wallet),
+                    "the selected wallet is not this bucket's funding identity"
+                );
+            }
+            // Managed team keys use live membership and the bucket's existing payer.
+            // A member need not own or import the organization's funding wallet.
+            client
+                .authorize_storage_key_management(args.no_browser)
+                .await?;
+            let value = crate::storage_workspace::setup_key(
+                client,
+                id,
+                &args.label,
+                &prefix,
+                args.write,
+                args.expires_in,
+            )
             .await?;
-        let value = crate::storage_workspace::setup_key(
-            client,
-            id,
-            &args.label,
-            &prefix,
-            args.write,
-            args.expires_in,
-        )
-        .await?;
-        if let Some(store) = store.take() {
-            save_s3_profile_defaults(
-                store,
-                name,
-                &bucket,
-                explicit_prefix.then_some(prefix.as_str()),
-            )?;
+            if let Some(store) = store.take() {
+                save_s3_profile_defaults(
+                    store,
+                    name,
+                    bucket,
+                    explicit_prefix.then_some(prefix.as_str()),
+                )?;
+            }
+            if automatic {
+                eprintln!("Managed bucket credential saved securely for profile '{name}'.");
+                return Ok(());
+            }
+            return output::print_credential(&value, json_output);
         }
-        if automatic {
-            eprintln!("Managed bucket credential saved securely for profile '{name}'.");
-            return Ok(());
-        }
-        return output::print_credential(&value, json_output);
     }
     if args.write {
         client.authorize_storage_writes(args.no_browser).await?;
@@ -2113,12 +2135,13 @@ async fn setup_s3_credential(
         .checked_add(args.expires_in)
         .ok_or_else(|| anyhow!("credential expiry overflow"))?;
     let wallet_for_error = wallet.clone();
+    let bucket_scope = bucket.clone().into_iter().collect::<Vec<_>>();
     let value = if args.write {
         account::create_credential(
             client,
             &wallet,
             &args.label,
-            std::slice::from_ref(&bucket),
+            &bucket_scope,
             &prefix,
             &permissions,
             Some(expires_at),
@@ -2129,7 +2152,7 @@ async fn setup_s3_credential(
             client,
             &wallet,
             &args.label,
-            std::slice::from_ref(&bucket),
+            &bucket_scope,
             &prefix,
             Some(expires_at),
         )
@@ -2141,16 +2164,18 @@ async fn setup_s3_credential(
     })?;
     store_credential(client, &value)?;
     if let Some(store) = store.take() {
-        save_s3_profile_defaults(
-            store,
-            name,
-            &bucket,
-            explicit_prefix.then_some(prefix.as_str()),
-        )?;
+        if let Some(bucket) = bucket.as_deref() {
+            save_s3_profile_defaults(
+                store,
+                name,
+                bucket,
+                explicit_prefix.then_some(prefix.as_str()),
+            )?;
+        }
     }
     if automatic {
         eprintln!(
-            "Storage credential saved securely for profile '{name}' ({} access, expires in {}).",
+            "Storage credential saved securely for profile '{name}' ({} access across the account, expires in {}).",
             if args.write {
                 "read/list/write"
             } else {
@@ -2709,6 +2734,15 @@ mod tests {
             }]
         });
         assert!(specific_s3_bucket(&broad, "LTTEST").is_err());
+    }
+
+    #[test]
+    fn automatic_reads_use_an_account_wide_read_scope() {
+        let profile = Profile::new("https://example.test");
+        let args = automatic_setup_args(&profile, Some("existing-bucket"));
+        assert!(!args.write);
+        assert!(args.bucket.is_none());
+        assert_eq!(args.label, "pipe-cli-auto");
     }
 
     #[test]
