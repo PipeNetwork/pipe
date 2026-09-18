@@ -46,11 +46,7 @@ impl SecretStore {
                     .unwrap_or_else(|| PathBuf::from("."))
                     .join("pipe")
             });
-        Self::at(
-            root,
-            profile,
-            std::env::var_os("PIPE_DISABLE_KEYRING").is_none(),
-        )
+        Self::at(root, profile, native_keyring_enabled())
     }
     pub fn at(root: PathBuf, profile: String, native: bool) -> Self {
         let namespace = crate::sigv4::sha256_hex(profile.as_bytes());
@@ -453,6 +449,27 @@ fn private_open(path: &Path) -> Result<File> {
         options.mode(0o600);
     }
     Ok(options.open(path)?)
+}
+
+fn native_keyring_enabled() -> bool {
+    if std::env::var_os("PIPE_DISABLE_KEYRING").is_some() {
+        return false;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        // Secret Service cannot start on a plain SSH/headless session. Skip
+        // the backend there and use the private local store directly instead
+        // of emitting a DBus/X11 autolaunch error before every login.
+        if std::env::var_os("SSH_CONNECTION").is_some()
+            || std::env::var_os("SSH_TTY").is_some()
+            || (std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_none()
+                && std::env::var_os("DISPLAY").is_none()
+                && std::env::var_os("WAYLAND_DISPLAY").is_none())
+        {
+            return false;
+        }
+    }
+    true
 }
 
 /// Create a private file without replacing a key another process may already

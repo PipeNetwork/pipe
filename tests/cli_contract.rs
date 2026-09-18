@@ -344,14 +344,19 @@ async fn executable_headless_login_uses_private_machine_key_without_password() {
         .await;
     let output = Command::new(env!("CARGO_BIN_EXE_pipe"))
         .current_dir(root.path())
-        .env("PIPE_DISABLE_KEYRING", "1")
+        .env_remove("PIPE_DISABLE_KEYRING")
         .env_remove("PIPE_CLI_SECRET_PASSWORD")
+        .env_remove("DBUS_SESSION_BUS_ADDRESS")
+        .env_remove("DISPLAY")
+        .env_remove("WAYLAND_DISPLAY")
+        .env_remove("SSH_CONNECTION")
+        .env_remove("SSH_TTY")
         .env("PIPE_CLI_STATE_DIR", root.path().join("state"))
         .env("XDG_CONFIG_HOME", root.path())
         .env("APPDATA", root.path())
         .arg("--config")
         .arg(root.path().join("config.json"))
-        .args(["--json", "auth", "login", "--no-browser"])
+        .args(["--json", "auth", "login"])
         .output()
         .unwrap();
     assert!(
