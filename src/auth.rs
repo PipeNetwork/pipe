@@ -407,9 +407,84 @@ impl ControlClient {
     pub(crate) async fn authorize_storage_writes(&self, no_browser: bool) -> Result<()> {
         self.authorize_storage_scopes(no_browser, false).await
     }
+    /// Model registry mutations use the storage scopes already on the control-plane session.
+    pub(crate) async fn authorize_model_writes(&self, no_browser: bool) -> Result<()> {
+        self.ensure_scopes(
+            &["storage.read", "storage.write"],
+            "model upload",
+            "Pipe CLI model upload",
+            no_browser,
+        )
+        .await
+    }
     pub(crate) async fn authorize_storage_key_management(&self, no_browser: bool) -> Result<()> {
         self.authorize_storage_scopes(no_browser, true).await
     }
+
+    pub(crate) async fn authorize_compute_writes(
+        &self,
+        billing: bool,
+        no_browser: bool,
+    ) -> Result<()> {
+        if std::env::var_os("PIPE_CLI_TOKEN").is_some() {
+            return Ok(()); // The server validates the automation grant.
+        }
+        let session = self
+            .session()?
+            .ok_or_else(|| anyhow!("not logged in; run 'pipe auth login'"))?;
+        if !session.access_token.starts_with("pcli_a_") {
+            return Ok(()); // Preserve legacy wallet authentication.
+        }
+        let scope = session.scope.as_deref().unwrap_or_default();
+        let required = if billing {
+            ["compute.write", "billing.write"]
+        } else {
+            ["compute.write", ""]
+        };
+        let required: Vec<&str> = required
+            .into_iter()
+            .filter(|scope| !scope.is_empty())
+            .collect();
+        let missing: Vec<&str> = required
+            .iter()
+            .copied()
+            .filter(|required| {
+                !scope
+                    .split_ascii_whitespace()
+                    .any(|current| current == *required)
+            })
+            .collect();
+        if missing.is_empty() {
+            return Ok(());
+        }
+        let expanded =
+            crate::wallet_auth::normalized_scope(&format!("{scope} {}", missing.join(" ")));
+        if crate::output::no_input() {
+            return Err(crate::error::ApiError {
+                status: StatusCode::FORBIDDEN,
+                code: "insufficient_scope".into(),
+                message: format!(
+                    "VM write access needs browser approval; run 'pipe auth login --scope \"{expanded}\"', then retry"
+                ),
+                request_id: None,
+            }
+            .into());
+        }
+        eprintln!(
+            "Approve {} in your browser to continue.",
+            missing.join(" and ")
+        );
+        crate::device::login_for_account(
+            self,
+            "Pipe CLI VM write access",
+            &expanded,
+            no_browser,
+            Some(&session),
+        )
+        .await?;
+        Ok(())
+    }
+
     async fn authorize_storage_scopes(&self, no_browser: bool, key_management: bool) -> Result<()> {
         if std::env::var_os("PIPE_CLI_TOKEN").is_some() {
             return Ok(()); // The server validates the automation grant.
@@ -461,6 +536,63 @@ impl ControlClient {
             Some(&session),
         )
         .await?;
+        Ok(())
+    }
+
+    async fn ensure_scopes(
+        &self,
+        required: &[&str],
+        action: &str,
+        title: &str,
+        no_browser: bool,
+    ) -> Result<()> {
+        if std::env::var_os("PIPE_CLI_TOKEN").is_some() {
+            return Ok(());
+        }
+        let session = self
+            .session()?
+            .ok_or_else(|| anyhow!("not logged in; run 'pipe auth login'"))?;
+        if !session.access_token.starts_with("pcli_a_") {
+            return Ok(());
+        }
+        let scope = session.scope.as_deref().unwrap_or_default();
+        self.finish_scope_approval(&session, scope, required, action, title, no_browser)
+            .await
+    }
+
+    async fn finish_scope_approval(
+        &self,
+        session: &Session,
+        scope: &str,
+        required: &[&str],
+        action: &str,
+        title: &str,
+        no_browser: bool,
+    ) -> Result<()> {
+        if required.iter().all(|required| {
+            scope
+                .split_ascii_whitespace()
+                .any(|current| current == *required)
+        }) {
+            return Ok(());
+        }
+        let expanded =
+            crate::wallet_auth::normalized_scope(&format!("{scope} {}", required.join(" ")));
+        if crate::output::no_input() {
+            return Err(crate::error::ApiError {
+                status: StatusCode::FORBIDDEN,
+                code: "insufficient_scope".into(),
+                message: format!(
+                    "{action} needs browser approval; run 'pipe auth login --scope \"{expanded}\"', then retry"
+                ),
+                request_id: None,
+            }
+            .into());
+        }
+        eprintln!(
+            "Approve {action} in your browser to continue. Use the same Pipe account as this terminal."
+        );
+        crate::device::login_for_account(self, title, &expanded, no_browser, Some(session)).await?;
         Ok(())
     }
     /// Save the active S3 credential as one keyring item. Older profiles that

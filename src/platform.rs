@@ -18,6 +18,7 @@ pub use crate::compute::Commands as ComputeCommands;
 pub use crate::durable::Commands as DurableCommands;
 pub use crate::hosting::Commands as HostingCommands;
 pub use crate::kv::Commands as KvCommands;
+pub use crate::models::Commands as ModelCommands;
 pub async fn compute(c: &ControlClient, cmd: ComputeCommands, j: bool) -> Result<()> {
     crate::compute::run(c, cmd, j).await
 }
@@ -29,6 +30,9 @@ pub async fn durable(c: &ControlClient, cmd: DurableCommands, j: bool) -> Result
 }
 pub async fn hosting(c: &ControlClient, cmd: HostingCommands, j: bool) -> Result<()> {
     crate::hosting::run(c, cmd, j).await
+}
+pub async fn models(c: &ControlClient, cmd: ModelCommands, j: bool) -> Result<()> {
+    crate::models::run(c, cmd, j).await
 }
 
 #[derive(Subcommand, Debug)]

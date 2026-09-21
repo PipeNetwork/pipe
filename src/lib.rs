@@ -21,6 +21,7 @@ mod hosting_state;
 mod keyring;
 mod kv;
 mod kv_state;
+mod models;
 mod output;
 mod payments;
 mod platform;

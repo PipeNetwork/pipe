@@ -11,6 +11,9 @@ static SHOW_SECRET: AtomicBool = AtomicBool::new(false);
 pub fn is_jsonl() -> bool {
     MODE.load(Ordering::Relaxed) == 2
 }
+pub fn is_json() -> bool {
+    MODE.load(Ordering::Relaxed) == 1
+}
 pub fn no_input() -> bool {
     NO_INPUT.load(Ordering::Relaxed)
 }

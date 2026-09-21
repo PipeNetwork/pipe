@@ -88,6 +88,22 @@ pub enum Commands {
         #[arg(long)]
         device_label: Option<String>,
     },
+    /// Configure the default profile, sign in, and discover the storage endpoint.
+    Init {
+        #[arg(
+            long,
+            default_value = "account.read billing.read billing.write storage.read usage.read compute.read compute.write"
+        )]
+        scope: String,
+        #[arg(long)]
+        no_browser: bool,
+        #[arg(long)]
+        wallet: Option<String>,
+        #[arg(long, requires = "wallet")]
+        legacy_wallet: bool,
+        #[arg(long)]
+        device_label: Option<String>,
+    },
     /// Shortcut for `auth logout`.
     Logout,
     /// Show the authenticated CLI context.
@@ -133,6 +149,11 @@ pub enum Commands {
         #[command(subcommand)]
         command: crate::platform::ComputeCommands,
     },
+    /// Short, name-oriented VM workflows.
+    Vm {
+        #[command(subcommand)]
+        command: crate::compute::VmCommands,
+    },
     /// Customer KV management.
     Kv {
         #[command(subcommand)]
@@ -146,6 +167,11 @@ pub enum Commands {
     Hosting {
         #[command(subcommand)]
         command: crate::platform::HostingCommands,
+    },
+    /// Upload and publish models in your Models workspace.
+    Models {
+        #[command(subcommand)]
+        command: crate::platform::ModelCommands,
     },
     Storage {
         #[command(subcommand)]
@@ -557,6 +583,9 @@ pub enum ObjectCommands {
 pub async fn run(mut cli: Cli) -> Result<()> {
     output::configure(cli.output, cli.no_input, cli.show_secret);
     cli.json |= matches!(cli.output, Some(output::Mode::Json | output::Mode::Jsonl));
+    if let Commands::Vm { command } = &cli.command {
+        crate::compute::preflight_vm(command)?;
+    }
     if destructive(&cli.command) && !cli.yes {
         output::require_input()?;
         eprint!("This command deletes a resource or submits a payment. Type yes to continue: ");
@@ -591,9 +620,11 @@ pub async fn run(mut cli: Cli) -> Result<()> {
         }
         Commands::Api { command } => crate::platform::api(&client, command, cli.json).await,
         Commands::Compute { command } => crate::platform::compute(&client, command, cli.json).await,
+        Commands::Vm { command } => crate::compute::run_vm(&client, command, cli.json).await,
         Commands::Kv { command } => crate::platform::kv(&client, command, cli.json).await,
         Commands::Durable { command } => crate::platform::durable(&client, command, cli.json).await,
         Commands::Hosting { command } => crate::platform::hosting(&client, command, cli.json).await,
+        Commands::Models { command } => crate::platform::models(&client, command, cli.json).await,
         Commands::Storage { command } => match command {
             StorageCommands::Workspace(command) => {
                 crate::storage_workspace::run(&client, command, cli.json, &mut store, &name).await
@@ -631,6 +662,28 @@ pub async fn run(mut cli: Cli) -> Result<()> {
         } => {
             auth_command(
                 &client,
+                AuthCommands::Login {
+                    scope,
+                    no_browser,
+                    wallet,
+                    legacy_wallet,
+                    device_label,
+                },
+                cli.json,
+            )
+            .await
+        }
+        Commands::Init {
+            scope,
+            no_browser,
+            wallet,
+            legacy_wallet,
+            device_label,
+        } => {
+            init_command(
+                &client,
+                &mut store,
+                &name,
                 AuthCommands::Login {
                     scope,
                     no_browser,
@@ -816,27 +869,17 @@ async fn auth_command(
             scope,
             no_browser,
         } => {
-            let result = if let Some(wallet) = wallet {
-                if legacy_wallet {
-                    client.login(Some(&wallet), device_label.as_deref()).await?
-                } else {
-                    crate::wallet_auth::login(
-                        client,
-                        &wallet,
-                        device_label.as_deref().unwrap_or("Pipe CLI"),
-                        &scope,
-                    )
-                    .await?
-                }
-            } else {
-                crate::device::login(
-                    client,
-                    device_label.as_deref().unwrap_or("Pipe CLI"),
-                    &scope,
+            let result = login_value(
+                client,
+                AuthCommands::Login {
+                    wallet,
+                    legacy_wallet,
+                    device_label,
+                    scope,
                     no_browser,
-                )
-                .await?
-            };
+                },
+            )
+            .await?;
             output::print(&result, json_output)
         }
         AuthCommands::Logout => output::print(&client.logout().await?, json_output),
@@ -875,6 +918,72 @@ async fn auth_command(
             output::print(&value, json_output)
         }
     }
+}
+
+async fn login_value(client: &ControlClient, command: AuthCommands) -> Result<Value> {
+    let AuthCommands::Login {
+        wallet,
+        legacy_wallet,
+        device_label,
+        scope,
+        no_browser,
+    } = command
+    else {
+        unreachable!("login_value only accepts AuthCommands::Login")
+    };
+    if let Some(wallet) = wallet {
+        if legacy_wallet {
+            return client.login(Some(&wallet), device_label.as_deref()).await;
+        }
+        return crate::wallet_auth::login(
+            client,
+            &wallet,
+            device_label.as_deref().unwrap_or("Pipe CLI"),
+            &scope,
+        )
+        .await;
+    }
+    crate::device::login(
+        client,
+        device_label.as_deref().unwrap_or("Pipe CLI"),
+        &scope,
+        no_browser,
+    )
+    .await
+}
+
+async fn init_command(
+    client: &ControlClient,
+    store: &mut ConfigStore,
+    profile_name: &str,
+    login: AuthCommands,
+    json_output: bool,
+) -> Result<()> {
+    let login_result = login_value(client, login).await?;
+    let storage = account::endpoint(client).await?;
+    let profile = store
+        .file
+        .profiles
+        .get_mut(profile_name)
+        .ok_or_else(|| anyhow!("profile '{profile_name}' does not exist"))?;
+    profile.control_api_url = client.profile.control_api_url.clone();
+    if let Some(endpoint) = storage.get("endpoint").and_then(Value::as_str) {
+        profile.s3_endpoint = Some(endpoint.to_owned());
+    }
+    if let Some(region) = storage.get("region").and_then(Value::as_str) {
+        profile.region = region.to_owned();
+    }
+    profile.validate()?;
+    store.save()?;
+    output::print(
+        &json!({
+            "initialized": true,
+            "profile": profile_name,
+            "login": login_result,
+            "storage": storage,
+        }),
+        json_output,
+    )
 }
 
 async fn payment_command(
@@ -2573,6 +2682,9 @@ fn destructive(command: &Commands) -> bool {
     }
     if let Commands::Compute { command } = command {
         return crate::compute::needs_confirmation(command);
+    }
+    if let Commands::Vm { command } = command {
+        return crate::compute::vm_needs_confirmation(command);
     }
     matches!(
         command,

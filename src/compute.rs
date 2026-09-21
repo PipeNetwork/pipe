@@ -8,7 +8,11 @@ use anyhow::{anyhow, ensure, Context, Result};
 use clap::{Args, Subcommand};
 use pipe_api::compute::{Action, Billing, CreateVm, Mutation, Operation, Request};
 use serde_json::{json, Value};
-use std::{collections::HashSet, path::PathBuf, time::Duration};
+use std::{
+    collections::HashSet,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 use uuid::Uuid;
 
 #[derive(Args, Debug, Clone, Default)]
@@ -27,6 +31,39 @@ pub struct Submit {
     #[command(flatten)]
     pub wait: Wait,
 }
+
+#[derive(Args, Debug)]
+pub struct VmSubmit {
+    /// Reuse only with the identical request and account context.
+    #[arg(long)]
+    pub request_id: Option<Uuid>,
+    /// Stop waiting after this many seconds.
+    #[arg(long, default_value_t = 300, value_parser = clap::value_parser!(u64).range(1..=86400))]
+    pub timeout: u64,
+    /// Return after the request is accepted instead of waiting for completion.
+    #[arg(long)]
+    pub no_wait: bool,
+    /// Kept as a hidden compatibility alias; short VM commands wait by default.
+    #[arg(long, hide = true)]
+    pub wait: bool,
+}
+
+impl VmSubmit {
+    fn into_submit(self) -> Result<Submit> {
+        ensure!(
+            !(self.wait && self.no_wait),
+            "choose either --wait or --no-wait"
+        );
+        Ok(Submit {
+            request_id: self.request_id,
+            wait: Wait {
+                wait: !self.no_wait,
+                timeout: self.timeout,
+            },
+        })
+    }
+}
+
 #[derive(Subcommand, Debug)]
 pub enum Commands {
     Projects,
@@ -63,6 +100,103 @@ pub enum Commands {
         request_id: Uuid,
         #[command(flatten)]
         wait: Wait,
+    },
+}
+
+/// Short, name-oriented VM commands for the common customer workflow.
+#[derive(Subcommand, Debug)]
+pub enum VmCommands {
+    /// List owned VMs.
+    List {
+        #[arg(long, default_value_t = 50, value_parser = clap::value_parser!(u32).range(1..=100))]
+        limit: u32,
+        #[arg(long)]
+        cursor: Option<Uuid>,
+        /// Follow up to 1000 pages.
+        #[arg(long)]
+        all: bool,
+        /// Include VMs whose desired or observed state is deleted.
+        #[arg(long)]
+        include_deleted: bool,
+    },
+    /// Show one VM. Accepts its UUID or exact name.
+    Get { selector: String },
+    /// Create a VM with a human-readable name.
+    Create {
+        name: String,
+        #[arg(long)]
+        project: Option<Uuid>,
+        #[arg(long)]
+        image: Option<String>,
+        #[arg(long)]
+        flavor: Option<String>,
+        /// Add a public key; defaults to the first local SSH key pair.
+        #[arg(long)]
+        ssh_key: Vec<PathBuf>,
+        #[arg(long)]
+        price_version: Option<String>,
+        #[arg(long, action=clap::ArgAction::Set)]
+        auto_renew: Option<bool>,
+        #[command(flatten)]
+        submit: VmSubmit,
+    },
+    /// Start a VM by UUID or exact name.
+    Start {
+        selector: String,
+        #[command(flatten)]
+        submit: VmSubmit,
+    },
+    /// Stop a VM by UUID or exact name.
+    Stop {
+        selector: String,
+        #[arg(long)]
+        force: bool,
+        #[command(flatten)]
+        submit: VmSubmit,
+    },
+    /// Reboot a VM by UUID or exact name.
+    Reboot {
+        selector: String,
+        #[arg(long)]
+        force: bool,
+        #[command(flatten)]
+        submit: VmSubmit,
+    },
+    /// Delete a VM by UUID or exact name.
+    Delete {
+        selector: String,
+        #[command(flatten)]
+        submit: VmSubmit,
+    },
+    /// Open an interactive SSH session, waiting for the VM to become ready.
+    Connect {
+        /// VM UUID or exact VM name.
+        selector: String,
+        #[arg(long)]
+        identity_file: Option<PathBuf>,
+        /// Execute this command remotely instead of opening an interactive shell.
+        #[arg(long)]
+        command: Option<String>,
+        /// Stop waiting after this many seconds.
+        #[arg(long, default_value_t = 300, value_parser = clap::value_parser!(u64).range(1..=86400))]
+        timeout: u64,
+        /// Fail immediately when SSH is not ready.
+        #[arg(long)]
+        no_wait: bool,
+    },
+    /// Execute one remote command, waiting for the VM to become ready.
+    Exec {
+        /// VM UUID or exact VM name.
+        selector: String,
+        command: String,
+        #[arg(long)]
+        identity_file: Option<PathBuf>,
+        /// Stop waiting after this many seconds.
+        #[arg(long, default_value_t = 300, value_parser = clap::value_parser!(u64).range(1..=86400))]
+        timeout: u64,
+        /// Fail immediately when SSH is not ready.
+        #[arg(long)]
+        no_wait: bool,
     },
 }
 #[derive(Subcommand, Debug)]
@@ -147,6 +281,30 @@ pub fn needs_confirmation(cmd: &Commands) -> bool {
             }
     )
 }
+
+pub fn vm_needs_confirmation(cmd: &VmCommands) -> bool {
+    matches!(
+        cmd,
+        VmCommands::Create { .. }
+            | VmCommands::Stop { .. }
+            | VmCommands::Reboot { .. }
+            | VmCommands::Delete { .. }
+    )
+}
+
+pub fn preflight_vm(cmd: &VmCommands) -> Result<()> {
+    if let VmCommands::Create { ssh_key, .. } = cmd {
+        if ssh_key.is_empty() {
+            default_public_identity_file().ok_or_else(|| {
+                anyhow!(
+                    "no default SSH key pair found; supply --ssh-key PATH or create a key pair in ~/.ssh"
+                )
+            })?;
+        }
+    }
+    Ok(())
+}
+
 fn validate_request(r: &Request) -> Result<()> {
     let (template, method, op) = platform::operation(&r.operation_id)?;
     ensure!(
@@ -507,6 +665,417 @@ pub async fn run(c: &ControlClient, cmd: Commands, j: bool) -> Result<()> {
     platform::validate_response(id, "200", &value)?;
     output::print(&value, j)
 }
+
+pub async fn run_vm(c: &ControlClient, cmd: VmCommands, j: bool) -> Result<()> {
+    match &cmd {
+        VmCommands::Create { .. } => {
+            c.authorize_compute_writes(true, false).await?;
+            require_vm_scopes(c, &["compute.write", "billing.write"], "create a VM").await?
+        }
+        VmCommands::Start { .. }
+        | VmCommands::Stop { .. }
+        | VmCommands::Reboot { .. }
+        | VmCommands::Delete { .. } => {
+            c.authorize_compute_writes(false, false).await?;
+            require_vm_scopes(c, &["compute.write"], "change VM state").await?
+        }
+        VmCommands::List { .. }
+        | VmCommands::Get { .. }
+        | VmCommands::Connect { .. }
+        | VmCommands::Exec { .. } => {}
+    }
+    match cmd {
+        VmCommands::List {
+            limit,
+            cursor,
+            all,
+            include_deleted,
+        } => list_vm(c, limit, cursor, all, include_deleted, j).await,
+        VmCommands::Get { selector } => {
+            let id = resolve_vm_id(c, &selector).await?;
+            let value = get_vm(c, id).await?;
+            output::print(&value, j)
+        }
+        VmCommands::Create {
+            name,
+            project,
+            image,
+            flavor,
+            mut ssh_key,
+            price_version,
+            auto_renew,
+            submit,
+        } => {
+            let submit = submit.into_submit()?;
+            if ssh_key.is_empty() {
+                ssh_key.push(default_public_identity_file().context(
+                    "no default SSH key pair found; supply --ssh-key PATH or create a key pair in ~/.ssh",
+                )?);
+            }
+            let project = match project {
+                Some(project) => project,
+                None => default_project(c).await?,
+            };
+            let image = match image {
+                Some(image) => image,
+                None => default_image(c).await?,
+            };
+            let flavor = match flavor {
+                Some(flavor) => flavor,
+                None => default_flavor(c).await?,
+            };
+            // The legacy dev flavor has no billing contract. Paid personal
+            // plans require both the current price version and an explicit
+            // renewal choice; default renewal off so a first VM never opts a
+            // customer into recurring charges without saying so.
+            let discovered_price_version =
+                if flavor != LEGACY_PILOT_FLAVOR && price_version.is_none() {
+                    Some(default_price_version(c).await?)
+                } else {
+                    None
+                };
+            let (price_version, auto_renew) =
+                choose_create_terms(&flavor, price_version, auto_renew, discovered_price_version)?;
+            run(
+                c,
+                Commands::Vms {
+                    command: Vms::Create {
+                        project,
+                        name,
+                        image,
+                        flavor,
+                        ssh_key,
+                        price_version,
+                        auto_renew,
+                        submit,
+                    },
+                },
+                j,
+            )
+            .await
+        }
+        VmCommands::Start { selector, submit } => {
+            let submit = submit.into_submit()?;
+            let id = resolve_vm_id(c, &selector).await?;
+            run(
+                c,
+                Commands::Vms {
+                    command: Vms::Start { id, submit },
+                },
+                j,
+            )
+            .await
+        }
+        VmCommands::Stop {
+            selector,
+            force,
+            submit,
+        } => {
+            let submit = submit.into_submit()?;
+            let id = resolve_vm_id(c, &selector).await?;
+            run(
+                c,
+                Commands::Vms {
+                    command: Vms::Stop { id, force, submit },
+                },
+                j,
+            )
+            .await
+        }
+        VmCommands::Reboot {
+            selector,
+            force,
+            submit,
+        } => {
+            let submit = submit.into_submit()?;
+            let id = resolve_vm_id(c, &selector).await?;
+            run(
+                c,
+                Commands::Vms {
+                    command: Vms::Reboot { id, force, submit },
+                },
+                j,
+            )
+            .await
+        }
+        VmCommands::Delete { selector, submit } => {
+            let submit = submit.into_submit()?;
+            let id = resolve_vm_id(c, &selector).await?;
+            run(
+                c,
+                Commands::Vms {
+                    command: Vms::Delete { id, submit },
+                },
+                j,
+            )
+            .await
+        }
+        VmCommands::Connect {
+            selector,
+            identity_file,
+            command,
+            timeout,
+            no_wait,
+        } => {
+            ensure!(!j, "SSH streams remote output; select --output table");
+            if command.is_none() {
+                output::require_input()?;
+            }
+            let id = resolve_vm_id(c, &selector).await?;
+            if !no_wait {
+                wait_for_ssh(c, id, timeout).await?;
+            }
+            ssh(c, id, identity_file, command, false).await
+        }
+        VmCommands::Exec {
+            selector,
+            command,
+            identity_file,
+            timeout,
+            no_wait,
+        } => {
+            ensure!(!j, "SSH streams remote output; select --output table");
+            let id = resolve_vm_id(c, &selector).await?;
+            if !no_wait {
+                wait_for_ssh(c, id, timeout).await?;
+            }
+            ssh(c, id, identity_file, Some(command), false).await
+        }
+    }
+}
+
+async fn require_vm_scopes(c: &ControlClient, required: &[&str], action: &str) -> Result<()> {
+    let value = c.get("/v1/cli/context").await?;
+    platform::validate_response("platformCliContext", "200", &value)?;
+    let scopes = value["principal"]["scopes"]
+        .as_array()
+        .context("authenticated context is missing scopes")?;
+    let missing: Vec<&str> = required
+        .iter()
+        .copied()
+        .filter(|required| !scopes.iter().any(|scope| scope.as_str() == Some(required)))
+        .collect();
+    ensure!(
+        missing.is_empty(),
+        "cannot {action}: active session lacks {}. Run `pipe init` to authorize write access, then retry",
+        missing.join(" and ")
+    );
+    Ok(())
+}
+
+async fn get_vm(c: &ControlClient, id: Uuid) -> Result<Value> {
+    let value = c.get(&format!("/v1/compute/vms/{id}")).await?;
+    platform::validate_response("getComputeVm", "200", &value)?;
+    ensure!(value["vm_id"] == json!(id), "VM identity mismatch");
+    Ok(value)
+}
+
+async fn resolve_vm_id(c: &ControlClient, selector: &str) -> Result<Uuid> {
+    if let Ok(id) = Uuid::parse_str(selector) {
+        return Ok(id);
+    }
+    ensure!(
+        !selector.trim().is_empty() && selector.len() <= 128,
+        "VM name must contain 1..128 characters"
+    );
+
+    let mut cursor: Option<Uuid> = None;
+    let mut seen = HashSet::new();
+    let mut matches = Vec::new();
+    for _ in 0..1000 {
+        let mut path = "/v1/compute/vms?limit=100".to_owned();
+        if let Some(cursor) = cursor {
+            path.push_str(&format!("&cursor={cursor}"));
+        }
+        let page = c.get(&path).await?;
+        platform::validate_response("listComputeVms", "200", &page)?;
+        for vm in page["vms"].as_array().context("missing VM list")? {
+            if vm["name"].as_str() == Some(selector) {
+                let id = vm["vm_id"]
+                    .as_str()
+                    .context("VM list entry is missing vm_id")?
+                    .parse::<Uuid>()?;
+                matches.push(id);
+            }
+        }
+        cursor = serde_json::from_value(page["next_cursor"].clone())?;
+        let Some(next) = cursor else { break };
+        ensure!(seen.insert(next), "server repeated pagination cursor");
+    }
+    match matches.as_slice() {
+        [id] => Ok(*id),
+        [] => Err(anyhow!(
+            "VM '{selector}' was not found; run 'pipe vm list' to see available VMs"
+        )),
+        _ => Err(anyhow!(
+            "VM name '{selector}' is ambiguous; use its UUID from 'pipe vm list'"
+        )),
+    }
+}
+
+async fn default_project(c: &ControlClient) -> Result<Uuid> {
+    let value = c.get("/v1/compute/projects").await?;
+    platform::validate_response("listComputeProjects", "200", &value)?;
+    let projects = value["projects"]
+        .as_array()
+        .context("missing project list")?;
+    match projects.as_slice() {
+        [project] => project["project_id"]
+            .as_str()
+            .context("project is missing project_id")?
+            .parse()
+            .context("project_id is not a UUID"),
+        [] => Err(anyhow!(
+            "no eligible compute project was found; use --project PROJECT_UUID"
+        )),
+        _ => Err(anyhow!(
+            "multiple compute projects are available; use --project PROJECT_UUID"
+        )),
+    }
+}
+
+async fn default_image(c: &ControlClient) -> Result<String> {
+    let value = c.get("/v1/compute/images").await?;
+    platform::validate_response("listComputeImages", "200", &value)?;
+    let images = value["images"].as_array().context("missing image list")?;
+    match images.as_slice() {
+        [image] => image["id"]
+            .as_str()
+            .map(str::to_owned)
+            .context("image is missing id"),
+        [] => Err(anyhow!(
+            "no eligible compute image was found; use --image IMAGE_ID"
+        )),
+        _ => Err(anyhow!(
+            "multiple compute images are available; use --image IMAGE_ID"
+        )),
+    }
+}
+
+async fn default_flavor(c: &ControlClient) -> Result<String> {
+    let value = c.get("/v1/compute/flavors").await?;
+    platform::validate_response("listComputeFlavors", "200", &value)?;
+    let flavors = value["flavors"].as_array().context("missing flavor list")?;
+    choose_default_flavor(flavors)
+}
+
+async fn default_price_version(c: &ControlClient) -> Result<String> {
+    let value = c.get("/v1/compute/pricing").await?;
+    platform::validate_response("getComputePricing", "200", &value)?;
+    choose_default_price_version(&value)
+}
+
+const LEGACY_PILOT_FLAVOR: &str = "dev-4";
+
+fn choose_create_terms(
+    flavor: &str,
+    price_version: Option<String>,
+    auto_renew: Option<bool>,
+    discovered_price_version: Option<String>,
+) -> Result<(Option<String>, Option<bool>)> {
+    if flavor == LEGACY_PILOT_FLAVOR {
+        return Ok((price_version, auto_renew));
+    }
+    Ok((
+        Some(price_version.or(discovered_price_version).context(
+            "current compute pricing has no version; supply --price-version PRICE_VERSION",
+        )?),
+        Some(auto_renew.unwrap_or(false)),
+    ))
+}
+
+fn choose_default_price_version(value: &Value) -> Result<String> {
+    value["version"]
+        .as_str()
+        .filter(|version| !version.is_empty())
+        .map(str::to_owned)
+        .context("current compute pricing has no version; supply --price-version PRICE_VERSION")
+}
+
+fn choose_default_flavor(flavors: &[Value]) -> Result<String> {
+    if flavors.iter().any(|flavor| flavor["id"] == json!("dev-4")) {
+        return Ok("dev-4".into());
+    }
+    flavors
+        .iter()
+        .min_by(|left, right| {
+            let left_key = (
+                left["vcpus"].as_u64().unwrap_or(u64::MAX),
+                left["memory_mib"].as_u64().unwrap_or(u64::MAX),
+                left["disk_gib"].as_u64().unwrap_or(u64::MAX),
+                left["id"].as_str().unwrap_or(""),
+            );
+            let right_key = (
+                right["vcpus"].as_u64().unwrap_or(u64::MAX),
+                right["memory_mib"].as_u64().unwrap_or(u64::MAX),
+                right["disk_gib"].as_u64().unwrap_or(u64::MAX),
+                right["id"].as_str().unwrap_or(""),
+            );
+            left_key.cmp(&right_key)
+        })
+        .and_then(|flavor| flavor["id"].as_str())
+        .map(str::to_owned)
+        .context("no eligible compute flavor was found; use --flavor FLAVOR_ID")
+}
+
+async fn wait_for_ssh(c: &ControlClient, id: Uuid, timeout: u64) -> Result<()> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout);
+    let mut announced = false;
+    loop {
+        let value = get_vm(c, id).await?;
+        if value["ssh_ready"] == true {
+            return Ok(());
+        }
+        let desired = value["desired_state"].as_str().unwrap_or("unknown");
+        if matches!(desired, "stopped" | "deleted") {
+            return Err(anyhow!("VM {id} is {desired}; start it before connecting"));
+        }
+        if !announced {
+            eprintln!("Waiting for VM {id} SSH to become ready...");
+            announced = true;
+        }
+        tokio::time::timeout_at(deadline, tokio::time::sleep(Duration::from_secs(2)))
+            .await
+            .map_err(|_| WaitTimeout {
+                operation_id: value["operation_id"]
+                    .as_str()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(id),
+            })?;
+    }
+}
+
+fn default_identity_file() -> Option<PathBuf> {
+    let home = dirs::home_dir()?;
+    default_identity_file_in(&home)
+}
+
+fn default_identity_file_in(home: &Path) -> Option<PathBuf> {
+    let candidates = default_identity_candidates(home);
+    candidates
+        .iter()
+        .find(|path| path.is_file() && path.with_extension("pub").is_file())
+        .cloned()
+        .or_else(|| candidates.into_iter().find(|path| path.is_file()))
+}
+
+fn default_public_identity_file() -> Option<PathBuf> {
+    dirs::home_dir().and_then(|home| default_public_identity_file_in(&home))
+}
+
+fn default_public_identity_file_in(home: &Path) -> Option<PathBuf> {
+    default_identity_candidates(home)
+        .into_iter()
+        .find(|private| private.is_file() && private.with_extension("pub").is_file())
+        .map(|private| private.with_extension("pub"))
+}
+
+fn default_identity_candidates(home: &Path) -> Vec<PathBuf> {
+    ["id_ed25519", "id_ecdsa", "id_rsa", "google_compute_engine"]
+        .into_iter()
+        .map(|name| home.join(".ssh").join(name))
+        .collect()
+}
 async fn ssh(
     c: &ControlClient,
     id: Uuid,
@@ -521,9 +1090,7 @@ async fn ssh(
     if command.is_none() {
         output::require_input()?;
     }
-    let value = c.get(&format!("/v1/compute/vms/{id}")).await?;
-    platform::validate_response("getComputeVm", "200", &value)?;
-    ensure!(value["vm_id"] == json!(id), "VM identity mismatch");
+    let value = get_vm(c, id).await?;
     ensure!(
         value["ssh_ready"] == true,
         "SSH is unavailable until the VM is ready"
@@ -553,6 +1120,10 @@ async fn ssh(
             &known_hosts,
             format!("{alias} {kind} {key}\n").as_bytes(),
         )?;
+    }
+    let identity = identity.or_else(default_identity_file);
+    if let Some(identity) = identity.as_ref() {
+        eprintln!("Using SSH identity {}", identity.display());
     }
     let status = pipe_transports::ssh::command(
         &connection,
@@ -642,6 +1213,178 @@ async fn list(
         "page limit reached; resume with --cursor {}",
         cursor.unwrap()
     ))
+}
+
+async fn list_vm(
+    c: &ControlClient,
+    limit: u32,
+    mut cursor: Option<Uuid>,
+    all: bool,
+    include_deleted: bool,
+    j: bool,
+) -> Result<()> {
+    let human = !j && !output::is_json() && !output::is_jsonl();
+    let mut seen = HashSet::new();
+    if let Some(cursor) = cursor {
+        seen.insert(cursor);
+    }
+    let mut items = Vec::new();
+    let mut total_bytes = 0usize;
+    for _ in 0..1000 {
+        let mut path = format!("/v1/compute/vms?limit={limit}");
+        if let Some(id) = cursor {
+            path.push_str(&format!("&cursor={id}"));
+        }
+        let page = c.get(&path).await?;
+        platform::validate_response("listComputeVms", "200", &page)?;
+        let next: Option<Uuid> = serde_json::from_value(page["next_cursor"].clone())?;
+        if !all {
+            if human {
+                return print_vm_table(
+                    page["vms"].as_array().context("missing VM list")?,
+                    include_deleted,
+                    next.is_some(),
+                );
+            }
+            return output::print(&page, j);
+        }
+        if output::is_jsonl() {
+            output::print(&page, j)?;
+        } else {
+            total_bytes = total_bytes.saturating_add(serde_json::to_vec(&page)?.len());
+            ensure!(
+                total_bytes <= 16 * 1024 * 1024,
+                "VM result exceeds 16 MiB; use --output jsonl or resume from cursor {}",
+                cursor.map(|v| v.to_string()).unwrap_or_default()
+            );
+            items.extend(
+                page["vms"]
+                    .as_array()
+                    .context("missing VM page")?
+                    .iter()
+                    .cloned(),
+            );
+        }
+        if next.is_none() {
+            if human {
+                return print_vm_table(&items, include_deleted, false);
+            }
+            return output::print(
+                &json!({"vms":items,"next_cursor":null,"features":page["features"]}),
+                j,
+            );
+        }
+        cursor = next;
+        ensure!(
+            seen.insert(next.unwrap()),
+            "server repeated pagination cursor; resume from a verified cursor"
+        );
+    }
+    Err(anyhow!(
+        "page limit reached; resume with --cursor {}",
+        cursor.unwrap()
+    ))
+}
+
+fn print_vm_table(items: &[Value], include_deleted: bool, more: bool) -> Result<()> {
+    let rows: Vec<[String; 7]> = items
+        .iter()
+        .filter(|vm| include_deleted || !vm_is_deleted(vm))
+        .map(|vm| {
+            [
+                vm["name"].as_str().unwrap_or("-").to_owned(),
+                vm_state(vm),
+                if vm["ssh_ready"] == true {
+                    "ready".into()
+                } else {
+                    "-".into()
+                },
+                vm["flavor_id"].as_str().unwrap_or("-").to_owned(),
+                vm["vcpus"].to_string(),
+                format_memory(vm["memory_mib"].as_u64()),
+                format_disk(vm["disk_gib"].as_u64()),
+            ]
+        })
+        .collect();
+    if rows.is_empty() {
+        if include_deleted {
+            println!("No VMs found.");
+        } else {
+            println!("No active VMs. Use --include-deleted to show deleted VMs.");
+        }
+        return Ok(());
+    }
+    let headers = ["NAME", "STATE", "SSH", "FLAVOR", "CPU", "MEMORY", "DISK"];
+    let widths: Vec<usize> = (0..headers.len())
+        .map(|column| {
+            rows.iter()
+                .map(|row| row[column].len())
+                .chain(std::iter::once(headers[column].len()))
+                .max()
+                .unwrap_or(0)
+        })
+        .collect();
+    println!(
+        "{}",
+        headers
+            .iter()
+            .enumerate()
+            .map(|(column, header)| format_cell(header, widths[column]))
+            .collect::<Vec<_>>()
+            .join("  ")
+    );
+    for row in rows {
+        println!(
+            "{}",
+            row.iter()
+                .enumerate()
+                .map(|(column, cell)| format_cell(cell, widths[column]))
+                .collect::<Vec<_>>()
+                .join("  ")
+        );
+    }
+    if more {
+        println!("\nMore VMs available. Use --all to list them.");
+    }
+    Ok(())
+}
+
+fn format_cell(value: &str, width: usize) -> String {
+    format!("{value:<width$}")
+}
+
+fn vm_is_deleted(vm: &Value) -> bool {
+    vm["desired_state"] == json!("deleted") || vm["observed_state"] == json!("deleted")
+}
+
+fn vm_state(vm: &Value) -> String {
+    let desired = vm["desired_state"].as_str().unwrap_or("unknown");
+    let observed = vm["observed_state"].as_str().unwrap_or("unknown");
+    if observed == "unknown" {
+        desired.to_owned()
+    } else if desired == observed {
+        observed.to_owned()
+    } else {
+        format!("{desired}/{observed}")
+    }
+}
+
+fn format_memory(memory_mib: Option<u64>) -> String {
+    memory_mib
+        .map(|mib| {
+            if mib % 1024 == 0 {
+                format!("{} GiB", mib / 1024)
+            } else {
+                format!("{mib} MiB")
+            }
+        })
+        .unwrap_or_else(|| "-".into())
+}
+
+fn format_disk(disk_gib: Option<u64>) -> String {
+    disk_gib
+        .map(|gib| format!("{gib} GiB"))
+        .unwrap_or_else(|| "-".into())
 }
 
 #[cfg(test)]

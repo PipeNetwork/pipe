@@ -70,7 +70,7 @@ credentials are saved before activation; resume an uncertain activation with
 Configuration resolves explicit endpoint flags, `PIPE_CONTROL_API_URL`, the
 selected profile, then `https://api.pipedev.network/control-api`. Explicit existing
 endpoints remain unchanged. Storage discovers its gateway from the customer API;
-the documented production default is `https://gw-001.pipedev.network`.
+the current public S3 endpoint is `https://api.pipedev.network`.
 
 Current platform commands provide managed compute, KV, paid Durable Objects and
 hosting workflows. `pipe api call` permits only reviewed reads, validates
@@ -232,6 +232,40 @@ pipe compute vms reboot VM_UUID --yes
 pipe compute vms billing VM_UUID --price-version CURRENT_VERSION --auto-renew false --yes
 pipe compute vms delete VM_UUID --yes
 ```
+
+For the common path, the shorter VM commands accept an exact VM name as well
+as its UUID. `vm connect` waits for SSH readiness, validates the API-advertised
+host identity, and automatically uses the first existing key in
+`~/.ssh/id_ed25519`, `id_ecdsa`, or `id_rsa` when no identity file is supplied:
+
+```sh
+pipe init
+pipe vm list
+pipe vm create dev
+pipe vm connect dev
+pipe vm exec dev 'uname -a'
+```
+
+`pipe vm list` shows a compact table of active VMs. Use
+`--include-deleted` to include deleted records, `--all` to follow every page,
+or `--json` when the full API response is needed.
+
+When `--project`, `--image`, or `--flavor` is omitted, the CLI selects the only
+eligible value, preferring `dev-4` or otherwise the smallest available flavor.
+For a paid flavor, the current pricing version is selected automatically and
+renewal defaults to `false`; pass `--auto-renew true` to opt into recurring
+monthly renewal. Supply `--price-version` only to pin a reviewed version.
+Supply `--flavor` when a specific plan is required. When `--ssh-key` is omitted,
+the CLI uses the first local SSH pair with both private and `.pub` files in
+`~/.ssh/id_ed25519`, `id_ecdsa`, `id_rsa`, or `google_compute_engine`. Use
+`--ssh-key` for a different or additional public key, and
+`--identity-file` to select a different private key when connecting. Use
+`--no-wait` to fail immediately while a VM is provisioning. Short VM mutations
+wait for completion by default; use `--no-wait` to return after acceptance while
+server work continues. The CLI constructs
+the SSH invocation from validated connection fields rather than executing a
+server-supplied shell string. The low-level `pipe compute ssh VM_UUID` command
+remains available.
 
 Paid creation reserves existing credit. Stopped VMs retain their monthly billing;
 deleting a VM destroys its disk and cancels renewal without refunding unused paid
@@ -481,6 +515,34 @@ private host, Spin, SQLite and loopback DNS with synthetic credit. Supply the
 explicit PostgreSQL URL, binaries and evidence directory. Production cgroup,
 filesystem-quota, TLS, browser and launch qualification remain separate release
 requirements.
+
+## Models
+
+Upload a model package into the same workspace as [Your models](https://pipe.network/dashboard/models).
+Sign in with `storage.read` to list models and `storage.write` to upload. `pipe models upload`
+asks for the missing write scope in the browser when you are logged in interactively.
+The linked billing wallet comes from `pipe account identities` and is required only
+when the namespace and name do not already exist.
+
+```sh
+pipe auth login --scope "account.read storage.read storage.write"
+pipe models upload ./rust-coder \
+  --namespace your-team \
+  --name rust-coder \
+  --license apache-2.0 \
+  --wallet LINKED_CREDIT_IDENTITY
+pipe models list
+pipe models publish MODEL_UUID --revision REVISION_UUID
+```
+
+A directory must contain a `.gguf` file, or safetensors/PyTorch weights with
+`config.json` and tokenizer files at that directory root. One `.gguf` file can
+be passed directly. Hidden files are skipped. The model is private and appears
+in the workspace as soon as the registry accepts it. Repeating the command
+resumes sealed parts and the same revision for an unchanged file set. `--publish`
+waits for worker verification, then points the `latest` tag at that revision.
+`pipe-model-agent download` still fetches a pinned revision onto a machine;
+it does not upload.
 
 ## Install
 

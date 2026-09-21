@@ -6,6 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 pub const DEFAULT_PROFILE: &str = "default";
+pub const DEFAULT_S3_ENDPOINT: &str = "https://api.pipedev.network";
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct Profile {

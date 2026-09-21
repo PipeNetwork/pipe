@@ -215,7 +215,7 @@ pub async fn api(client: &ControlClient, cmd: ApiCommands, json_output: bool) ->
                         .profile
                         .s3_endpoint
                         .as_deref()
-                        .unwrap_or("https://gw-001.pipedev.network");
+                        .unwrap_or(crate::config::DEFAULT_S3_ENDPOINT);
                     crate::error::ensure_https(endpoint, "storage endpoint")?;
                     format!("{}{path}", endpoint.trim_end_matches('/'))
                 } else {
