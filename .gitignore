@@ -1,5 +1,7 @@
 # Rust build artifacts
 /target/
+/dist/
+__pycache__/
 **/*.rs.bk
 *.pdb
 
@@ -57,4 +59,18 @@ local_*
 
 # Markdown files (except README.md)
 *.md
-!README.md 
+!README.md
+!CRYPTO_FORMAT.md
+
+# Reviewed release tools and redacted qualification records are source artifacts.
+!/install.sh
+!/docs/
+/docs/*
+!/docs/release/
+!/docs/release/*.md
+!/docs/release/qualification.json
+!/docs/release/evidence/
+!/docs/release/evidence/*.json
+!/docs/release/evidence/*.log
+
+!/docs/cli3-*.md

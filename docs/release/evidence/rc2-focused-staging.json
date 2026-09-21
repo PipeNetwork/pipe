@@ -1,0 +1,69 @@
+{
+  "base_commit": "dfb07e696f322382a4dbb329d0023f199426c4ca",
+  "binary": {
+    "sha256": "9ad1e6a95eab6a13bc6da03001a7c6ad7941a2da5abcbf56d1ac6a88f5cae978",
+    "size_bytes": 24129608,
+    "status": "unpublished optimized review candidate before RC2 version/metadata changes",
+    "version_output": "pipe 3.0.0-rc.1"
+  },
+  "cargo_lock_sha256": "c4d603989f787cf7215fdd0609a0ea9f3bf50adeecc6b40d6ff438c70929e0e6",
+  "commands": [
+    "cargo test --locked --offline --workspace -j2",
+    "cargo clippy --locked --offline --workspace --all-targets -j2 -- -D warnings",
+    "cargo fmt --all --check",
+    "python3 scripts/cli-coverage.py --check",
+    "cargo build --release --locked --offline -p pipe -j2"
+  ],
+  "dependencies_contracts_and_release_metadata_unchanged": true,
+  "files": {
+    "docs/cli3-s3-errors.md": "8f527b3d97b4135556e6f21cf38ac6c63795d86736390a38ddab90529e919183",
+    "src/error.rs": "677fdde2b1ef48b1e2037492a65ad7c7331c6f162cd19168cd55c6bb6984e26f",
+    "src/lib.rs": "3a01e845689518778422c3cf62eb191ef051f06b186ae03c16387dc3c2e9b8eb",
+    "src/main.rs": "34fc39bdd8496e68d466b5f659334783630de92e6b52f6302f9d85a6555080b2",
+    "src/s3.rs": "fd6894b595a84d1c0aaef3b2179c1c98d27e438a6750c98c89da3b7bef85504e",
+    "src/s3_error_tests.rs": "9cab556f4ab5b0778ba898e6ad2c3e8d2dbd7f41cf74b5454880406699ae68df",
+    "tests/cli_contract.rs": "b2eef589f2b8b4f54c9a487159a44a77ad6e61fe1b20795cc44ff1489e336ec3"
+  },
+  "final_rc2_artifact_qualified": false,
+  "kind": "reviewed_s3_error_code_staging_qualification",
+  "limits": [
+    "No new production or paid operation was performed for this patch.",
+    "The published RC1 binaries/tag/assets and their live qualification record are unchanged.",
+    "No signing, retries, backoff, multipart identity or journal format changed.",
+    "Historical ambiguity from separate prior invocations is not reconstructed; existing unresolved records are preserved.",
+    "RC2 metadata, additional budget-tool changes, native target matrix and any release publication are separate parent-owned work."
+  ],
+  "logs": {
+    "clippy.log": "517f95628e63779f507e60a0ee4dbbc5543986cd21cd857ff6e10c45f3cc5f8a",
+    "coverage.log": "b204d76272f3a9d37e85908f7829e34cfc6a821d8403f0be1a2fb4ee244eaf16",
+    "format.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "release-build.log": "1b14dbc64d681524159b37c2802db8b2bd44f11dcf2441f3ea68e5e40fbddc18",
+    "workspace-tests.log": "e41064e78a7a0a3763b95d75f28b5095c0692d0033647df1b1a21de62330297e"
+  },
+  "original_private_receipt_sha256": "9b362fc6436751891e0bd55f5898253f432b18efecefb0dc22bdd1f415a4cfda",
+  "patch_sha256": "ef8c13df3da891cb39ca4812ab55e883b6b477e1ff3fa99c33c2294abb475b32",
+  "production_executed": false,
+  "published": false,
+  "qualification_scope": "The reviewed code checkpoint passed before RC2 package-version and release-metadata changes. Final RC2 native builds, provenance, actual RC1-to-RC2 upgrade/rollback, and focused production checks remain pending.",
+  "recorded_at": "2026-09-17T17:35:37.095908+00:00",
+  "schema_version": 1,
+  "source_clean_at_qualification": true,
+  "source_commit": "334ab7055b78ea6683b509e8e9c6d62c99dabf1d",
+  "source_only_followup_to": "v3.0.0-rc.1",
+  "target_release_version": "3.0.0-rc.2",
+  "verification": {
+    "clippy_warnings_denied_passed": true,
+    "executable_failure_matrix": "403 DELETE, 412 PUT, 402 PUT, 503 PUT across table/JSON/JSONL; actual CLI with encrypted fixture state and exact request counts.",
+    "format_passed": true,
+    "ignored_reason": "Unchanged optional actual OpenSSH fixture requires explicit PIPE_TEST_SSHD; transport code/dependencies are unchanged.",
+    "new_focused_s3_error_tests": 7,
+    "operation_coverage": {
+      "operations": 209,
+      "pending": 0
+    },
+    "release_build_passed": true,
+    "workspace_failed": 0,
+    "workspace_ignored": 1,
+    "workspace_passed": 132
+  }
+}

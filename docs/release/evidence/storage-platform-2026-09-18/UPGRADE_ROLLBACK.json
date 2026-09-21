@@ -1,0 +1,10 @@
+{
+  "actual_rc2_to_rc3_install_and_rollback_passed": true,
+  "old_archive_sha256": "8a7f0980157db869cfcdffa984492656db261f80943913af8de6621103e0ca9d",
+  "new_archive_sha256": "960f6735ae96a33679161ef082eda39df1dd74a42c162d6ba00d6e0a0978c8b6",
+  "old_binary_sha256": "0c7e3da0d1ccef264902674307226722402980a442bbadd12e0fbe6d9ccafa72",
+  "new_binary_sha256": "053428781661470f5373c215f8de3e69cddb1836905404db0f08375802dfaf37",
+  "state_sentinel_preserved": true,
+  "prefix_with_spaces": true,
+  "real_provider_payments": false
+}

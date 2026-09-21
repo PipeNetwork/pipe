@@ -1,0 +1,114 @@
+{
+  "artifact_provenance": "Native archives, installers, checksum manifest and verification/migration guides have verified GitHub Actions attestations for the exact tag. Supplemental acceptance records below are operator-verified evidence, not native build attestations.",
+  "backend": {
+    "admission": "Existing two-account qualification allowlist retained",
+    "binary_sha256": "26220b22994e9afb18f962ca5b39e5e8918d2a595d566927e3fd9bc06ea59d0c",
+    "compatibility": {
+      "base_migration_max": 25,
+      "optional_storage_budget_version": 1,
+      "optional_storage_workspace_version": 2
+    },
+    "deployed": true,
+    "router": {
+      "binary_sha256": "322eab304722e9ca6a2e892c912f1613b2fef46847b2edba2a210f6b5ccc094e",
+      "deployed": true,
+      "source_commit": "3047c4ef222954038b8957c4ec11da20a39331fa"
+    },
+    "source_commit": "f5e8baacbb1951ed79eb5626d14076cbf836e483"
+  },
+  "canary": {
+    "automatic_funding": false,
+    "campaign_id": "storage-platform-20260918",
+    "campaign_spent_atoms": 521,
+    "ledger_sha256": "1b41e3c44369aab0c9be00c66c28c98b7479c554eebed6e9b17cd4b956496bb0",
+    "maximum_atoms": 1000000000,
+    "real_payment_transfers": false,
+    "remaining_atoms": 954977753,
+    "reserved_atoms": 0,
+    "same_persistent_budget": true,
+    "spent_atoms": 45022247,
+    "unit": "USDC atoms; 1,000,000 atoms per credit dollar"
+  },
+  "cleanup_complete": true,
+  "cli_source_tree_sha256": "a1d57b8a03b549033416ce7694152d8d1efdaae15303569c0aa41a51eca49ed7",
+  "completed_at": "2026-09-18T05:25:44.381347+00:00",
+  "contracts": {
+    "control_plane_sha256": "48fb67f745821973d52da02fe0d08413d5d6aec9315eaf70b8011e628493dcd6",
+    "documents": {
+      "control-plane": "48fb67f745821973d52da02fe0d08413d5d6aec9315eaf70b8011e628493dcd6",
+      "s3": "1d53803829ef98b34eb77d17c7500dd8319c5761e9d1d9e4e7491bfb5b6421d2",
+      "storage": "2ff1f9b9e2914e91023eef77214da7d3c4769fb0d4065cb9a56998bf0f95c1e9"
+    },
+    "immutable_catalog": "https://api.pipedev.network/openapi/releases/548bb1df2ea4d600e92a9128eec7b7b39a93da8640a59feb678a203b9bbf9f66/index.json",
+    "published": true,
+    "source_revision": "sha256:548bb1df2ea4d600e92a9128eec7b7b39a93da8640a59feb678a203b9bbf9f66"
+  },
+  "evidence": {
+    "DEPLOYMENT_FINAL.json": "fd25ca4db7dffbecfb88d8690c10c744ed8375daaf70ddc813714fa770361dfe",
+    "NATIVE_QUALIFICATION.json": "c7eaf4f261548e6aa7e57ec502614606424902702f83b2d1c7295344b55482d3",
+    "PRODUCTION_CLEANUP.json": "4a780ba12baa5d89fc5b11d4d968e72002b6253b06c0064b87767ee8050cac96",
+    "PRODUCTION_STORAGE.json": "4faeeb50a203adc6481597b5c1e54f186cc62d3a227e3f8b986bfdc2ce18025e",
+    "STAGING_QUALIFICATION.json": "f4775cefb0ead8b839e07f3e8502437439cd50f5f817c2c10eea20f59dc5e9b3",
+    "UPGRADE_ROLLBACK.json": "dd6178b1871f83a5b9a5911e91dd136ee65d0d3d13b5d6de380e9880f8466a4a"
+  },
+  "format_version": 1,
+  "frontend": {
+    "deployed": true,
+    "deployment_log_sha256": "f1b4437fc16ec3edacb58d6d0a971f1e8ca164e75528d06b63e26d00e7109d13",
+    "source_commit": "392ed5e115d411398f3798a3160cbc448939c637"
+  },
+  "intentionally_unavailable": [
+    {
+      "feature": "General CLI admission and public KV creation",
+      "reason": "Existing launch gates preserved."
+    },
+    {
+      "feature": "Managed bucket deletion",
+      "reason": "Metadata and audit retained; deletion API is unsupported."
+    },
+    {
+      "feature": "Invitation email delivery",
+      "reason": "Explicit shareable invitations are supported."
+    },
+    {
+      "feature": "Objects above 18 GiB",
+      "reason": "Existing qualified gateway limit retained."
+    }
+  ],
+  "known_baseline_failures": {
+    "disposition": "Same ten recorded predecessor failures; full gateway suite is not green. Focused S3 and changed reporting gate pass.",
+    "failed": 10,
+    "ignored": 14,
+    "passed": 935
+  },
+  "native_run": "https://github.com/PipeNetwork/pipe/actions/runs/35310039525",
+  "production_pending": true,
+  "release_channel": "prerelease",
+  "release_url": "https://github.com/PipeNetwork/pipe/releases/tag/v3.0.0-rc.3",
+  "remaining_acceptance": [
+    "Pending an authorized canonical Google-linked test account. Team fixtures pass with real PostgreSQL and browser tests."
+  ],
+  "reviewed_code_commit": "990545530ba93c0811f78a24fee6b579bd898da8",
+  "six_milestones": [
+    "Storage spending caps, recovery and connection setup",
+    "Durable managed bucket workspace and first upload",
+    "Persistent transfer center",
+    "Publication-indexed authorized global search",
+    "Team ownership, invitations, roles and audit",
+    "CORS, signed durable webhooks and previewed lifecycle expiry"
+  ],
+  "source_tag_commit": "fc44e0db734ff715a765a5bc2994ef04bee8424a",
+  "stable_promotion_permitted": false,
+  "staging_only_acceptance": [
+    "Passed staging worker fixtures; live production checks cover preview, enable/disable, and stale-version rejection."
+  ],
+  "storage_production_checks_passed": true,
+  "supported_targets": [
+    "aarch64-apple-darwin",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+    "x86_64-unknown-linux-gnu"
+  ],
+  "version": "3.0.0-rc.3"
+}

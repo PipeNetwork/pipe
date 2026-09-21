@@ -1,0 +1,393 @@
+{
+  "browser": {
+    "baseline_passed": 317,
+    "baseline_skipped": 25,
+    "final_layout_passed": 24,
+    "unit_passed": 249
+  },
+  "checks": [
+    {
+      "log": "pipe-storage-platform-final-browser.log",
+      "sha256": "1d306deff0231d9eb49470248a96ec0e0fae75a63a516f6aa634c3ad8e7b64b7"
+    },
+    {
+      "log": "pipe-storage-release-frontend-unit.log",
+      "sha256": "425ed332873d6a55916b08c3d18b0bfe0334e33e39b17cdcc5808fe269d6242f"
+    },
+    {
+      "log": "pipe-storage-isolated-control-final-unit.log",
+      "sha256": "27f6f72279eb442f1b8f7618abd1407f50f1b9fbd584860af93d3ec0942776bb"
+    },
+    {
+      "log": "pipe-storage-isolated-router-tests-final.log",
+      "sha256": "c0836074b065e026a0dec193d9cc24545182b53264ddb20bd3c050b8e1c72a4f"
+    },
+    {
+      "log": "pipe-storage-router-v2-s3-tests.log",
+      "sha256": "17554935c65b9c2c3df09e7620712df251e1406d253ad7ab8dd50abc61dc6f23"
+    },
+    {
+      "log": "pipe-storage-reporting-gate-test.log",
+      "sha256": "df0b40239ceefdea0eb6985c17a69554f504dcf1044d41ba9c7b5ad38ad6d603"
+    },
+    {
+      "log": "pipe-storage-platform-final-deployment-tests.log",
+      "sha256": "d9853af017010fbcf76d87c8fe46b87ae058237da982d900a1181a4a916ad331"
+    },
+    {
+      "log": "pipe-storage-delete-projection-tests-v3.log",
+      "sha256": "0b54bcf1f1ce291343727dbe92a2d842aad8e7d8557ec09ebe684da69f64a20b"
+    },
+    {
+      "log": "pipe-storage-frontend-layout-browser-qualified.log",
+      "sha256": "43e40e6c6db98fbe5de1a8a9eedd9be9121eb839b8d2a458107f235b583050b3"
+    },
+    {
+      "log": "pipe-storage-frontend-layout-types.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "log": "pipe-storage-frontend-layout-lint-final.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "component_contract_checks": {
+    "authentication": "passed",
+    "checks": [
+      {
+        "command": [
+          "cargo",
+          "+1.88.0",
+          "check",
+          "--locked",
+          "-p",
+          "lattice-control-plane",
+          "--all-targets"
+        ],
+        "cwd": "/home/david/.local/share/lattice/releases/storage-platform-20260918/control-source",
+        "exit_code": 0,
+        "log": "rust188-control.log",
+        "name": "rust188-control",
+        "sha256": "304b41280b458b2d3d55fc60ba69961283bc749c0249930f2f8c485996515009"
+      },
+      {
+        "command": [
+          "cargo",
+          "+1.88.0",
+          "check",
+          "--locked",
+          "-p",
+          "lattice-router",
+          "--all-targets"
+        ],
+        "cwd": "/home/david/.local/share/lattice/releases/storage-platform-20260918/router-source",
+        "exit_code": 0,
+        "log": "rust188-gateway.log",
+        "name": "rust188-gateway",
+        "sha256": "f9c92af74b0aece25b55b62c03d7dac1bcb3b3df1399ea7fc28839ffb92024f3"
+      },
+      {
+        "command": [
+          "python3",
+          "scripts/api-contract.py",
+          "check"
+        ],
+        "cwd": "/home/david/.local/share/lattice/releases/storage-platform-20260918/contract-source",
+        "exit_code": 0,
+        "log": "inventory.log",
+        "name": "inventory",
+        "sha256": "c62982e9e2b1a2991776054242a08cba43abd0fc53c5c2846acc5b6c6371d7aa"
+      },
+      {
+        "command": [
+          "python3",
+          "scripts/test-api-contract.py"
+        ],
+        "cwd": "/home/david/.local/share/lattice/releases/storage-platform-20260918/contract-source",
+        "exit_code": 0,
+        "log": "schemas-isolation.log",
+        "name": "schemas-isolation",
+        "sha256": "c58e679b3a4189b3f9aeeebb68b4b0e8ec24fe76d7fd958c9d013b48956e4cd1"
+      },
+      {
+        "command": [
+          "python3",
+          "scripts/test-deploy-api-docs.py"
+        ],
+        "cwd": "/home/david/.local/share/lattice/releases/storage-platform-20260918/contract-source",
+        "exit_code": 0,
+        "log": "deployment-guards.log",
+        "name": "deployment-guards",
+        "sha256": "9d654695c0a90577e252109954dd749137ace81d33f39cf1a31990e7f48cf31d"
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--locked",
+          "-p",
+          "pipe-api-contract",
+          "--all-targets"
+        ],
+        "cwd": "/home/david/.local/share/lattice/releases/storage-platform-20260918/contract-source",
+        "exit_code": 0,
+        "log": "shared-contract.log",
+        "name": "shared-contract",
+        "sha256": "8bfd32c361da7406afcd243e902fa6f1dc9f2deb6ad92d55da1b08726fb90cbf"
+      },
+      {
+        "command": [
+          "python3",
+          "scripts/api-contract.py",
+          "generate",
+          "--output",
+          "/home/david/.local/share/lattice/releases/storage-platform-20260918/contracts-component-check"
+        ],
+        "cwd": "/home/david/.local/share/lattice/releases/storage-platform-20260918/contract-source",
+        "exit_code": 0,
+        "log": "regeneration.log",
+        "name": "regeneration",
+        "sha256": "8c75a2fbf1ad01fe2f377c07bc460e610b5198af91bba54afbbd44ec36d72bcb"
+      },
+      {
+        "command": [
+          "diff",
+          "-rq",
+          "/home/david/.local/share/lattice/releases/storage-platform-20260918/contracts",
+          "/home/david/.local/share/lattice/releases/storage-platform-20260918/contracts-component-check"
+        ],
+        "cwd": "/home/david/.local/share/lattice/releases/storage-platform-20260918/contract-source",
+        "exit_code": 0,
+        "log": "deterministic-artifact.log",
+        "name": "deterministic-artifact",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "command": [
+          "python3",
+          "/home/david/.local/share/lattice/releases/storage-platform-20260918/contract-source/scripts/run-http-contract-test.py",
+          "lattice-control-plane",
+          "customer::cli_tests",
+          "--include-ignored",
+          "--test-threads=2"
+        ],
+        "cwd": "/home/david/.local/share/lattice/releases/storage-platform-20260918/control-source",
+        "exit_code": 0,
+        "log": "cli-auth.log",
+        "name": "cli-auth",
+        "sha256": "440fbb25efcfb10c86dca116cd58294ceb2171d812aeb7db78e7f38a96f681cd"
+      },
+      {
+        "command": [
+          "python3",
+          "/home/david/.local/share/lattice/releases/storage-platform-20260918/contract-source/scripts/run-http-contract-test.py",
+          "lattice-control-plane",
+          "payments::wallet::tests",
+          "--include-ignored",
+          "--test-threads=2"
+        ],
+        "cwd": "/home/david/.local/share/lattice/releases/storage-platform-20260918/control-source",
+        "exit_code": 0,
+        "log": "wallet-payments.log",
+        "name": "wallet-payments",
+        "sha256": "dbc8103c1cf5257fd097291df64bdf7f0c382f284275d69755617dfc4439a21e"
+      },
+      {
+        "command": [
+          "python3",
+          "/home/david/.local/share/lattice/releases/storage-platform-20260918/contract-source/scripts/run-http-contract-test.py",
+          "lattice-control-plane",
+          "payments::tests",
+          "--include-ignored",
+          "--test-threads=2"
+        ],
+        "cwd": "/home/david/.local/share/lattice/releases/storage-platform-20260918/control-source",
+        "exit_code": 0,
+        "log": "payment-recovery.log",
+        "name": "payment-recovery",
+        "sha256": "9b968994c33c79a6c126aae48412609f02259da1f6c33aa67542f809b61f831b"
+      },
+      {
+        "command": [
+          "python3",
+          "/home/david/.local/share/lattice/releases/storage-platform-20260918/contract-source/scripts/run-http-contract-test.py",
+          "lattice-control-plane",
+          "storage_workspace::",
+          "--include-ignored",
+          "--test-threads=2"
+        ],
+        "cwd": "/home/david/.local/share/lattice/releases/storage-platform-20260918/control-source",
+        "exit_code": 0,
+        "log": "workspace.log",
+        "name": "workspace",
+        "sha256": "6de4797b3e3de9bdc9602282033b21c79153e7ad8d00b4b9dfb6d375f4a1735d"
+      },
+      {
+        "command": [
+          "python3",
+          "/home/david/.local/share/lattice/releases/storage-platform-20260918/contract-source/scripts/run-http-contract-test.py",
+          "lattice-control-plane",
+          "storage_automation::tests",
+          "--include-ignored",
+          "--test-threads=2"
+        ],
+        "cwd": "/home/david/.local/share/lattice/releases/storage-platform-20260918/control-source",
+        "exit_code": 0,
+        "log": "automation.log",
+        "name": "automation",
+        "sha256": "d423c84deb713310e407cfc1b0da4ece1665d03c3a92099f9411ffe69fd768e3"
+      },
+      {
+        "command": [
+          "python3",
+          "/home/david/.local/share/lattice/releases/storage-platform-20260918/contract-source/scripts/run-http-contract-test.py",
+          "lattice-control-plane",
+          "storage_budget::tests",
+          "--include-ignored",
+          "--test-threads=2"
+        ],
+        "cwd": "/home/david/.local/share/lattice/releases/storage-platform-20260918/control-source",
+        "exit_code": 0,
+        "log": "storage-budget.log",
+        "name": "storage-budget",
+        "sha256": "8d0d31c52f3b03de0384a9cc657ac3330d021ed2259d2bbd38047acda1f5822e"
+      },
+      {
+        "command": [
+          "python3",
+          "/home/david/.local/share/lattice/releases/storage-platform-20260918/contract-source/scripts/run-http-contract-test.py",
+          "lattice-control-plane",
+          "pipenetwork::auth::storage_tests",
+          "--include-ignored",
+          "--test-threads=2"
+        ],
+        "cwd": "/home/david/.local/share/lattice/releases/storage-platform-20260918/control-source",
+        "exit_code": 0,
+        "log": "team-roles.log",
+        "name": "team-roles",
+        "sha256": "752ed360079fdb131c4c089352e15e939c2f888cc84aab972db60f93a44e7b98"
+      },
+      {
+        "command": [
+          "python3",
+          "/home/david/.local/share/lattice/releases/storage-platform-20260918/contract-source/scripts/run-http-contract-test.py",
+          "lattice-control-plane",
+          "pipenetwork::contract_tests",
+          "--include-ignored",
+          "--test-threads=2"
+        ],
+        "cwd": "/home/david/.local/share/lattice/releases/storage-platform-20260918/control-source",
+        "exit_code": 0,
+        "log": "platform-auth.log",
+        "name": "platform-auth",
+        "sha256": "59afea23269a2cda782464294b1335c8640a844ea2f508d68ed89ec58fa0698c"
+      },
+      {
+        "command": [
+          "python3",
+          "/home/david/.local/share/lattice/releases/storage-platform-20260918/contract-source/scripts/run-http-contract-test.py",
+          "lattice-control-plane",
+          "pipenetwork::google_customer::tests",
+          "--include-ignored",
+          "--test-threads=2"
+        ],
+        "cwd": "/home/david/.local/share/lattice/releases/storage-platform-20260918/control-source",
+        "exit_code": 0,
+        "log": "canonical-browser.log",
+        "name": "canonical-browser",
+        "sha256": "dec4d8c844bda2276c88a276c56a328f32726ffa7ecba8029be127b37ad7a4d8"
+      },
+      {
+        "command": [
+          "python3",
+          "/home/david/.local/share/lattice/releases/storage-platform-20260918/contract-source/scripts/run-http-contract-test.py",
+          "lattice-router",
+          "s3",
+          "--include-ignored",
+          "--test-threads=2"
+        ],
+        "cwd": "/home/david/.local/share/lattice/releases/storage-platform-20260918/router-source",
+        "exit_code": 0,
+        "log": "s3-protocols.log",
+        "name": "s3-protocols",
+        "sha256": "f30cd62be7e8d90dfde7c93427c42bfc6c71aafb0d0b81521dba2d1f228a371e"
+      },
+      {
+        "command": [
+          "node",
+          "scripts/test-api-portal.cjs",
+          "/home/david/.local/share/lattice/releases/storage-platform-20260918/contracts/public"
+        ],
+        "cwd": "/home/david/.local/share/lattice/releases/storage-platform-20260918/contract-source",
+        "exit_code": 0,
+        "log": "portal-qualified.log",
+        "name": "portal-qualified",
+        "sha256": "c36efdaee7a73a629374a6c436d948d3496a12faa24be2f6294971c4e99c2a91"
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--locked",
+          "--workspace"
+        ],
+        "cwd": "/home/david/pipe-storage/pipe",
+        "exit_code": 0,
+        "log": "cli.log",
+        "name": "cli",
+        "sha256": "45039025aa45481c25abdf89b779921ed76ea21b53f8b4a24c45ef84a2673466"
+      },
+      {
+        "command": [
+          "cmp",
+          "/home/david/pipe-storage/pipe/contracts/openapi/index.json",
+          "/home/david/.local/share/lattice/releases/storage-platform-20260918/contracts/public/openapi/index.json"
+        ],
+        "cwd": "/home/david/.local/share/lattice/releases/storage-platform-20260918/contract-source",
+        "exit_code": 0,
+        "log": "cli-pin.log",
+        "name": "cli-pin",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    ],
+    "cli": "passed",
+    "completed_at_unix": 1789708064,
+    "components": {
+      "cli": "990545530ba93c0811f78a24fee6b579bd898da8",
+      "control": "f5e8baacbb1951ed79eb5626d14076cbf836e483",
+      "gateway": "3047c4ef222954038b8957c4ec11da20a39331fa"
+    },
+    "coverage": "passed",
+    "failed_attempts": [
+      {
+        "command": [
+          "node",
+          "scripts/test-api-portal.cjs",
+          "/home/david/.local/share/lattice/releases/storage-platform-20260918/contracts/public"
+        ],
+        "cwd": "/home/david/.local/share/lattice/releases/storage-platform-20260918/contract-source",
+        "exit_code": 1,
+        "log": "portal.log",
+        "name": "portal",
+        "sha256": "c6bc9213517007b58e5ada415cced604c6e25088d8dac1e80b42cb358b16fe7b"
+      }
+    ],
+    "handler_contracts": "passed",
+    "payments": "passed",
+    "portal": "passed",
+    "private_artifact_isolation": "passed",
+    "qualification_mode": "Exact deployed components, independently built because their internal storage protocol baselines differ. Public contracts are assembled offline.",
+    "rust_188": "passed",
+    "s3_protocols": "passed",
+    "schemas": "passed",
+    "source_revision": "sha256:548bb1df2ea4d600e92a9128eec7b7b39a93da8640a59feb678a203b9bbf9f66",
+    "started_at_unix": 1789707827
+  },
+  "gateway_full_suite": {
+    "disposition": "Same ten recorded predecessor failures; full gateway suite is not green. Focused S3 and changed reporting gate pass.",
+    "failed": 10,
+    "ignored": 14,
+    "passed": 935
+  },
+  "independent_runtime_baselines": true
+}

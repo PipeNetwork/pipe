@@ -1,0 +1,24 @@
+{
+  "candidate_binary_sha256": null,
+  "cleanup_complete": false,
+  "created_service_resources": 0,
+  "format_version": 1,
+  "incremental_spent_atoms": 0,
+  "limits": [
+    "The published RC1 binary performed the paid product workflows. They are compatibility history, not RC2 production executions.",
+    "Public S3 HEAD/range, canonical Google account/organization authorization, and external payment sandbox qualification remain pending."
+  ],
+  "new_payment_transfers": 0,
+  "production_executed": false,
+  "qualified": false,
+  "required_checks": [
+    "Verify all five native artifacts against the exact new tag, commit, checksums and GitHub Actions provenance.",
+    "Install verified RC1 then RC2 in a disposable prefix and verify exact binary rollback while preserving local state.",
+    "Use a fresh encrypted profile for legitimate browser/wallet login and context/scope checks with the attested RC2 Linux binary.",
+    "Verify a short-lived read-only S3 credential receives typed authorization/exit4 for a refused DELETE, with no bucket or object creation.",
+    "Revoke the owned credential and session, then independently verify zero new charges, reservations or live fixture credentials."
+  ],
+  "stable_promotion_permitted": false,
+  "status": "pending_verified_rc2_artifact",
+  "target_release_version": "3.0.0-rc.2"
+}

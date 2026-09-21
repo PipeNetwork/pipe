@@ -1,0 +1,42 @@
+{
+  "format_version": 1,
+  "production": true,
+  "control_api": "https://api.pipedev.network/control-api",
+  "reproduced_before_fix": {
+    "condition": "No saved CLI session and no configured S3 endpoint",
+    "command": "pipe s3 ls",
+    "status": 404,
+    "code": "not_found",
+    "failing_request": "GET /v1/customer/cli/s3/endpoint"
+  },
+  "browser_qualification": {
+    "real_website_wallet_login": true,
+    "device_approval": true,
+    "device_denial": true,
+    "separate_process_s3_ls": true,
+    "bucket_count": 1,
+    "password_environment_variable": false,
+    "disable_keyring_environment_variable": false,
+    "no_browser_flag": false,
+    "encrypted_machine_store": true,
+    "cli_logout": true,
+    "browser_logout": true
+  },
+  "release_binary_qualification": {
+    "sha256": "ac6ed5fa69ca275619d7682bcd032dfffef08e45663be902c0fc6beeb9cc5d38",
+    "platform_wallet_login": true,
+    "s3_ls_exit": 0,
+    "bucket_list_exit": 0,
+    "bucket_count": 1,
+    "s3_endpoint_remained_unconfigured": true,
+    "logout_exit": 0,
+    "s3_ls_after_logout_exit": 3,
+    "s3_ls_after_logout_code": "authentication",
+    "s3_ls_after_logout_guidance": "pipe auth login"
+  },
+  "new_spending_atoms": "0",
+  "new_reservations_atoms": "0",
+  "payment_transfers": 0,
+  "customer_data_modified": false,
+  "test_sessions_logged_out": true
+}

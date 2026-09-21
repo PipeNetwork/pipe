@@ -1,0 +1,212 @@
+{
+  "cleanup": {
+    "active_compute_contracts": 0,
+    "active_qualification_cli_sessions_or_automation_credentials": 0,
+    "active_s3_test_credentials": 0,
+    "active_test_vms": 0,
+    "hosting_sites_or_allocations": 0,
+    "kv_instances_or_unsettled_slices": 0,
+    "live_durable_objects_or_pending_requests": 0,
+    "live_s3_objects_or_open_multipart": 0,
+    "outstanding_credit_reservations_atoms": 0,
+    "pending_s3_publications_or_mutations": 0,
+    "retained_records": "Prepaid receipts, nonrenewing hosting plan/account, revoked Durable checkpoints, S3 tombstones/terminal multipart/cumulative debit history, and encrypted operation journals are preserved.",
+    "verified": true
+  },
+  "cli": {
+    "binary_sha256": "e8fbed1dcaa6f5362d83f079b4cea13007ccdc46b83a10177cf434f3762da5fd",
+    "binary_unchanged_during_tests": true,
+    "native_qualification_run": "https://github.com/PipeNetwork/pipe/actions/runs/35194135007",
+    "original_release_assets_preserved": true,
+    "qualified_release_targets": [
+      "x86_64-unknown-linux-gnu",
+      "aarch64-unknown-linux-gnu",
+      "x86_64-apple-darwin",
+      "aarch64-apple-darwin",
+      "x86_64-pc-windows-msvc"
+    ],
+    "repository": "PipeNetwork/pipe",
+    "source_commit": "dfb07e696f322382a4dbb329d0023f199426c4ca",
+    "target": "x86_64-unknown-linux-gnu"
+  },
+  "compatible_deployment": {
+    "cli_schema_sha256": "54dea9a9096f3cd630d74b4e0fa14cb593f921f1b52cff3078040797dca2814b",
+    "cli_schema_version": 3,
+    "control_binary_sha256": "539fe53b543d591d0be04822b4790262fc92a2b97c07d9996df01a685d3628ea",
+    "control_source_commit": "6f27d15ce6a9cf7273fa2a58fa07c9a47b84a4ff",
+    "frontend_source_commit": "59180308642f50a329efd601177e4c70c813f110",
+    "general_migrations_preserved": "1-25",
+    "public_cli_admission": "Limited to the authorized qualification identity; existing launch gates remain in force.",
+    "router_binary_sha256": "580ff0b3a0fa934cb93b747ec1fe69148fcbf7525b640e63615c4d48215b4298",
+    "router_source_commit": "9ad1b1c263b21b2dc28b8de648440044d37756e2",
+    "unrelated_optional_schemas_preserved": true
+  },
+  "contract": {
+    "catalog": "https://api.pipedev.network/openapi/releases/b65ee50aacb613d7f6914c2869efed91f11df193208965d3de998be28ff6369e/index.json",
+    "control_plane_sha256": "5fea353dea79f855fc451b0d17ffb71f15de69350aaaa65ef1ad750134533812",
+    "inventory_includes_explicit_exclusions": true,
+    "pending_coverage_dispositions": 0,
+    "public_operations_with_reviewed_dispositions": 209,
+    "source_revision": "b65ee50aacb613d7f6914c2869efed91f11df193208965d3de998be28ff6369e"
+  },
+  "deployed_repairs": {
+    "binary_only_rollback_backups_retained": true,
+    "customer_state_and_node_processes_preserved": true,
+    "exact_utf8_s3_billing_scope": true,
+    "free_s3_delete_preserving_native_voucher_replay": true,
+    "latest_router_tests_passed": 50,
+    "storage_endpoint_discovery": true
+  },
+  "evidence_sha256": {
+    "budget-all-services-final.json": "d13db0e4de6125ccd5b947c7e1b4f07c41d32e5db05434417863f48378a41a6c",
+    "cloudflare-s3-cache-review.md": "0a2f61aa1d63166a3fb531f9669db05f4e761f8ea5b43941e91dfec992cd342e",
+    "compute-attempt1.json": "0f8bd7d987350048f87994386bf39eff26acd156e3b33117c853c1d3c6f1c63a",
+    "compute-attempt2.json": "00803b69c8174acaa28f75d1ee567e178b1d73d310cdc73b8e4d160d7b61bf3b",
+    "durable-retention-audit.json": "6b3a09a388d60a0e837e3f984d64fa2c10b8ac82af6114de53a393a920e056fc",
+    "durable.json": "4770a32af67ae590c40d5f6dc501f0176a57ed21503a70c730a2d8efaf460317",
+    "hosting.json": "991aa5b0cac4c787e52ad8a936d6f2c40fd43b122221cae9d4cc844e81a61ea9",
+    "kv.json": "2579207003d3ef67095a19d07e2f14eebdb39a6f177f4d57b8c7c1bbed05521f",
+    "platform-google-status.json": "b6140e6747f6787a96df63206463b13e4ea37d8a34b58ad7b61510701a9b928b",
+    "platform-wallet-reads.json": "a27dcd519db52d423ded5a2db65a7c395fb20c16eee9ebac27eb5210d451c5cd",
+    "router-delete-pricing-build.json": "d70e8107b4f5b79626d29c6da90844b9d75f943fa6e77ff4db369c74fd0ed238",
+    "router-delete-pricing-deployment.json": "cc5b6eff2f263968abe08cb7637758b87dd24f651ec40b98d4798055a3e363a8",
+    "router-delete-pricing-review.json": "206e9fec8472b7b29863846b9ede912ee2f7b709336148d96aeaf45b56bf3b5c",
+    "router-unicode-build.json": "f156f3c822f5ca0577cefd20da25a756f8c8c76c4a9f8085fdc26057a87abb15",
+    "router-unicode-deployment.json": "da2e4b64611cf111f417581b2ba52db9aaf799e6d2c47a92398c9a2b0478906c",
+    "storage-delete-pricing-attribution.json": "0495376103edccbca63196f2c28f9da01754847c3dd576f1f8ac84b7fc81fe1c",
+    "storage-delete-pricing-billing-cleanup.json": "a3fc830c13eb88bdc65efbaeebee7a8a6a44f54b3c0a213503accfa98947a293",
+    "storage-delete-pricing-cli.json": "af91f10f57a5d74a30640f8e393de9eb08f1c70f1ba53f5e9df67c9fba22555d",
+    "storage-discovery-deployment.json": "e2bb8b17a154c5cac1eddb44f5a2fcbf63fcf8a611c0f246639cdf53c67f82ec",
+    "storage-final-attribution-cleanup.json": "e14beba6cc554563dbd3909a5a8ff93b020800be940546e2d53ec9ef5824df55",
+    "storage-production.json": "f5c5e4881dbaff0be0c29db6da0320c3183dfe21679dedd5a45b66d36de6946b",
+    "test-credit-grant.json": "e0c01febd21d5c5c7b3ad35df8791de2c415be61ca7f2aa074974a6b5977f411"
+  },
+  "kind": "supplementary_live_service_qualification",
+  "original_rc_qualification_record": "Preserved as the historical $10, pre-service-testing checkpoint; this dated supplement records the subsequent user-authorized $100 test-credit campaign.",
+  "published_cli_tag": "v3.0.0-rc.1",
+  "qualification_complete": false,
+  "recorded_at": "2026-09-17T17:25:05.396044+00:00",
+  "remaining_acceptance": [
+    "Apply and verify the reviewed Cloudflare signed-request cache bypass, including public HEAD and ranged GET.",
+    "Complete legitimate browser authorization for canonical account/organization workflows.",
+    "Qualify settlement with legitimate provider-hosted payment sandbox configuration.",
+    "Correct and qualify S3 error classification/presentation; the tested RC1 uses generic command_failed/exit1 for these errors and may hide nested streaming HTTP status."
+  ],
+  "schema_version": 1,
+  "service_results": {
+    "compute": {
+      "attempts": 2,
+      "checks": [
+        "create/recovery by original operation ID",
+        "billing auto-renew disabled",
+        "SSH host identity and mismatch refusal",
+        "remote exit status",
+        "stop/start/reboot and disk persistence",
+        "usage and deletion"
+      ],
+      "first_attempt_partial_failure_preserved": true,
+      "limit": "Selected Personal-2 configuration. Transient SSH readiness required bounded observation of subsequent VM-agent heartbeats; no remote command replay.",
+      "status": "passed"
+    },
+    "durable": {
+      "checks": [
+        "paid state/SQL/migrations/rollback",
+        "binary blobs",
+        "original operation recovery",
+        "scope and revocation",
+        "object deletion and namespace revocation"
+      ],
+      "recurring_charge_after_revocation": false,
+      "retained_recovery_checkpoint_bytes": 929792,
+      "status": "passed"
+    },
+    "hosting": {
+      "checks": [
+        "Starter plan",
+        "site deployment and activation",
+        "public HTTPS/Wasm health",
+        "SQLite migration/write/read/delete",
+        "logs/releases/billing",
+        "site and allocation cleanup"
+      ],
+      "limit": "Selected disposable site and prepaid nonrenewing plan; retained account and billing receipt.",
+      "status": "passed"
+    },
+    "kv": {
+      "checks": [
+        "verified TLS/RESP2",
+        "binary keys and values",
+        "NX/XX/counters/expiry",
+        "bounded scan",
+        "scopes/revocation",
+        "instance deletion"
+      ],
+      "general_customer_admission_enabled": false,
+      "prior_diagnostic_configuration_restored": true,
+      "status": "passed_for_qualification_wallet"
+    },
+    "management": {
+      "browser_google_request": "Expired without approval; no canonical identity fabricated.",
+      "canonical_account_denials": 9,
+      "status": "available_wallet_reads_passed_canonical_account_pending",
+      "successful_reads": 13
+    },
+    "payment_provider_settlement": {
+      "local_provider_fixtures_previously_passed": true,
+      "reason": "Only live provider configuration was available; no real Stripe or Solana transfer performed.",
+      "status": "not_qualified_with_external_sandbox"
+    },
+    "storage": {
+      "checks": [
+        "encoded Unicode/percent/space keys",
+        "conditions/ranges and opaque ETags at origin",
+        "PIPEENC2 roundtrip/corruption/atomic destination",
+        "multipart interruption/original-ID resume/abort",
+        "public PUT/full GET/conditional PUT/DELETE",
+        "corrected zero-cost DELETE billing"
+      ],
+      "cloudflare_fix_applied": false,
+      "delete_pricing_regression": {
+        "cleanup_verified": true,
+        "cli_commands": 26,
+        "delete_attempts": 5,
+        "delete_credit_requests_leases_or_spend": 0,
+        "put_get_cost_atoms": 3
+      },
+      "latest_router_change_only_corrects_delete_pricing": true,
+      "origin_protocol_passed": true,
+      "origin_test_transport": "Process-local DNS override to the production origin, preserving public hostname and normal certificate verification.",
+      "public_edge_head": {
+        "last_observed_status": 403,
+        "origin_observed_method": "GET"
+      },
+      "public_edge_range": {
+        "error": "AuthorizationHeaderMalformed",
+        "last_observed_status": 400
+      },
+      "status": "partially_qualified"
+    }
+  },
+  "stable_promotion_permitted": false,
+  "test_credits": {
+    "all_seven_operation_reservations_settled": true,
+    "atoms_per_usd": 1000000,
+    "grant_count": 1,
+    "granted_atoms": 100000000,
+    "historical_delete_excess_atoms_preserved": 6,
+    "maximum_atoms": 100000000,
+    "per_service_spent_atoms": {
+      "compute": 40000000,
+      "durable": 26,
+      "hosting": 5000000,
+      "kv": 34,
+      "storage": 340
+    },
+    "real_payment_transfers": false,
+    "remaining_atoms": 54999600,
+    "reserved_atoms": 0,
+    "same_persistent_budget_across_reruns": true,
+    "spent_atoms": 45000400
+  },
+  "test_scope": "Selected customer product workflows on deployed services using the exact published Linux CLI, with independent billing and cleanup reconciliation. This is not qualification of every public operation, product configuration, or external provider."
+}

@@ -1,0 +1,105 @@
+{
+  "format_version": 1,
+  "release_url": "https://github.com/PipeNetwork/pipe/releases/tag/v3.0.0-rc.3",
+  "is_prerelease": true,
+  "published_at": "2026-09-18T05:26:31Z",
+  "verified_at": "2026-09-18T05:26:42.666096+00:00",
+  "all_19_assets_match": true,
+  "assets": [
+    {
+      "name": "DEPLOYMENT_FINAL.json",
+      "sha256": "fd25ca4db7dffbecfb88d8690c10c744ed8375daaf70ddc813714fa770361dfe",
+      "public_download_matches_verified_artifact": true
+    },
+    {
+      "name": "EVIDENCE_SHA256SUMS",
+      "sha256": "8803416223c4a8c42d8bcf0fa9a7466b260ebb08c12b290214f74854a3132937",
+      "public_download_matches_verified_artifact": true
+    },
+    {
+      "name": "install.ps1",
+      "sha256": "ebf0916b14119919c9d7c31168ec016c206c74a1703ccda91bdcea46c1fa5146",
+      "public_download_matches_verified_artifact": true
+    },
+    {
+      "name": "install.sh",
+      "sha256": "22265e3fa102507fed33b1c0ce0088fa4dd660fa167521e3353f661b819db88b",
+      "public_download_matches_verified_artifact": true
+    },
+    {
+      "name": "MIGRATION.md",
+      "sha256": "4d40f311b06714cb3533699fba6fc0dc4c1f4be29d0998179af7d3a21bf26ac5",
+      "public_download_matches_verified_artifact": true
+    },
+    {
+      "name": "NATIVE_QUALIFICATION.json",
+      "sha256": "c7eaf4f261548e6aa7e57ec502614606424902702f83b2d1c7295344b55482d3",
+      "public_download_matches_verified_artifact": true
+    },
+    {
+      "name": "pipe-v3.0.0-rc.3-aarch64-apple-darwin.tar.gz",
+      "sha256": "0027a6510847a6296b7e04f63ace855c371d77b41ad796a748a6a950b777d454",
+      "public_download_matches_verified_artifact": true
+    },
+    {
+      "name": "pipe-v3.0.0-rc.3-aarch64-unknown-linux-gnu.tar.gz",
+      "sha256": "3060311a1cdb45eb0e77a69b5ac4608fbe0a3ac40206c493e39f9423652a4667",
+      "public_download_matches_verified_artifact": true
+    },
+    {
+      "name": "pipe-v3.0.0-rc.3-x86_64-apple-darwin.tar.gz",
+      "sha256": "01be1734fc7c8cfa5627f3dbdcd53f1e8dd53bdf78899b96345632ff6a1b7d71",
+      "public_download_matches_verified_artifact": true
+    },
+    {
+      "name": "pipe-v3.0.0-rc.3-x86_64-pc-windows-msvc.zip",
+      "sha256": "d7bacf0daf98a31af73085397e1020a5f2ce0f22de72abb6c9e24778ce5ad020",
+      "public_download_matches_verified_artifact": true
+    },
+    {
+      "name": "pipe-v3.0.0-rc.3-x86_64-unknown-linux-gnu.tar.gz",
+      "sha256": "960f6735ae96a33679161ef082eda39df1dd74a42c162d6ba00d6e0a0978c8b6",
+      "public_download_matches_verified_artifact": true
+    },
+    {
+      "name": "PRODUCTION_CLEANUP.json",
+      "sha256": "4a780ba12baa5d89fc5b11d4d968e72002b6253b06c0064b87767ee8050cac96",
+      "public_download_matches_verified_artifact": true
+    },
+    {
+      "name": "PRODUCTION_STORAGE.json",
+      "sha256": "4faeeb50a203adc6481597b5c1e54f186cc62d3a227e3f8b986bfdc2ce18025e",
+      "public_download_matches_verified_artifact": true
+    },
+    {
+      "name": "qualification.json",
+      "sha256": "da068ab217763b95604fa2e7cf4923ffa1bef329d57573784651a75c0fef2f34",
+      "public_download_matches_verified_artifact": true
+    },
+    {
+      "name": "RELEASE_RECORD.json",
+      "sha256": "8b5e0b857a1109a339eaf58fc080aeac12b3c4d8f94535fcda11370d72b1f583",
+      "public_download_matches_verified_artifact": true
+    },
+    {
+      "name": "SHA256SUMS",
+      "sha256": "888b7bc350aa383fe8e9beadf18f5a76c7f34c382532bc730c1b337cfff93575",
+      "public_download_matches_verified_artifact": true
+    },
+    {
+      "name": "STAGING_QUALIFICATION.json",
+      "sha256": "f4775cefb0ead8b839e07f3e8502437439cd50f5f817c2c10eea20f59dc5e9b3",
+      "public_download_matches_verified_artifact": true
+    },
+    {
+      "name": "UPGRADE_ROLLBACK.json",
+      "sha256": "dd6178b1871f83a5b9a5911e91dd136ee65d0d3d13b5d6de380e9880f8466a4a",
+      "public_download_matches_verified_artifact": true
+    },
+    {
+      "name": "VERIFY.md",
+      "sha256": "b690dbf728e6e035875548fef8bed03f5a41daa753f6f7782005c52037767be5",
+      "public_download_matches_verified_artifact": true
+    }
+  ]
+}

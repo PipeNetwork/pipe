@@ -1,0 +1,45 @@
+{
+  "browser_boundary_checks": [
+    "explicit approval and denial",
+    "opening link never approves",
+    "expiry and changed-account review reset",
+    "cookie, CSRF and origin enforcement",
+    "browser/CLI credential separation"
+  ],
+  "date": "2026-09-17",
+  "dependency_audit": {
+    "critical": 0,
+    "high": 0,
+    "info": 0,
+    "low": 1,
+    "moderate": 0
+  },
+  "evidence_sha256": {
+    "frontend-production-dependency-audit.json": "ea90dd398daacd6733db8040f2efb079b18abd35b6c8371aad408f4e84ebba24",
+    "frontend-security-browser-tests.log": "057ffcd598de0e41c729f5708c220f182371329629ca34adeca3234e6147a613",
+    "frontend-security-build.log": "de32402254ec8b316f919a1d43d7c9e7a8fa830c077174f34665ae89a663d573",
+    "frontend-security-multipart.log": "c689d850f233455266be9a60731320b94ea07eac323b3bdf671b796fed78bede",
+    "frontend-security-types.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "frontend-security-unit.log": "322a6a61302d79f1c278ebc4fa28724a68e2a4b101871528d3c632fc6a384ef1"
+  },
+  "fixture": "Real Next.js BFF and Chromium with a private TLS upstream fixture; production browser acceptance is recorded separately.",
+  "format_version": 1,
+  "passed": true,
+  "remaining_advisories": [
+    {
+      "module_name": "@babel/core",
+      "patched_versions": ">=7.29.6",
+      "severity": "low",
+      "title": "@babel/core: Arbitrary File Read via sourceMappingURL Comment",
+      "url": "https://github.com/advisories/GHSA-4x5r-pxfx-6jf8"
+    }
+  ],
+  "source_commit": "59180308642f50a329efd601177e4c70c813f110",
+  "tests": {
+    "chromium_desktop_and_mobile": 8,
+    "multipart": 2,
+    "next_build": "passed",
+    "typescript": "passed",
+    "unit_bff_and_deployment": 225
+  }
+}

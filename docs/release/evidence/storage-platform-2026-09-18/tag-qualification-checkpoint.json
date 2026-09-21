@@ -1,0 +1,110 @@
+{
+  "backend": {
+    "admission": "Existing two-account qualification allowlist retained",
+    "binary_sha256": "26220b22994e9afb18f962ca5b39e5e8918d2a595d566927e3fd9bc06ea59d0c",
+    "compatibility": {
+      "base_migration_max": 25,
+      "optional_storage_budget_version": 1,
+      "optional_storage_workspace_version": 2
+    },
+    "deployed": true,
+    "router": {
+      "binary_sha256": "322eab304722e9ca6a2e892c912f1613b2fef46847b2edba2a210f6b5ccc094e",
+      "deployed": true,
+      "source_commit": "3047c4ef222954038b8957c4ec11da20a39331fa"
+    },
+    "source_commit": "f5e8baacbb1951ed79eb5626d14076cbf836e483"
+  },
+  "canary": {
+    "automatic_funding": false,
+    "ledger_sha256": "8bdd411cff9d8afd9da679fb7333316736c466d351142c57a16600854590b28c",
+    "maximum_atoms": 1000000000,
+    "real_payment_transfers": false,
+    "remaining_atoms": 949978274,
+    "reserved_atoms": 5000000,
+    "same_persistent_budget": true,
+    "scope": "Reservation stays open through exact-tag release acceptance. Final settlement is attached in RELEASE_RECORD.json.",
+    "spent_atoms": 45021726,
+    "storage_campaign_observed_atoms": 179
+  },
+  "cli_source_tree_sha256": "a1d57b8a03b549033416ce7694152d8d1efdaae15303569c0aa41a51eca49ed7",
+  "contracts": {
+    "control_plane_sha256": "48fb67f745821973d52da02fe0d08413d5d6aec9315eaf70b8011e628493dcd6",
+    "documents": {
+      "control-plane": "48fb67f745821973d52da02fe0d08413d5d6aec9315eaf70b8011e628493dcd6",
+      "s3": "1d53803829ef98b34eb77d17c7500dd8319c5761e9d1d9e4e7491bfb5b6421d2",
+      "storage": "2ff1f9b9e2914e91023eef77214da7d3c4769fb0d4065cb9a56998bf0f95c1e9"
+    },
+    "immutable_catalog": "https://api.pipedev.network/openapi/releases/548bb1df2ea4d600e92a9128eec7b7b39a93da8640a59feb678a203b9bbf9f66/index.json",
+    "published": true,
+    "source_revision": "sha256:548bb1df2ea4d600e92a9128eec7b7b39a93da8640a59feb678a203b9bbf9f66"
+  },
+  "date": "2026-09-18",
+  "evidence": [
+    {
+      "path": "docs/release/evidence/storage-platform-2026-09-18/staging.json",
+      "sha256": "6229e08891864b2ad16f7a2f04edab7c8b7fe1e966b8b8bda5a89e39061533f3"
+    },
+    {
+      "path": "docs/release/evidence/storage-platform-2026-09-18/deployment.json",
+      "sha256": "5c818e481fbff351814e65455756330c4277c7eee5305e7db6eb6d0516786af1"
+    },
+    {
+      "path": "docs/release/evidence/storage-platform-2026-09-18/production-checkpoint.json",
+      "sha256": "632564226b9d538aaba4e20ec959d3e650d97c958297a7505b183cbfcab148f1"
+    }
+  ],
+  "format_version": 1,
+  "frontend": {
+    "deployed": true,
+    "source_commit": "2d8d8b32f54070502cf99f710d336974dd4c30cb"
+  },
+  "native_qualification": {
+    "reviewed_branch_five_targets_passed": true,
+    "reviewed_branch_run": "https://github.com/PipeNetwork/pipe/actions/runs/35307766414",
+    "status": "Tag builds and attestations required before publication",
+    "targets": [
+      "x86_64-unknown-linux-gnu",
+      "aarch64-unknown-linux-gnu",
+      "x86_64-apple-darwin",
+      "aarch64-apple-darwin",
+      "x86_64-pc-windows-msvc"
+    ]
+  },
+  "production_pending": true,
+  "qualification": {
+    "cleanup_complete": false,
+    "enabled_workflows_passed": false,
+    "intentionally_unavailable": [
+      {
+        "feature": "General CLI admission and public KV creation",
+        "reason": "Existing launch gates preserved."
+      },
+      {
+        "feature": "Managed bucket deletion",
+        "reason": "Metadata and audit retained; deletion API is unsupported."
+      },
+      {
+        "feature": "Invitation email delivery",
+        "reason": "Explicit shareable invitations are supported."
+      },
+      {
+        "feature": "Objects above 18 GiB",
+        "reason": "Existing qualified gateway limit retained."
+      }
+    ],
+    "real_browser_login": true,
+    "remaining_acceptance": [
+      "Exact tag artifacts, latest frontend live visual check, and final ledger settlement.",
+      "Canonical Google-account team acceptance requires an authorized production test account.",
+      "Aged lifecycle expiration uses staging fixtures; production minimum age is one day."
+    ],
+    "scope": "Storage browser and CLI workflows pass; final release acceptance and canonical production team test remain explicit.",
+    "staging_passed": true
+  },
+  "qualification_complete": false,
+  "reviewed_code_commit": "990545530ba93c0811f78a24fee6b579bd898da8",
+  "stable_promotion_permitted": false,
+  "status": "staging-qualified-production-pending",
+  "version": "3.0.0-rc.3"
+}
