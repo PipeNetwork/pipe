@@ -120,8 +120,11 @@ pub async fn run(client: &ControlClient, command: Commands, json_output: bool) -
 
 #[derive(Args, Debug)]
 pub struct Upload {
-    /// Directory that contains the weights. A single `.gguf` file is also accepted.
+    /// Model directory, or one `.gguf` file. An MLX directory contains config.json, tokenizer files, and safetensors or .npz/.npy weights.
     path: PathBuf,
+    /// Label a safetensors directory as MLX. Inferred for .npz/.npy weights and for MLX quantization in config.json.
+    #[arg(long)]
+    mlx: bool,
     #[arg(long)]
     namespace: String,
     #[arg(long)]
@@ -226,6 +229,7 @@ async fn upload(client: &ControlClient, request: Upload) -> Result<Value> {
     };
 
     let (paths, skipped_hidden) = collect(&request.path)?;
+    let mlx = request.mlx || mlx_package(&paths);
     let mut files = Vec::with_capacity(paths.len());
     for (path, local, size) in &paths {
         if client.progress {
@@ -238,9 +242,13 @@ async fn upload(client: &ControlClient, request: Upload) -> Result<Value> {
             sha256,
         });
     }
-    check_package(&files, base.is_some())?;
-    let formats = formats_of(&files);
-    let runtimes = request.runtime.clone().into_iter().collect::<Vec<_>>();
+    check_package(&files, base.is_some(), mlx)?;
+    let formats = formats_of(&files, mlx);
+    let runtimes = match &request.runtime {
+        Some(runtime) => vec![runtime.clone()],
+        None if mlx => vec!["mlx".into()],
+        None => Vec::new(),
+    };
     let fingerprint = hex::encode(Sha256::digest(serde_json::to_vec(&files)?));
     let create_fingerprint = hex::encode(Sha256::digest(serde_json::to_vec(&json!({
         "namespace": request.namespace,
@@ -675,7 +683,7 @@ fn collect(path: &Path) -> Result<(Vec<CollectedFile>, u64)> {
             .ok_or_else(|| anyhow!("model file name must be UTF-8"))?;
         ensure!(
             name.ends_with(".gguf") && valid_path(name),
-            "a single file upload must be one .gguf file with a plain file name"
+            "a single file upload must be one .gguf file; upload an MLX model as its directory"
         );
         let size = path.metadata()?.len();
         ensure!(
@@ -684,7 +692,10 @@ fn collect(path: &Path) -> Result<(Vec<CollectedFile>, u64)> {
         );
         return Ok((vec![(name.to_owned(), path.to_owned(), size)], 0));
     }
-    ensure!(path.is_dir(), "upload a model directory or a .gguf file");
+    ensure!(
+        path.is_dir(),
+        "upload a model directory, an MLX directory, or a .gguf file"
+    );
     let root = fs::canonicalize(path)?;
     let mut files = Vec::new();
     let mut skipped_hidden = 0u64;
@@ -742,7 +753,7 @@ fn collect(path: &Path) -> Result<(Vec<CollectedFile>, u64)> {
     Ok((files, skipped_hidden))
 }
 
-fn check_package(files: &[ModelFile], adapter: bool) -> Result<()> {
+fn check_package(files: &[ModelFile], adapter: bool, mlx: bool) -> Result<()> {
     let has = |name: &str| {
         files
             .iter()
@@ -753,15 +764,16 @@ fn check_package(files: &[ModelFile], adapter: bool) -> Result<()> {
             .iter()
             .any(|file| file.path.ends_with(suffix) && file.size_bytes > 0)
     };
+    let tensor = weights(".safetensors") || weights(".bin") || weights(".npz") || weights(".npy");
     if adapter {
         ensure!(
             has("adapter_config.json") && weights(".safetensors"),
             "an adapter needs adapter_config.json, safetensors weights, and a pinned base revision"
         );
-    } else if !weights(".gguf") {
+    } else if mlx || !weights(".gguf") {
         ensure!(
-            weights(".safetensors") || weights(".bin"),
-            "include GGUF, safetensors, or PyTorch weight files"
+            tensor,
+            "include GGUF, safetensors, PyTorch, or MLX weight files"
         );
         ensure!(
             has("config.json")
@@ -774,8 +786,42 @@ fn check_package(files: &[ModelFile], adapter: bool) -> Result<()> {
     Ok(())
 }
 
-fn formats_of(files: &[ModelFile]) -> Vec<String> {
+fn mlx_package(files: &[CollectedFile]) -> bool {
+    let weights = |suffix: &str| {
+        files
+            .iter()
+            .any(|(path, _, size)| path.ends_with(suffix) && *size > 0)
+    };
+    if weights(".npz") || weights(".npy") {
+        return true;
+    }
+    let Some((_, config, _)) = files
+        .iter()
+        .find(|(path, _, size)| path == "config.json" && *size > 0 && *size <= 2 * 1024 * 1024)
+    else {
+        return false;
+    };
+    let Ok(text) = fs::read_to_string(config) else {
+        return false;
+    };
+    let Ok(value) = serde_json::from_str::<Value>(&text) else {
+        return false;
+    };
+    value
+        .get("quantization")
+        .and_then(Value::as_object)
+        .is_some_and(|quantization| {
+            quantization.contains_key("bits")
+                || quantization.contains_key("group_size")
+                || quantization.contains_key("mode")
+        })
+}
+
+fn formats_of(files: &[ModelFile], mlx: bool) -> Vec<String> {
     let mut formats = Vec::new();
+    if mlx {
+        formats.push("mlx".into());
+    }
     for file in files {
         if let Some(extension) = file.path.rsplit_once('.').map(|(_, extension)| extension) {
             if matches!(extension, "gguf" | "safetensors")
@@ -996,6 +1042,51 @@ mod tests {
     }
 
     #[test]
+    fn mlx_weights_are_labeled_and_plain_safetensors_are_not() {
+        let mlx = tempfile::tempdir().unwrap();
+        fs::write(mlx.path().join("weights.npz"), b"weights").unwrap();
+        fs::write(
+            mlx.path().join("config.json"),
+            br#"{"quantization":{"bits":4,"group_size":64}}"#,
+        )
+        .unwrap();
+        fs::write(mlx.path().join("tokenizer.json"), b"{}").unwrap();
+        let (paths, _) = collect(mlx.path()).unwrap();
+        assert!(mlx_package(&paths));
+        let files = paths
+            .iter()
+            .map(|(path, _, size)| ModelFile {
+                path: path.clone(),
+                size_bytes: *size,
+                sha256: "ab".repeat(32),
+            })
+            .collect::<Vec<_>>();
+        check_package(&files, false, true).unwrap();
+        assert!(formats_of(&files, true).contains(&"mlx".to_string()));
+
+        let plain = tempfile::tempdir().unwrap();
+        fs::write(plain.path().join("model.safetensors"), b"weights").unwrap();
+        fs::write(
+            plain.path().join("config.json"),
+            br#"{"model_type":"llama"}"#,
+        )
+        .unwrap();
+        fs::write(plain.path().join("tokenizer.json"), b"{}").unwrap();
+        let (paths, _) = collect(plain.path()).unwrap();
+        assert!(!mlx_package(&paths));
+        let files = paths
+            .iter()
+            .map(|(path, _, size)| ModelFile {
+                path: path.clone(),
+                size_bytes: *size,
+                sha256: "ab".repeat(32),
+            })
+            .collect::<Vec<_>>();
+        check_package(&files, false, false).unwrap();
+        assert!(!formats_of(&files, false).contains(&"mlx".to_string()));
+    }
+
+    #[test]
     fn safetensors_without_tokenizer_are_rejected_before_upload() {
         let root = tempfile::tempdir().unwrap();
         fs::write(root.path().join("model.safetensors"), b"weights").unwrap();
@@ -1008,7 +1099,7 @@ mod tests {
                     sha256: "ab".repeat(32),
                 })
                 .collect::<Vec<_>>();
-            check_package(&files, false)
+            check_package(&files, false, false)
         });
         assert!(error.unwrap_err().to_string().contains("tokenizer"));
     }
@@ -1126,6 +1217,7 @@ mod tests {
             memory_gib: None,
             context_length: None,
             concurrency: None,
+            mlx: false,
             notes: String::new(),
             card: None,
             model_id: None,

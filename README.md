@@ -535,9 +535,12 @@ pipe models list
 pipe models publish MODEL_UUID --revision REVISION_UUID
 ```
 
-A directory must contain a `.gguf` file, or safetensors/PyTorch weights with
-`config.json` and tokenizer files at that directory root. One `.gguf` file can
-be passed directly. Hidden files are skipped. The model is private and appears
+A directory can be GGUF, safetensors, or PyTorch weights, or an MLX package.
+MLX models use `config.json`, tokenizer files, and `.safetensors`, `.npz`, or
+`.npy` weights in that directory. `.npz` and `.npy` weights, and MLX
+`quantization` in `config.json`, are labeled `mlx`. Pass `--mlx` for an
+unquantized MLX safetensors directory. One `.gguf` file can be passed
+directly. Hidden files are skipped. The model is private and appears
 in the workspace as soon as the registry accepts it. Repeating the command
 resumes sealed parts and the same revision for an unchanged file set. `--publish`
 waits for worker verification, then points the `latest` tag at that revision.
